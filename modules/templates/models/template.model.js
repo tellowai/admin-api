@@ -9,6 +9,7 @@ exports.listTemplates = async function(pagination) {
       template_name,
       template_code,
       description,
+      prompt,
       faces_needed,
       cf_r2_key,
       cf_r2_url,
