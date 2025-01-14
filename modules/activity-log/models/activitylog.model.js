@@ -22,7 +22,7 @@ exports.getAllLogs = async function(offset, limit, options, filterBy) {
 };
 
 exports.getUserDetailsByIds = async function(userIds) {
-    const query = `SELECT user_id, username, display_name, first_name, middle_name, last_name, email, profile_pic, deleted_at from user WHERE user_id IN (?)`;
+    const query = `SELECT user_id, display_name, first_name, middle_name, last_name, email, profile_pic, deleted_at from user WHERE user_id IN (?)`;
     const values = [
         userIds
     ];

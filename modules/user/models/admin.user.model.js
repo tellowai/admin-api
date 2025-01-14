@@ -59,7 +59,7 @@ exports.searchAdminUsersByEmail = async function(email, limit, offset) {
 };
 
 exports.searchAdminUsersByEmailOrMobile = async function(emailOrmobile, limit, offset) {
-    let selectAllQuery = `SELECT user_id, username, email, display_name, profile_pic FROM user WHERE (email LIKE '%${emailOrmobile}%' OR mobile LIKE '%${emailOrmobile}%') AND DELETED_AT IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    let selectAllQuery = `SELECT user_id, email, display_name, profile_pic FROM user WHERE (email LIKE '%${emailOrmobile}%' OR mobile LIKE '%${emailOrmobile}%') AND DELETED_AT IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
 
     return await mysqlQueryRunner.runQueryInMaster(selectAllQuery, [limit, offset]);
 };

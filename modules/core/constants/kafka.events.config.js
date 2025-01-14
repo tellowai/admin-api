@@ -8,6 +8,7 @@ const env = process.env.NODE_ENV || 'dev';
 
 const TOPICS = {
   // command type
+  ADMIN_COMMAND_CREATE_ACTIVITY_LOG: `${env}.admin.command.create_activity_log`,
   PROJECT_COMMAND_CREATE_DEFAULT_PROJECT: `${env}.project.command.create_default_project`,
   GENERATION_COMMAND_PHOTO: `${env}.generation.command.generate_photos`,
   MODEL_TUNING_COMMAND_START_PHOTO_TUNING: `${env}.model_tuning.command.start_photo_tuning`,

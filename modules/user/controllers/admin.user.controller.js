@@ -5,12 +5,11 @@ const AdminUserErrorHandler = require('../middlewares/admin.user.error.handler')
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const CUSTOM_ERROR_CODES = require('../../core/controllers/customerrorcodes.server.controller').CODES;
 const AdminUserUtils = require('../utils/admin.user.utils');
-const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const config = require('../../../config/config');
 const coreUtils = require('../../core/controllers/utils.controller');
-const {
-  publishNewAdminActivityLog
-} = require('../../core/controllers/activitylog.controller');
+const { TOPICS } = require('../../core/constants/kafka.events.config');
+const kafkaCtrl = require('../../core/controllers/kafka.controller');
+
 
 
 /**
@@ -48,15 +47,19 @@ exports.createNewAdminUserWithSelectRoles = async function (req, res, next) {
     // Create new admin user with given roles
     await ManageAdminUserDbo.createNewAdminUser(memberWithRolesArray);
 
-    // publish an event to kafka - activitylog
-    const activityLogObj =  { 
-      adminUserId: req.adminUser.userId,
-      entityType: 'ADMIN_USER',
-      actionName: 'ADD_ADMIN_USER', 
-      entityId: newAdminUser.user_id,
-      additionalData: {}
-    }
-    publishNewAdminActivityLog(activityLogObj);
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'ADMIN_USER',
+          action_name: 'ADD_ADMIN_USER', 
+          entity_id: newAdminUser.user_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
 
     // Send response
     return res.status(HTTP_STATUS_CODES.OK).json({
