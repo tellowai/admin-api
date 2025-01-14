@@ -1,0 +1,5 @@
+{
+  "CONNECTION_ERROR" : "Unable to establish Neo4j connection.",
+  "QUERY_ERROR_PLEASE_TRY_AGAIN": "Error while running query. Please try again."
+}
+  

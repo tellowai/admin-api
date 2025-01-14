@@ -1,0 +1,16 @@
+node_modules
+apidoc
+config/env/local.js
+config/env/dev.js
+config/env/stage.js
+config/env/prod.js
+.DS_Store
+database.json
+package-lock.json
+dump.rdb
+config/env/test.js
+.env
+.env2
+logs/combined.log
+logs/error.log
+logs

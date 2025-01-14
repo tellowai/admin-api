@@ -1,0 +1,6 @@
+{
+   "LOGIN_OTP_EMAIL_SUBJECT" : "Your account verification code | Login | Suprstar",
+   "SIGNUP_OTP_EMAIL_SUBJECT" : "Your account verification code | Signup | Suprstar",
+   "WELCOME_EMAIL_SUBJECT" : "Welcome Aboard! | Suprstar",
+   "USERNAME_CHANGE_EMAIL_SUBJECT" : "Your Suprstar username has been updated | Suprstar"
+}

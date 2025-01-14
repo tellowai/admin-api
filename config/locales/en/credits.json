@@ -1,0 +1,11 @@
+{
+  "INSUFFICIENT_BALANCE": "Insufficient credits balance",
+  "INSUFFICIENT_RESERVED_BALANCE": "Insufficient reserved credits balance",
+  "RESERVE_CREDITS_FAILED": "Failed to reserve credits. Please try again later.",
+  "DEDUCT_CREDITS_FAILED": "Failed to deduct reserved credits. Please try again later.",
+  "RELEASE_CREDITS_FAILED": "Failed to release reserved credits. Please try again later.",
+  "INSUFFICIENT_BALANCE_FOR_OPERATION": "Insufficient credits for the requested operation",
+  "INSUFFICIENT_RESERVED_BALANCE_FOR_OPERATION": "Insufficient reserved credits for the requested operation",
+  "USER_CREDITS_NOT_FOUND": "User credits not found",
+  "GET_USER_CREDITS_FAILED": "Failed to get user credits. Please try again later."
+} 

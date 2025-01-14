@@ -1,0 +1,15 @@
+{
+    "USERNAME_OR_PWD_DENIED" : "Access denied for the given mysql user/password.",
+    "DB_CONNECTION_REFUSED" : "Database connection refused",
+    "CONNECTION_ERROR" : "Unable to establish MySQL connection.",
+    "CONNECTION_ERROR_PLEASE_TRY_AGAIN": "Unable to establish MySQL connection. Please try again.",
+    "QUERY_ERROR_PLEASE_TRY_AGAIN": "Error while running query. Please try again.",
+    "QUERY_ERR" : "Error while running query.",
+    "DUPLICATE_ENTRY" : "Resource already exists.",
+    "RESOURCE_DOESNOT_EXIST" : "Resource does not exist.",
+    "TABLE_DOESNOT_EXIST": "Requested table does not exist.",
+    "TABLE_COLUMN_DOESNOT_EXIST": "Column does not exist in requested table.",
+    "ORIGINAL_RESOURCE_DOES_NOT_EXIST": "Original resource do not exist.",
+    "TABLE_COLUMN_CANNOT_BE_NULL": "Column value can not be null"
+  }
+  

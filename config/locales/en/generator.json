@@ -1,0 +1,19 @@
+{
+  "INVALID_REQUEST_DATA": "Invalid generation request data",
+  "IMAGE_GENERATION_STARTED": "Image generation started",
+  "IMAGES_GENERATED": "Images generated",
+  "GENERATION_FAILED": "Failed to generate images",
+  "GENERATION_RATE_LIMIT_EXCEEDED": "Generation rate limit exceeded. Please try again later.",
+  "PROJECT_NOT_FOUND": "Project not found or you don't have permission to access it",
+  "CHARACTER_NOT_FOUND": "Character not found",
+  "INVALID_GENERATION_OPTIONS": "Invalid generation options provided",
+  "MODEL_TUNING_QUEUED": "Model tuning queued",
+  "MODEL_TUNING_STARTED": "Model tuning started successfully",
+  "TUNING_RATE_LIMIT_EXCEEDED": "You have exceeded the model tuning limit. Please try again later.",
+  "INVALID_TUNING_OPTIONS": "Invalid tuning options provided",
+  "TUNING_SESSION_EXISTS_ONLY_ONE_TRAINING_PER_PROJECT_ALLOWED": "A tuning session already exists for this project. Only one training session is allowed per project.",
+  "TUNING_SESSION_EXISTS_ONLY_ONE_TRAINING_PER_CHARACTER_ALLOWED": "A tuning session already exists for this character. Only one training session is allowed per character.",
+  "TUNING_SESSION_EXISTS_CONFIRMATION_REQUIRED": "Project already has a tuning session. Add confirmRetune=true to proceed.",
+  "INVALID_WEBHOOK_PAYLOAD": "Invalid webhook payload",
+  "ERROR_FETCHING_GENERATIONS": "An error occurred while fetching your image generations."
+} 

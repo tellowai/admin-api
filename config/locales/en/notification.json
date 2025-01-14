@@ -1,0 +1,12 @@
+{
+  "GET_NOTIFICATIONS_FAILURE" : "Failed to retrieve notifications.",
+  "NOTIFICATION_DELETED_SUCCESS" : "Notification deleted successfully.",
+  "DELETE_NOTIFICATION_FAILURE" : "Failed to delete notification.",
+  "NOTIFICATION_READ_STATUS_UPDATED_SUCCESS" : "Notification read status updated successfully.",
+  "UPDATE_NOTIFICATION_READ_STATUS_FAILURE" : "Failed to update notification read status.",
+  "CANNOT_UPDATE_NOTIFICATION_READ_STATUS" : "Cannot update notification read status.",
+  "LAST_SEEN_STATUS_UPDATED_SUCCESS": "Last seen status updated successfully.",
+  "UPDATE_LAST_SEEN_STATUS_FAILURE": "Failed to update last seen status.",
+  "PUSH_NOTIFICATION_INTERACTION_STORED_SUCCESS": "Push notification interaction stored successfully.",
+  "STORE_PUSH_NOTIFICATION_INTERACTION_FAILURE": "Failed to store push notification interaction."
+}

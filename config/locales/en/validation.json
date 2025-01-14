@@ -1,0 +1,7 @@
+{
+  "VALIDATION_FAILED": "Validation failed",
+  "EXPECTED_ARRAY": "Array expected",
+  "NOTHING_TO_UPDATE" : "There is no data to update",
+  "NOTHING_TO_CREATE" : "There is no data to create",
+  "ALPHANUM_WITH_UNDERSCORE_ALLOWED": "Username must only contain letters, numbers, or underscores"
+}

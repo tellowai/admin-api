@@ -1,0 +1,5 @@
+{
+    "DAILY_LIMIT_HIT": "You have reached daily thereshold. Please try after sometime.",
+    "HOURLY_LIMIT_HIT": "You have reached houlry thereshold. Please try after sometime.",
+    "MINUTE_LIMIT_HIT": "You have reached per minute thereshold. Please try after sometime."
+}

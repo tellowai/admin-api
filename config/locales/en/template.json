@@ -1,0 +1,7 @@
+{
+  "TEMPLATE_LIST_FAILED": "Failed to fetch templates",
+  "NO_TEMPLATES_FOUND": "No templates found",
+  "TEMPLATE_NOT_FOUND": "Template not found",
+  "TEMPLATE_NOT_FOUND_OR_UNAUTHORIZED": "Template not found or you don't have permission to access it",
+  "SEARCH_QUERY_REQUIRED": "Search query is required"
+} 
