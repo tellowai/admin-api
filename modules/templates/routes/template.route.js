@@ -35,4 +35,11 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.searchTemplates
   );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/archive'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.archiveTemplate
+  );
 }; 

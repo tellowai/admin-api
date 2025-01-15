@@ -129,3 +129,15 @@ exports.updateTemplate = async function(templateId, templateData) {
   const result = await mysqlQueryRunner.runQueryInMaster(query, values);
   return result.affectedRows > 0;
 }; 
+
+exports.archiveTemplate = async function(templateId) {
+  const query = `
+    UPDATE templates 
+    SET archived_at = NOW()
+    WHERE template_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, [templateId]);
+  return result.affectedRows > 0;
+}; 

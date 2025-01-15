@@ -232,3 +232,48 @@ exports.updateTemplate = async function(req, res) {
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 }; 
+
+/**
+ * @api {post} /templates/:templateId/archive Archive template
+ * @apiVersion 1.0.0
+ * @apiName ArchiveTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiParam {String} templateId Template ID
+ */
+exports.archiveTemplate = async function(req, res) {
+  try {
+    const { templateId } = req.params;
+    
+    const archived = await TemplateModel.archiveTemplate(templateId);
+    
+    if (!archived) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'ARCHIVE_TEMPLATE', 
+          entity_id: templateId
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template:TEMPLATE_ARCHIVED')
+    });
+
+  } catch (error) {
+    logger.error('Error archiving template:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+}; 
