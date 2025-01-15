@@ -6,6 +6,9 @@ const TemplateErrorHandler = require('../middlewares/template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const { TOPICS } = require('../../core/constants/kafka.events.config');
+const kafkaCtrl = require('../../core/controllers/kafka.controller');
+
 
 /**
  * @api {get} /templates List templates
@@ -146,6 +149,20 @@ exports.createTemplate = async function(req, res) {
     const templateData = req.validatedBody;
     const templateId = await TemplateModel.createTemplate(templateData);
     
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'ADD_NEW_TEMPLATE', 
+          entity_id: newAdminUser.user_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+  
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: req.t('template:TEMPLATE_CREATED'),
       data: { template_id: templateId }
@@ -187,6 +204,20 @@ exports.updateTemplate = async function(req, res) {
         message: req.t('template:TEMPLATE_NOT_FOUND')
       });
     }
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'UPDATE_TEMPLATE', 
+          entity_id: newAdminUser.user_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: req.t('template:TEMPLATE_UPDATED')
