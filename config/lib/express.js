@@ -161,6 +161,7 @@ module.exports.handleCors = function (app) {
     'http://localhost:3000',
     'http://localhost:8005',
     'https://dev.photobop.co',
+    'https://dev-admin.photobop.co',
     'https://www.photobop.co',
     'https://photobop.co'
   ];
