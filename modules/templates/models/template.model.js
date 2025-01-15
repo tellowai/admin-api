@@ -74,3 +74,57 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
     [searchPattern, searchPattern, searchPattern, limit, offset]
   );
 }; 
+
+exports.createTemplate = async function(templateData) {
+  // Filter out undefined values and prepare fields and values
+  const fields = [];
+  const values = [];
+  const placeholders = [];
+
+  Object.entries(templateData).forEach(([key, value]) => {
+    if (value !== undefined) {
+      fields.push(key);
+      values.push(value === null ? null : 
+        (key === 'faces_needed' || key === 'additional_data') ? 
+        JSON.stringify(value) : value);
+      placeholders.push('?');
+    }
+  });
+
+  const query = `
+    INSERT INTO templates (
+      ${fields.join(', ')}
+    ) VALUES (${placeholders.join(', ')})
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, values);
+  return result.insertId;
+};
+
+exports.updateTemplate = async function(templateId, templateData) {
+  // Filter out undefined values and prepare set clause
+  const setClause = [];
+  const values = [];
+
+  Object.entries(templateData).forEach(([key, value]) => {
+    if (value !== undefined) {
+      setClause.push(`${key} = ?`);
+      values.push(value === null ? null : 
+        (key === 'faces_needed' || key === 'additional_data') ? 
+        JSON.stringify(value) : value);
+    }
+  });
+
+  // Add templateId to values array
+  values.push(templateId);
+
+  const query = `
+    UPDATE templates 
+    SET ${setClause.join(', ')}
+    WHERE template_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, values);
+  return result.affectedRows > 0;
+}; 

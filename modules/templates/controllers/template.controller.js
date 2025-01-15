@@ -121,3 +121,77 @@ exports.searchTemplates = async function(req, res) {
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 }; 
+
+/**
+ * @api {post} /templates Create template
+ * @apiVersion 1.0.0
+ * @apiName CreateTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {String} template_name Template name
+ * @apiBody {String} template_code Unique template code
+ * @apiBody {String} description Template description
+ * @apiBody {String} prompt Template prompt
+ * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [cf_r2_key] Cloudflare R2 key
+ * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
+ * @apiBody {Number} [credits=1] Credits required
+ * @apiBody {Object} [additional_data] Additional template data
+ */
+exports.createTemplate = async function(req, res) {
+  try {
+    const templateData = req.validatedBody;
+    const templateId = await TemplateModel.createTemplate(templateData);
+    
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      message: req.t('template:TEMPLATE_CREATED'),
+      data: { template_id: templateId }
+    });
+
+  } catch (error) {
+    logger.error('Error creating template:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * @api {put} /templates/:templateId Update template
+ * @apiVersion 1.0.0
+ * @apiName UpdateTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiParam {String} templateId Template ID
+ * @apiBody {String} template_name Template name
+ * @apiBody {String} template_code Unique template code
+ * @apiBody {String} description Template description
+ * @apiBody {String} prompt Template prompt
+ * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [cf_r2_key] Cloudflare R2 key
+ * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
+ * @apiBody {Number} [credits] Credits required
+ * @apiBody {Object} [additional_data] Additional template data
+ */
+exports.updateTemplate = async function(req, res) {
+  try {
+    const { templateId } = req.params;
+    const templateData = req.validatedBody;
+    
+    const updated = await TemplateModel.updateTemplate(templateId, templateData);
+    
+    if (!updated) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template:TEMPLATE_UPDATED')
+    });
+
+  } catch (error) {
+    logger.error('Error updating template:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+}; 
