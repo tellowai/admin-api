@@ -29,3 +29,11 @@ exports.getUserDetailsByIds = async function(userIds) {
     
     return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
+exports.getTemplateDetailsByIds = async function(templateIds) {
+    const query = `SELECT template_id, template_name FROM templates WHERE template_id IN (?)`;
+    const values = [
+        templateIds
+    ];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};

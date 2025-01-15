@@ -22,10 +22,23 @@ exports.getAllLogs = async function (req, res) {
       const adminUserEntityIds = allLogs
         .filter(log => log.entity_type === 'ADMIN_USER')
         .map(log => log.entity_id);
+
+      const templateEntityIds = allLogs
+        .filter(log => log.entity_type === 'TEMPLATES')
+        .map(log => log.entity_id);
       
       const allUserIds = [...new Set([...userIds, ...adminUserEntityIds])];
       
-      const userDetailsArr = await ActivitylogDbo.getUserDetailsByIds(allUserIds);
+      let userDetailsArr = [];
+      let templateDetailsArr = [];
+
+      if (allUserIds.length > 0) {
+        userDetailsArr = await ActivitylogDbo.getUserDetailsByIds(allUserIds);
+      }
+
+      if (templateEntityIds.length > 0) {
+        templateDetailsArr = await ActivitylogDbo.getTemplateDetailsByIds(templateEntityIds);
+      }
 
       allLogs.forEach(log => {
         const userDetails = userDetailsArr.find(user => user.user_id === log.admin_user_id);
@@ -37,6 +50,13 @@ exports.getAllLogs = async function (req, res) {
           const adminUser = userDetailsArr.find(user => user.user_id === log.entity_id);
           if (adminUser) {
             log.adminUser = adminUser;
+          }
+        }
+
+        if (log.entity_type === 'TEMPLATES') {
+          const template = templateDetailsArr.find(template => template.template_id === log.entity_id);
+          if (template) {
+            log.template = template;
           }
         }
       });
