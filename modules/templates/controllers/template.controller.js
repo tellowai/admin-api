@@ -157,7 +157,7 @@ exports.createTemplate = async function(req, res) {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
           action_name: 'ADD_NEW_TEMPLATE', 
-          entity_id: newAdminUser.user_id
+          entity_id: templateId
         }
       }],
       'create_admin_activity_log'
@@ -213,7 +213,7 @@ exports.updateTemplate = async function(req, res) {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
           action_name: 'UPDATE_TEMPLATE', 
-          entity_id: newAdminUser.user_id
+          entity_id: templateId
         }
       }],
       'create_admin_activity_log'
