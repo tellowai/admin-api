@@ -29,6 +29,8 @@ exports.listTemplates = async function(req, res) {
       await Promise.all(templates.map(async (template) => {
         if (template.cf_r2_key) {
           template.r2_url = await storage.generatePresignedDownloadUrl(template.cf_r2_key);
+        } else {
+          template.r2_url = template.cf_r2_url;
         }
         
         // Parse JSON fields if they are strings

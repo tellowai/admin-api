@@ -11,6 +11,10 @@ module.exports = function(app) {
   ).get(
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.listTemplates
+  )
+  
+  app.route(
+    versionConfig.routePrefix + '/templates'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateCreateTemplateData,
