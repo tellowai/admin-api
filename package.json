@@ -65,7 +65,7 @@
     "socket.io": "^4.7.2",
     "tr46": "^4.1.1",
     "ua-parser-js": "^0.7.28",
-    "uuid": "^11.0.3",
+    "uuid": "^11.0.5",
     "winston": "^3.17.0"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@ const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const { v4: uuidv4 } = require('uuid');
 
 
 /**
@@ -147,9 +148,12 @@ exports.searchTemplates = async function(req, res) {
 exports.createTemplate = async function(req, res) {
   try {
     const templateData = req.validatedBody;
-    const templateId = await TemplateModel.createTemplate(templateData);
+    // Generate UUID for template_id
+    templateData.template_id = uuidv4();
+
+    await TemplateModel.createTemplate(templateData);
     
-    // Publish activity log command
+    // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
@@ -157,7 +161,7 @@ exports.createTemplate = async function(req, res) {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
           action_name: 'ADD_NEW_TEMPLATE', 
-          entity_id: templateId
+          entity_id: templateData.template_id
         }
       }],
       'create_admin_activity_log'
@@ -165,7 +169,7 @@ exports.createTemplate = async function(req, res) {
   
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: req.t('template:TEMPLATE_CREATED'),
-      data: { template_id: templateId }
+      data: { template_id: templateData.template_id }
     });
 
   } catch (error) {

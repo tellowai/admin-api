@@ -91,14 +91,15 @@ exports.createTemplate = async function(templateData) {
     }
   });
 
-  const query = `
+  const insertQuery = `
     INSERT INTO templates (
       ${fields.join(', ')}
     ) VALUES (${placeholders.join(', ')})
   `;
 
-  const result = await mysqlQueryRunner.runQueryInMaster(query, values);
-  return result.insertId;
+  const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, values);
+  console.log(result,'->result')
+  return result;
 };
 
 exports.updateTemplate = async function(templateId, templateData) {
