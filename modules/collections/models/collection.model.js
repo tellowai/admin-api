@@ -13,7 +13,7 @@ exports.listCollections = async function(pagination) {
       created_at
     FROM collections
     WHERE archived_at IS NULL
-    ORDER BY updated_at DESC
+    ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -22,6 +22,24 @@ exports.listCollections = async function(pagination) {
     [pagination.limit, pagination.offset]
   );
 }; 
+
+exports.getCollectionById = async function(collectionId) {
+  const query = `
+    SELECT 
+      collection_id,
+      collection_name,
+      thumbnail_cf_r2_key,
+      thumbnail_cf_r2_url,
+      additional_data,
+      created_at
+    FROM collections
+    WHERE collection_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const [collection] = await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);
+  return collection;
+};
 
 exports.searchCollections = async function(searchQuery, page, limit) {
   const offset = (page - 1) * limit;

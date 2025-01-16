@@ -429,4 +429,220 @@ exports.addTemplatesToCollections = async function(req, res) {
     logger.error('Error adding templates to collections:', { error: error.message, stack: error.stack });
     CollectionErrorHandler.handleCollectionErrors(error, res);
   }
+};
+
+/**
+ * @api {get} /collections/:collectionId Get collection details
+ * @apiVersion 1.0.0
+ * @apiName GetCollection
+ * @apiGroup Collections
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} collectionId Collection ID
+ */
+exports.getCollection = async function(req, res) {
+  try {
+    const { collectionId } = req.params;
+    const collection = await CollectionModel.getCollectionById(collectionId);
+
+    if (!collection) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('collection:COLLECTION_NOT_FOUND')
+      });
+    }
+
+    // Generate R2 URL if collection has thumbnail
+    if (collection.thumbnail_cf_r2_key) {
+      collection.r2_url = `${config.os2.r2.public.bucketUrl}/${collection.thumbnail_cf_r2_key}`;
+    } else {
+      collection.r2_url = collection.thumbnail_cf_r2_url;
+    }
+
+    // Parse JSON fields if they are strings
+    if (collection.additional_data && typeof collection.additional_data === 'string') {
+      try {
+        collection.additional_data = JSON.parse(collection.additional_data);
+      } catch (err) {
+        logger.error('Error parsing additional_data:', {
+          error: err.message,
+          value: collection.additional_data
+        });
+      }
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: collection
+    });
+
+  } catch (error) {
+    logger.error('Error getting collection:', { error: error.message, stack: error.stack });
+    CollectionErrorHandler.handleCollectionErrors(error, res);
+  }
+};
+
+/**
+ * @api {get} /collections/:collectionId/templates Get collection templates
+ * @apiVersion 1.0.0
+ * @apiName GetCollectionTemplates
+ * @apiGroup Collections
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} collectionId Collection ID
+ * @apiQuery {Number} [page=1] Page number
+ * @apiQuery {Number} [limit=10] Items per page
+ */
+exports.getCollectionTemplates = async function(req, res) {
+  try {
+    const { collectionId } = req.params;
+    
+    // Check if collection exists
+    const collection = await CollectionModel.getCollectionById(collectionId);
+    if (!collection) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('collection:COLLECTION_NOT_FOUND')
+      });
+    }
+
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+    
+    // Get collection templates
+    const collectionTemplates = await CollectionTemplateModel.getCollectionTemplates(collectionId, paginationParams);
+    
+    if (!collectionTemplates.length) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: []
+      });
+    }
+
+    // Get template details
+    const templateIds = collectionTemplates.map(ct => ct.template_id);
+    const templates = await CollectionTemplateModel.getTemplatesByIds(templateIds);
+
+    // Create a map of template details for quick lookup
+    const templateMap = new Map(templates.map(t => [t.template_id, t]));
+
+    // Combine collection templates with template details
+    const combinedTemplates = collectionTemplates.map(ct => {
+      const template = templateMap.get(ct.template_id);
+      if (!template) return null;
+
+      // Process template data
+      const processedTemplate = {
+        ...template,
+        collection_template_id: ct.collection_template_id,
+        sort_order: ct.sort_order
+      };
+
+      // Generate R2 URL
+      if (processedTemplate.cf_r2_key) {
+        processedTemplate.r2_url = `${config.os2.r2.public.bucketUrl}/${processedTemplate.cf_r2_key}`;
+      } else {
+        processedTemplate.r2_url = processedTemplate.cf_r2_url;
+      }
+
+      // Parse JSON fields if they are strings
+      if (processedTemplate.faces_needed && typeof processedTemplate.faces_needed === 'string') {
+        try {
+          processedTemplate.faces_needed = JSON.parse(processedTemplate.faces_needed);
+          
+          // Generate R2 URLs for character faces if they exist
+          if (processedTemplate.faces_needed) {
+            processedTemplate.faces_needed = processedTemplate.faces_needed.map(face => {
+              if (face.character_face_r2_key) {
+                face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+              }
+              return face;
+            });
+          }
+        } catch (err) {
+          logger.error('Error parsing faces_needed:', {
+            error: err.message,
+            value: processedTemplate.faces_needed
+          });
+        }
+      }
+
+      if (processedTemplate.additional_data && typeof processedTemplate.additional_data === 'string') {
+        try {
+          processedTemplate.additional_data = JSON.parse(processedTemplate.additional_data);
+        } catch (err) {
+          logger.error('Error parsing additional_data:', {
+            error: err.message,
+            value: processedTemplate.additional_data
+          });
+        }
+      }
+
+      return processedTemplate;
+    }).filter(Boolean); // Remove any null values from missing templates
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: combinedTemplates
+    });
+
+  } catch (error) {
+    logger.error('Error getting collection templates:', { error: error.message, stack: error.stack });
+    CollectionErrorHandler.handleCollectionErrors(error, res);
+  }
+};
+
+/**
+ * @api {delete} /collections/:collectionId/templates Remove templates from collection
+ * @apiVersion 1.0.0
+ * @apiName RemoveTemplates
+ * @apiGroup Collections
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} collectionId Collection ID
+ * @apiBody {Array} template_ids Array of template IDs to remove from the collection
+ */
+exports.removeTemplates = async function(req, res) {
+  try {
+    const { collectionId } = req.params;
+    const { template_ids } = req.validatedBody;
+    
+    // Check if collection exists
+    const collectionExists = await CollectionTemplateModel.checkCollectionExists(collectionId);
+    if (!collectionExists) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('collection:COLLECTION_NOT_FOUND')
+      });
+    }
+
+    // Check which templates are in the collection
+    const templatesInCollection = await CollectionTemplateModel.checkTemplatesInCollection(collectionId, template_ids);
+    const templatesInCollectionIds = templatesInCollection.map(t => t.template_id);
+    const templatesNotInCollection = template_ids.filter(id => !templatesInCollectionIds.includes(id));
+
+    // Only proceed if we have templates to remove
+    if (templatesInCollectionIds.length > 0) {
+      const removedCount = await CollectionTemplateModel.removeTemplatesFromCollection(collectionId, templatesInCollectionIds);
+
+      // Publish activity log command
+      await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        [{
+          value: { 
+            admin_user_id: req.user.userId,
+            entity_type: 'COLLECTIONS',
+            action_name: 'REMOVE_TEMPLATES_FROM_COLLECTION', 
+            entity_id: collectionId
+          }
+        }],
+        'create_admin_activity_log'
+      );
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('collection:TEMPLATES_REMOVED_FROM_COLLECTION'),
+      data: {
+        removed_templates: templatesInCollectionIds,
+        templates_not_in_collection: templatesNotInCollection
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error removing templates from collection:', { error: error.message, stack: error.stack });
+    CollectionErrorHandler.handleCollectionErrors(error, res);
+  }
 }; 

@@ -9,5 +9,6 @@
   "INVALID_TEMPLATES": "One or more templates are invalid or archived",
   "TEMPLATES_ALREADY_IN_COLLECTION": "One or more templates are already in the collection",
   "TEMPLATES_ADDED_TO_COLLECTION": "Templates added to collection successfully",
-  "TEMPLATES_ADDED_TO_COLLECTIONS": "Templates added to collections successfully"
+  "TEMPLATES_ADDED_TO_COLLECTIONS": "Templates added to collections successfully",
+  "TEMPLATES_REMOVED_FROM_COLLECTION": "Templates removed from collection successfully"
 } 

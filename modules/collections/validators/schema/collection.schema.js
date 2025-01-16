@@ -25,7 +25,12 @@ const addTemplatesToCollectionsSchema = Joi.object().keys({
   collection_ids: Joi.array().items(Joi.number().integer().positive()).min(1).required()
 });
 
+const removeTemplatesSchema = Joi.object().keys({
+  template_ids: Joi.array().items(Joi.string().uuid()).min(1).required()
+});
+
 exports.createCollectionSchema = createCollectionSchema;
 exports.updateCollectionSchema = updateCollectionSchema;
 exports.addTemplatesSchema = addTemplatesSchema;
-exports.addTemplatesToCollectionsSchema = addTemplatesToCollectionsSchema; 
+exports.addTemplatesToCollectionsSchema = addTemplatesToCollectionsSchema;
+exports.removeTemplatesSchema = removeTemplatesSchema; 
