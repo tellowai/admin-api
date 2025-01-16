@@ -1,0 +1,13 @@
+{
+  "COLLECTION_LIST_FAILED": "Failed to fetch collections",
+  "COLLECTION_NOT_FOUND": "Collection not found",
+  "COLLECTIONS_NOT_FOUND": "No valid collections found",
+  "COLLECTION_CREATED": "Collection created successfully",
+  "COLLECTION_UPDATED": "Collection updated successfully",
+  "COLLECTION_ARCHIVED": "Collection archived successfully",
+  "SEARCH_QUERY_REQUIRED": "Search query is required",
+  "INVALID_TEMPLATES": "One or more templates are invalid or archived",
+  "TEMPLATES_ALREADY_IN_COLLECTION": "One or more templates are already in the collection",
+  "TEMPLATES_ADDED_TO_COLLECTION": "Templates added to collection successfully",
+  "TEMPLATES_ADDED_TO_COLLECTIONS": "Templates added to collections successfully"
+} 

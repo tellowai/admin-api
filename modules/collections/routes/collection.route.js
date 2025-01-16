@@ -21,6 +21,14 @@ module.exports = function(app) {
   );
   
   app.route(
+    versionConfig.routePrefix + '/collections/templates'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    CollectionValidator.validateAddTemplatesToCollectionsData,
+    CollectionCtrl.addTemplatesToCollections
+  );
+  
+  app.route(
     versionConfig.routePrefix + '/collections'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
@@ -41,5 +49,13 @@ module.exports = function(app) {
   ).post(
     AuthMiddleware.isAuthorizedJWT,
     CollectionCtrl.archiveCollection
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/collections/:collectionId/templates'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    CollectionValidator.validateAddTemplatesData,
+    CollectionCtrl.addTemplates
   );
 }; 

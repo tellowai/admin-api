@@ -34,4 +34,36 @@ exports.validateUpdateCollectionData = function(req, res, next) {
 
   req.validatedBody = payloadValidation.value;
   return next(null);
+};
+
+exports.validateAddTemplatesData = function(req, res, next) {
+  const payload = req.body;
+  
+  const payloadValidation = validationCtrl.validate(collectionSchema.addTemplatesSchema, payload);
+  
+  if(payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+
+  req.validatedBody = payloadValidation.value;
+  return next(null);
+};
+
+exports.validateAddTemplatesToCollectionsData = function(req, res, next) {
+  const payload = req.body;
+  
+  const payloadValidation = validationCtrl.validate(collectionSchema.addTemplatesToCollectionsSchema, payload);
+  
+  if(payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+
+  req.validatedBody = payloadValidation.value;
+  return next(null);
 }; 
