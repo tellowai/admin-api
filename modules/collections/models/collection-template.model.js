@@ -13,7 +13,7 @@ exports.addTemplatesToCollection = async function(collectionId, templateIds) {
   });
 
   const insertQuery = `
-    INSERT INTO collection_templates (
+    INSERT IGNORE INTO collection_templates (
       collection_id,
       template_id,
       sort_order
@@ -63,7 +63,7 @@ exports.addTemplatesToCollections = async function(collectionIds, templateIds) {
   });
 
   const insertQuery = `
-    INSERT INTO collection_templates (
+    INSERT IGNORE INTO collection_templates (
       collection_id,
       template_id,
       sort_order
