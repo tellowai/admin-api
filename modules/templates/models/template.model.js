@@ -98,7 +98,6 @@ exports.createTemplate = async function(templateData) {
   `;
 
   const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, values);
-  console.log(result,'->result')
   return result;
 };
 

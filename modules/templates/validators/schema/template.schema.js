@@ -25,7 +25,13 @@ const updateTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(255).optional(),
   description: Joi.string().allow(null).optional(),
   prompt: Joi.string().optional(),
-  faces_needed: Joi.object().allow(null).optional(),
+  faces_needed: Joi.array().items(Joi.object().keys({
+    character_name: Joi.string().optional(),
+    character_gender: Joi.string().valid('male', 'female').optional(),
+    character_face_r2_url: Joi.string().optional(),
+    character_face_r2_key: Joi.string().optional(),
+    template_character_id: Joi.string().optional()
+  })).allow(null),
   cf_r2_key: Joi.string().max(512).allow(null).optional(),
   cf_r2_url: Joi.string().max(1000).allow(null).optional(),
   credits: Joi.number().integer().min(1).optional(),

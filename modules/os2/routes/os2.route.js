@@ -13,4 +13,12 @@ module.exports = function(app) {
     PresignedValidator.validatePresignedUrlGeneration,
     PresignedCtrl.generatePresignedUrls
   );
+
+  app.route(
+    versionConfig.routePrefix + '/os2/presigned-urls/public'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    PresignedValidator.validatePresignedUrlGeneration,
+    PresignedCtrl.generatePresignedPublicBucketUrls
+  );
 }; 

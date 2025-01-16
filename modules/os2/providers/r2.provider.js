@@ -27,7 +27,8 @@ class R2StorageProvider extends StorageProvider {
       forcePathStyle: false
     });
     this.bucket = config.os2.r2.bucket;
-    this.publicUrl = config.os2.r2.publicUrl
+    this.bucketUrl = config.os2.r2.bucketUrl;
+    this.publicBucket = config.os2.r2.public.bucket;
   }
 
   async generatePresignedUploadUrl(key, options = {}) {
@@ -55,6 +56,23 @@ class R2StorageProvider extends StorageProvider {
 
     const url = await getSignedUrl(this.client, command, {
       expiresIn: options.expiresIn || config.os2.download.defaultDownloadExpiresIn,
+      signatureVersion: 'v4'
+    });
+
+    return url;
+  }
+
+  async generatePresignedPublicBucketUploadUrl(key, options = {}) {
+    const command = new PutObjectCommand({
+      Bucket: this.publicBucket,
+      Key: key,
+      ContentType: options.contentType,
+      Metadata: options.metadata,
+      ACL: 'public-read'
+    });
+
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn || config.os2.upload.defaultExpiresIn,
       signatureVersion: 'v4'
     });
 
@@ -92,7 +110,7 @@ class R2StorageProvider extends StorageProvider {
           return {
             status: 'success',
             originalUrl: url,
-            r2Url: `${this.publicUrl}/${key}`,
+            r2Url: `${this.bucketUrl}/${key}`,
             fileName: uniqueFileName,
             key,
             contentType: response.headers.get('content-type'),

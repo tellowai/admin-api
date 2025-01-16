@@ -9,6 +9,7 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { v4: uuidv4 } = require('uuid');
+const config = require('../../../config/config');
 
 
 /**
@@ -32,21 +33,39 @@ exports.listTemplates = async function(req, res) {
       
       await Promise.all(templates.map(async (template) => {
         if (template.cf_r2_key) {
-          template.r2_url = await storage.generatePresignedDownloadUrl(template.cf_r2_key);
+          template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
         } else {
           template.r2_url = template.cf_r2_url;
         }
         
+
         // Parse JSON fields if they are strings
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
+
+            // Generate R2 URLs for character faces if they exist
+            if (template.faces_needed) {
+              template.faces_needed = template.faces_needed.map(face => {
+                if (face.character_face_r2_key) {
+                  face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+                }
+                return face;
+              });
+            }
           } catch (err) {
             logger.error('Error parsing faces_needed:', { 
               error: err.message,
               value: template.faces_needed
             });
           }
+        } else {
+          template.faces_needed = template.faces_needed.map(face => {
+            if (face.character_face_r2_key) {
+              face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+            }
+            return face;
+          });
         }
         
         if (template.additional_data && typeof template.additional_data === 'string') {
