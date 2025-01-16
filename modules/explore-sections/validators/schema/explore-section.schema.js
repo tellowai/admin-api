@@ -1,0 +1,30 @@
+'use strict';
+
+const Joi = require('@hapi/joi');
+
+const createExploreSectionSchema = Joi.object().keys({
+  section_name: Joi.string().max(255).required(),
+  layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').default('horizontal_scroller'),
+  sort_order: Joi.number().integer().min(0).default(0),
+  status: Joi.string().valid('active', 'inactive').default('active'),
+  additional_data: Joi.object().allow(null)
+});
+
+const updateExploreSectionSchema = Joi.object().keys({
+  section_name: Joi.string().max(255).optional(),
+  layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').optional(),
+  sort_order: Joi.number().integer().min(0).optional(),
+  status: Joi.string().valid('active', 'inactive').optional(),
+  additional_data: Joi.object().allow(null).optional()
+});
+
+const updateSortOrderSchema = Joi.array().items(
+  Joi.object().keys({
+    section_id: Joi.number().integer().required(),
+    sort_order: Joi.number().integer().min(0).required()
+  })
+).min(1).required();
+
+exports.createExploreSectionSchema = createExploreSectionSchema;
+exports.updateExploreSectionSchema = updateExploreSectionSchema;
+exports.updateSortOrderSchema = updateSortOrderSchema; 
