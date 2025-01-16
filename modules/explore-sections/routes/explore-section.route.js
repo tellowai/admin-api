@@ -3,7 +3,9 @@
 const versionConfig = require('../../version');
 const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const ExploreSectionCtrl = require('../controllers/explore-section.controller');
+const ExploreSectionItemCtrl = require('../controllers/explore-section-item.controller');
 const ExploreSectionValidator = require('../validators/explore-section.validator');
+const ExploreSectionItemValidator = require('../validators/explore-section-item.validator');
 
 module.exports = function(app) {
   app.route(
@@ -42,5 +44,29 @@ module.exports = function(app) {
   ).post(
     AuthMiddleware.isAuthorizedJWT,
     ExploreSectionCtrl.archiveExploreSection
+  );
+
+  // Section items routes
+  app.route(
+    versionConfig.routePrefix + '/explore-sections/:sectionId/items'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    ExploreSectionItemCtrl.listSectionItems
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/explore-sections/:sectionId/items'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    ExploreSectionItemValidator.validateAddSectionItemsData,
+    ExploreSectionItemCtrl.addSectionItems
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/explore-sections/:sectionId/items'
+  ).delete(
+    AuthMiddleware.isAuthorizedJWT,
+    ExploreSectionItemValidator.validateRemoveSectionItemsData,
+    ExploreSectionItemCtrl.removeSectionItems
   );
 }; 

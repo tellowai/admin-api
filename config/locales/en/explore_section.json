@@ -4,5 +4,12 @@
   "EXPLORE_SECTION_ARCHIVED": "Explore section archived successfully",
   "EXPLORE_SECTION_SORT_ORDER_UPDATED": "Explore sections sort order updated successfully",
   "EXPLORE_SECTION_NOT_FOUND": "Explore section not found",
-  "EXPLORE_SECTION_OPERATION_FAILED": "Explore section operation failed"
+  "EXPLORE_SECTION_OPERATION_FAILED": "Explore section operation failed",
+  
+  "EXPLORE_SECTION_ITEMS_ADDED": "Items added to explore section successfully",
+  "EXPLORE_SECTION_ITEMS_ADDED_WITH_DUPLICATES": "Some items were added to explore section, others were skipped as they already exist",
+  "EXPLORE_SECTION_ITEMS_ALREADY_EXIST": "All items already exist in this section",
+  "EXPLORE_SECTION_ITEMS_REMOVED": "Items removed from explore section successfully",
+  "EXPLORE_SECTION_ITEMS_NOT_FOUND": "One or more explore section items not found",
+  "EXPLORE_SECTION_ITEMS_REQUIRED": "Please provide at least one item ID to remove"
 } 
