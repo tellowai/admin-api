@@ -37,3 +37,56 @@ exports.getTemplateDetailsByIds = async function(templateIds) {
     
     return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
+
+exports.getCollectionDetailsByIds = async function(collectionIds) {
+    const query = `
+        SELECT 
+            collection_id,
+            collection_name,
+            thumbnail_cf_r2_key,
+            thumbnail_cf_r2_url,
+            additional_data,
+            created_at
+        FROM collections 
+        WHERE collection_id IN (?)
+    `;
+    const values = [collectionIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
+
+exports.getExploreSectionDetailsByIds = async function(sectionIds) {
+    const query = `
+        SELECT 
+            section_id,
+            section_name,
+            layout_type,
+            sort_order,
+            status,
+            additional_data,
+            created_at,
+            updated_at
+        FROM explore_sections 
+        WHERE section_id IN (?)
+    `;
+    const values = [sectionIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
+
+exports.getExploreSectionItemDetailsByIds = async function(itemIds) {
+    const query = `
+        SELECT 
+            explore_section_item_id,
+            section_id,
+            resource_type,
+            resource_id,
+            sort_order,
+            created_at
+        FROM explore_section_items 
+        WHERE explore_section_item_id IN (?)
+    `;
+    const values = [itemIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};

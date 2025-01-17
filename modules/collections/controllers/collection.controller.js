@@ -75,7 +75,7 @@ exports.createCollection = async function(req, res) {
   try {
     const collectionData = req.validatedBody;
     
-    await CollectionModel.createCollection(collectionData);
+    const result = await CollectionModel.createCollection(collectionData);
     
     // Publish activity log command
     await kafkaCtrl.sendMessage(
@@ -85,7 +85,7 @@ exports.createCollection = async function(req, res) {
           admin_user_id: req.user.userId,
           entity_type: 'COLLECTIONS',
           action_name: 'ADD_NEW_COLLECTION', 
-          entity_id: collectionData.collection_id
+          entity_id: result.insertId
         }
       }],
       'create_admin_activity_log'
