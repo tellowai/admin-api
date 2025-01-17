@@ -31,6 +31,7 @@ exports.getTemplatesForItems = async function(templateIds) {
     SELECT 
       template_id,
       template_name,
+      template_code,
       cf_r2_key
     FROM templates
     WHERE template_id IN (?)
@@ -47,7 +48,7 @@ exports.getCollectionsForItems = async function(collectionIds) {
     SELECT 
       collection_id,
       collection_name,
-      thumbnail_cf_r2_key
+      thumbnail_cf_r2_key as resource_image_key
     FROM collections
     WHERE collection_id IN (?)
     AND archived_at IS NULL
@@ -105,4 +106,19 @@ exports.removeSectionItems = async function(sectionId, itemIds) {
 
   const result = await mysqlQueryRunner.runQueryInMaster(query, [itemIds, sectionId]);
   return result.affectedRows > 0;
+};
+
+exports.getCollectionTemplateIds = async function(collectionId) {
+  const query = `
+    SELECT 
+      template_id,
+      sort_order,
+      created_at
+    FROM collection_templates
+    WHERE collection_id = ?
+    AND archived_at IS NULL
+    ORDER BY sort_order ASC, created_at DESC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);
 }; 

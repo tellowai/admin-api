@@ -69,4 +69,12 @@ module.exports = function(app) {
     ExploreSectionItemValidator.validateRemoveSectionItemsData,
     ExploreSectionItemCtrl.removeSectionItems
   );
+
+  app.route(
+    versionConfig.routePrefix + '/explore-sections/:sectionId/collection-templates'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    ExploreSectionItemValidator.validateAddCollectionTemplatesData,
+    ExploreSectionItemCtrl.addCollectionTemplates
+  );
 }; 

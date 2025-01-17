@@ -20,5 +20,13 @@ const removeSectionItemsSchema = Joi.object().keys({
   ).min(1).required()
 });
 
+const addCollectionTemplatesSchema = Joi.object().keys({
+  collection_id: Joi.alternatives().try(
+    Joi.string().uuid(),
+    Joi.number().integer()
+  ).required()
+});
+
 exports.addSectionItemsSchema = addSectionItemsSchema;
-exports.removeSectionItemsSchema = removeSectionItemsSchema; 
+exports.removeSectionItemsSchema = removeSectionItemsSchema;
+exports.addCollectionTemplatesSchema = addCollectionTemplatesSchema; 

@@ -11,5 +11,6 @@
   "EXPLORE_SECTION_ITEMS_ALREADY_EXIST": "All items already exist in this section",
   "EXPLORE_SECTION_ITEMS_REMOVED": "Items removed from explore section successfully",
   "EXPLORE_SECTION_ITEMS_NOT_FOUND": "One or more explore section items not found",
-  "EXPLORE_SECTION_ITEMS_REQUIRED": "Please provide at least one item ID to remove"
+  "EXPLORE_SECTION_ITEMS_REQUIRED": "Please provide at least one item ID to remove",
+  "COLLECTION_HAS_NO_TEMPLATES": "The selected collection has no templates"
 } 

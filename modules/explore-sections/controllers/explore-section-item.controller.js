@@ -60,6 +60,11 @@ exports.listSectionItems = async function(req, res) {
         const template = templateMap[item.resource_id];
         if (template) {
           enrichedItem.resource_name = template.template_name;
+          
+          if(template.template_code) {
+            enrichedItem.resource_code = template.template_code;
+          }
+          
           enrichedItem.resource_image_key = template.cf_r2_key;
           if (template.cf_r2_key) {
             enrichedItem.resource_image_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
@@ -70,10 +75,10 @@ exports.listSectionItems = async function(req, res) {
         const collection = collectionMap[item.resource_id];
         if (collection) {
           enrichedItem.resource_name = collection.collection_name;
-          enrichedItem.resource_image_key = collection.thumbnail_cf_r2_key;
-          if (collection.thumbnail_cf_r2_key) {
-            enrichedItem.resource_image_url = `${config.os2.r2.public.bucketUrl}/${collection.thumbnail_cf_r2_key}`;
-            enrichedItem.r2_url = `${config.os2.r2.public.bucketUrl}/${collection.thumbnail_cf_r2_key}`;
+          enrichedItem.resource_image_key = collection.resource_image_key;
+          if (collection.resource_image_key) {
+            enrichedItem.resource_image_url = `${config.os2.r2.public.bucketUrl}/${collection.resource_image_key}`;
+            enrichedItem.r2_url = `${config.os2.r2.public.bucketUrl}/${collection.resource_image_key}`;
           }
         }
       }
@@ -232,6 +237,119 @@ exports.removeSectionItems = async function(req, res) {
 
   } catch (error) {
     logger.error('Error removing section items:', { error: error.message, stack: error.stack });
+    ExploreSectionErrorHandler.handleExploreSectionErrors(error, res);
+  }
+};
+
+/**
+ * @api {post} /explore-sections/:sectionId/collection-templates Add all templates from collection
+ * @apiVersion 1.0.0
+ * @apiName AddCollectionTemplates
+ * @apiGroup ExploreSections
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} sectionId Section ID
+ * @apiBody {String} collection_id Collection ID
+ */
+exports.addCollectionTemplates = async function(req, res) {
+  try {
+    const { sectionId } = req.params;
+    const { collection_id } = req.validatedBody;
+
+    // Get template IDs from collection
+    const collectionTemplates = await ExploreSectionItemModel.getCollectionTemplateIds(collection_id);
+
+    if (!collectionTemplates.length) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: req.t('explore_section:COLLECTION_HAS_NO_TEMPLATES')
+      });
+    }
+
+    // Prepare items for adding to section
+    const items = collectionTemplates.map(template => ({
+      section_id: parseInt(sectionId),
+      resource_type: 'template',
+      resource_id: template.template_id
+    }));
+
+    // Check for existing items
+    const existingItems = await ExploreSectionItemModel.getExistingItems(sectionId, items);
+    
+    // Create a map of existing items
+    const existingMap = existingItems.reduce((acc, item) => {
+      acc[`${item.resource_type}-${item.resource_id}`] = true;
+      return acc;
+    }, {});
+
+    // Prepare items with status
+    const itemsWithStatus = items.map(item => ({
+      ...item,
+      status: existingMap[`${item.resource_type}-${item.resource_id}`] ? 'duplicate' : 'new'
+    }));
+
+    // Filter new items for insertion
+    const newItems = itemsWithStatus.filter(item => item.status === 'new');
+
+    let result = { affectedRows: 0 };
+    // If there are new items to add
+    if (newItems.length > 0) {
+      result = await ExploreSectionItemModel.bulkInsertItems(newItems);
+      
+      // Update status of successfully added items
+      if (result.affectedRows > 0) {
+        newItems.forEach(item => {
+          item.status = 'added';
+        });
+      }
+    }
+
+    const summary = {
+      total: items.length,
+      added: newItems.length,
+      duplicates: existingItems.length
+    };
+
+    // If no new items were added because all were duplicates
+    if (summary.added === 0) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        message: req.t('explore_section:EXPLORE_SECTION_ITEMS_ALREADY_EXIST'),
+        data: {
+          items: itemsWithStatus,
+          summary
+        }
+      });
+    }
+
+    // If some items were duplicates but some were added
+    const message = summary.duplicates > 0
+      ? req.t('explore_section:EXPLORE_SECTION_ITEMS_ADDED_WITH_DUPLICATES')
+      : req.t('explore_section:EXPLORE_SECTION_ITEMS_ADDED');
+    
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'EXPLORE_SECTION_ITEMS',
+          action_name: 'ADD_COLLECTION_TEMPLATES', 
+          entity_id: sectionId,
+          collection_id: collection_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+  
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      message,
+      data: {
+        items: itemsWithStatus,
+        summary
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error adding collection templates to section:', { error: error.message, stack: error.stack });
     ExploreSectionErrorHandler.handleExploreSectionErrors(error, res);
   }
 }; 
