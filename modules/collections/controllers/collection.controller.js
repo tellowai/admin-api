@@ -282,9 +282,9 @@ exports.addTemplates = async function(req, res) {
     const nonExistingTemplateIds = template_ids.filter(id => !existingTemplateIds.includes(id));
 
     // Check which templates are already in collection
-    const templatesInCollection = await CollectionTemplateModel.checkTemplatesNotInCollection(collectionId, existingTemplateIds);
+    const templatesInCollection = await CollectionTemplateModel.checkTemplatesNotInCollection(collectionId, template_ids);
     const alreadyInCollectionIds = templatesInCollection.map(t => t.template_id);
-    const toAddTemplateIds = existingTemplateIds.filter(id => !alreadyInCollectionIds.includes(id));
+    const toAddTemplateIds = template_ids.filter(id => !alreadyInCollectionIds.includes(id));
 
     // Only proceed if we have templates to add
     if (toAddTemplateIds.length > 0) {
@@ -369,7 +369,7 @@ exports.addTemplatesToCollections = async function(req, res) {
     });
 
     // Filter out templates that are already in collections
-    const toAddCollectionIds = [];
+    let toAddCollectionIds = [];
     const toAddTemplateIds = [];
     const alreadyInCollections = [];
 
@@ -392,6 +392,9 @@ exports.addTemplatesToCollections = async function(req, res) {
         });
       }
     });
+
+    // Make collection IDs unique to avoid duplicate operations
+    toAddCollectionIds = [...new Set(toAddCollectionIds)];
 
     // Only proceed if we have templates to add
     if (toAddCollectionIds.length > 0) {
