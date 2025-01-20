@@ -8,6 +8,7 @@ exports.listTemplates = async function(pagination) {
       template_id,
       template_name,
       template_code,
+      template_gender,
       description,
       prompt,
       faces_needed,

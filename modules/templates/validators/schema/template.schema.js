@@ -23,6 +23,7 @@ const createTemplateSchema = Joi.object().keys({
 const updateTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).optional(),
   template_code: Joi.string().max(255).optional(),
+  template_gender: Joi.string().valid('male', 'female').optional(),
   description: Joi.string().allow(null).optional(),
   prompt: Joi.string().optional(),
   faces_needed: Joi.array().items(Joi.object().keys({
