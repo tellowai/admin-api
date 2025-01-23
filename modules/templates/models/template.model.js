@@ -9,6 +9,7 @@ exports.listTemplates = async function(pagination) {
       template_name,
       template_code,
       template_gender,
+      template_output_type,
       description,
       prompt,
       faces_needed,
@@ -34,6 +35,7 @@ exports.getTemplatePrompt = async function(templateId) {
     SELECT 
       template_id,
       template_name,
+      template_output_type,
       prompt,
       faces_needed,
       credits,
@@ -55,6 +57,7 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
       template_id,
       template_name,
       template_code,
+      template_output_type,
       description,
       faces_needed,
       cf_r2_key,

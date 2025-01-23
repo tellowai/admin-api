@@ -5,6 +5,7 @@ const Joi = require('@hapi/joi');
 const createTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).required(),
   template_code: Joi.string().max(9).required(),
+  template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
   description: Joi.string().allow(null),
   prompt: Joi.string().required(),
   faces_needed: Joi.array().items(Joi.object().keys({
@@ -23,6 +24,7 @@ const createTemplateSchema = Joi.object().keys({
 const updateTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).optional(),
   template_code: Joi.string().max(255).optional(),
+  template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
   template_gender: Joi.string().valid('male', 'female').optional(),
   description: Joi.string().allow(null).optional(),
   prompt: Joi.string().optional(),
