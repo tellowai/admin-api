@@ -14,3 +14,4 @@ config/env/test.js
 logs/combined.log
 logs/error.log
 logs
+.qodo

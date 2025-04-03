@@ -6,12 +6,12 @@ const createTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).required(),
   template_code: Joi.string().max(9).required(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
-  template_gender: Joi.string().valid('male', 'female', 'unisex').optional(),
+  template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null),
   prompt: Joi.string().required(),
   faces_needed: Joi.array().items(Joi.object().keys({
     character_name: Joi.string().required(),
-    character_gender: Joi.string().valid('male', 'female', 'unisex').required(),
+    character_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required(),
     character_face_r2_url: Joi.string().optional(),
     character_face_r2_key: Joi.string().optional(),
     template_character_id: Joi.string().optional()
@@ -26,12 +26,12 @@ const updateTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).optional(),
   template_code: Joi.string().max(255).optional(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
-  template_gender: Joi.string().valid('male', 'female', 'unisex').optional(),
+  template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null).optional(),
   prompt: Joi.string().optional(),
   faces_needed: Joi.array().items(Joi.object().keys({
     character_name: Joi.string().optional(),
-    character_gender: Joi.string().valid('male', 'female', 'unisex').optional(),
+    character_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
     character_face_r2_url: Joi.string().optional(),
     character_face_r2_key: Joi.string().optional(),
     template_character_id: Joi.string().optional()
