@@ -288,12 +288,6 @@ class PackController {
         });
       }
 
-      if (pack.user_id !== req.user.userId) {
-        return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
-          message: req.t('common:errors.forbidden')
-        });
-      }
-
       // Check template limit
       const currentTemplateCount = await PackModel.countPackTemplates(packId);
       if (currentTemplateCount + templates.length > PACK_CONSTANTS.MAX_TEMPLATES_PER_PACK) {
@@ -304,7 +298,7 @@ class PackController {
         });
       }
 
-      // Check if templates exist
+      // Check if templates exist and get their details
       const templateIds = templates.map(t => t.template_id);
       const existingTemplates = await PackModel.getTemplatesByIds(templateIds);
       const existingTemplateIds = existingTemplates.map(t => t.template_id);
@@ -322,12 +316,40 @@ class PackController {
         await PackModel.addTemplateToPackWithOrder(packId, template.template_id, template.sort_order);
       }
 
+      // Process template details
+      const processedTemplates = existingTemplates.map(template => {
+        const templateData = {
+          ...template,
+          sort_order: templates.find(t => t.template_id === template.template_id).sort_order
+        };
+
+        // Generate R2 URL
+        if (templateData.cf_r2_key) {
+          templateData.r2_url = `${config.os2.r2.public.bucketUrl}/${templateData.cf_r2_key}`;
+        } else {
+          templateData.r2_url = templateData.cf_r2_url;
+        }
+
+        // Parse JSON fields if they are strings
+        if (templateData.additional_data && typeof templateData.additional_data === 'string') {
+          try {
+            templateData.additional_data = JSON.parse(templateData.additional_data);
+          } catch (err) {
+            logger.error('Error parsing additional_data:', {
+              error: err.message,
+              value: templateData.additional_data
+            });
+          }
+        }
+
+        return templateData;
+      });
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
-            admin_user_id: req.user.userId,
             entity_type: 'PACKS',
             action_name: 'ADD_TEMPLATES_TO_PACK', 
             entity_id: packId
@@ -339,7 +361,7 @@ class PackController {
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: req.t('packs:success.templates_added'),
         data: {
-          added_templates: templateIds
+          added_templates: processedTemplates
         }
       });
     } catch (error) {
@@ -357,12 +379,6 @@ class PackController {
       if (!pack) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
           message: req.t('packs:errors.pack_not_found')
-        });
-      }
-
-      if (pack.user_id !== req.user.userId) {
-        return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
-          message: req.t('common:errors.forbidden')
         });
       }
 

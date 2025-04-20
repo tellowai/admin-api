@@ -123,7 +123,17 @@ exports.getTemplatesByIds = async function(templateIds) {
     SELECT 
       template_id,
       template_name,
-      thumbnail_url
+      template_code,
+      template_gender,
+      description,
+      prompt,
+      faces_needed,
+      cf_r2_key,
+      cf_r2_url,
+      credits,
+      additional_data,
+      template_output_type,
+      created_at
     FROM templates
     WHERE template_id IN (?)
     AND archived_at IS NULL
