@@ -1,0 +1,15 @@
+{
+  "errors": {
+    "pack_not_found": "Pack not found",
+    "templates_limit_exceeded": "Cannot add more templates. Maximum {{max}} templates allowed per pack",
+    "template_not_found": "Template not found",
+    "template_already_exists": "Template already exists in the pack"
+  },
+  "success": {
+    "pack_created": "Pack created successfully",
+    "pack_updated": "Pack updated successfully",
+    "pack_archived": "Pack archived successfully",
+    "templates_added": "Templates added to pack successfully",
+    "templates_removed": "Templates removed from pack successfully"
+  }
+} 
