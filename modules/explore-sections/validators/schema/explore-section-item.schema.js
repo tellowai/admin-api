@@ -5,7 +5,7 @@ const Joi = require('@hapi/joi');
 const addSectionItemsSchema = Joi.array().items(
   Joi.object().keys({
     section_id: Joi.number().integer().required(),
-    resource_type: Joi.string().valid('template', 'collection').required(),
+    resource_type: Joi.string().valid('template', 'collection', 'pack').required(),
     resource_id: Joi.alternatives().try(
       Joi.string().uuid(),
       Joi.number().integer()
