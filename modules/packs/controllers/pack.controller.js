@@ -293,6 +293,8 @@ class PackController {
       if (currentTemplateCount + templates.length > PACK_CONSTANTS.MAX_TEMPLATES_PER_PACK) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: req.t('packs:errors.templates_limit_exceeded', { 
+            current: currentTemplateCount,
+            adding: templates.length,
             max: PACK_CONSTANTS.MAX_TEMPLATES_PER_PACK 
           })
         });
