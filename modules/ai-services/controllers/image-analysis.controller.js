@@ -46,6 +46,11 @@ exports.analyzeImage = async (req, res) => {
       1. A concise, engaging title for a template based on this image
       2. A detailed prompt that captures the essence, style, and key elements of the image
       
+      VERY IMPORTANT: The prompt MUST begin with "a {{TRIGGER_WORD}} " followed by a description.
+      For example: "a {{TRIGGER_WORD}} walking on a beach at sunset" or "a {{TRIGGER_WORD}} in a vintage car driving through mountains"
+      
+      DO NOT use phrases like "Create a..." or "Generate a..." - just describe what's in the image starting with "a {{TRIGGER_WORD}}".
+      
       Return your analysis in JSON format with 'title' and 'prompt' fields.
       The title should be short (2-6 words), catchy, and descriptive.
       The prompt should be detailed enough to recreate the style and content of the image.`
@@ -54,7 +59,7 @@ exports.analyzeImage = async (req, res) => {
     // Create user message with the image
     const userMessage = {
       role: 'user',
-      content: 'Analyze this image and provide a creative title and detailed prompt that captures its essence, style, and key elements.'
+      content: 'Analyze this image and provide a creative title and detailed prompt that captures its essence, style, and key elements. Remember, the prompt MUST start with "a {{TRIGGER_WORD}} " followed by the description.'
     };
 
     // Define response format
@@ -68,7 +73,7 @@ exports.analyzeImage = async (req, res) => {
           },
           prompt: {
             type: "string",
-            description: "A detailed prompt describing the style, elements, mood, and composition of the image"
+            description: "A detailed prompt starting with 'a {{TRIGGER_WORD}} ' followed by a description of the style, elements, mood, and composition of the image"
           }
         },
         required: ["title", "prompt"]
@@ -91,10 +96,41 @@ exports.analyzeImage = async (req, res) => {
       });
     }
 
-    // Return the successful response
+    // Process the response data
+    let responseData = response.data;
+    
+    // Parse the data if it's a string
+    if (typeof responseData === 'string') {
+      try {
+        responseData = JSON.parse(responseData);
+      } catch (error) {
+        console.error('Error parsing response data:', error);
+      }
+    }
+    
+    // Ensure prompt format starts with a {{TRIGGER_WORD}}
+    if (responseData && responseData.prompt) {
+      // Remove any "Create a" or similar prefixes
+      let prompt = responseData.prompt
+        .replace(/^(create\s+a|generate\s+a|produce\s+a|make\s+a)/i, '')
+        .trim();
+      
+      // Add {{TRIGGER_WORD}} if it's not already there
+      if (!prompt.startsWith('a {{TRIGGER_WORD}}')) {
+        if (prompt.startsWith('a ') || prompt.startsWith('an ')) {
+          prompt = 'a {{TRIGGER_WORD}} ' + prompt.substring(2);
+        } else {
+          prompt = 'a {{TRIGGER_WORD}} ' + prompt;
+        }
+      }
+      
+      responseData.prompt = prompt;
+    }
+
+    // Return the processed response
     return res.status(200).json({
       success: true,
-      data: response.data,
+      data: responseData,
       metrics: response.metrics
     });
 
