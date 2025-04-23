@@ -163,7 +163,9 @@ module.exports.handleCors = function (app) {
     'https://dev.photobop.co',
     'https://dev-admin.photobop.co',
     'https://www.photobop.co',
-    'https://photobop.co'
+    'https://photobop.co',
+    'https://tellowai.com',
+    'https://admin.tellowai.com'
   ];
   var corsOptions = {
     origin: function(origin, callback){
