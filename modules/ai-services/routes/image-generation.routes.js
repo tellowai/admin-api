@@ -9,7 +9,7 @@ module.exports = function(app) {
   app.route(
     versionConfig.routePrefix + '/ai-services/image-generation'
   ).post(
-    // AuthMiddleware.isAuthorizedJWT, // Uncomment this if authentication is required
+    AuthMiddleware.isAuthorizedJWT,
     imageGenerationController.generateImage
   );
 }; 

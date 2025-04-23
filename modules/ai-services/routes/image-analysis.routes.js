@@ -19,7 +19,7 @@ module.exports = function(app) {
   app.route(
     versionConfig.routePrefix + '/ai-services/image-analysis'
   ).post(
-    // AuthMiddleware.isAuthorizedJWT,
+    AuthMiddleware.isAuthorizedJWT,
     upload.single('image'), 
     imageAnalysisController.analyzeImage
   );

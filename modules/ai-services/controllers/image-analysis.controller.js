@@ -3,6 +3,7 @@
 const OpenAIProvider = require('../providers/openai/openai.provider');
 const config = require('../../../config/config');
 const { getActiveModelData } = require('./active.model.selection');
+const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 /**
  * Analyze an uploaded image using OpenAI's vision capabilities
@@ -12,8 +13,7 @@ exports.analyzeImage = async (req, res) => {
   try {
     // Check if image file is provided
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
         message: 'No image file provided'
       });
     }
@@ -32,8 +32,7 @@ exports.analyzeImage = async (req, res) => {
     const activeModel = await getActiveModelData('gpt-4o');
     
     if (!activeModel.capabilities.includes('vision')) {
-      return res.status(400).json({
-        success: false,
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
         message: 'The active model does not support vision capabilities'
       });
     }
@@ -89,8 +88,7 @@ exports.analyzeImage = async (req, res) => {
     });
 
     if (!response.success) {
-      return res.status(500).json({
-        success: false,
+      return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
         message: 'Failed to analyze image',
         error: response.error
       });
@@ -127,17 +125,15 @@ exports.analyzeImage = async (req, res) => {
       responseData.prompt = prompt;
     }
 
-    // Return the processed response
-    return res.status(200).json({
-      success: true,
+    // Return the processed response without success field
+    return res.status(HTTP_STATUS_CODES.OK).json({
       data: responseData,
       metrics: response.metrics
     });
 
   } catch (error) {
     console.error('Error in image analysis:', error);
-    return res.status(500).json({
-      success: false,
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
       message: 'Server error during image analysis',
       error: error.message
     });
