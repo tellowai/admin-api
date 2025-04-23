@@ -7,8 +7,8 @@ class OpenAIWrapper {
   }
 
   static async getZodResponseFormat() {
-    const helpers = await import('openai/helpers/zod');
-    return helpers.zodResponseFormat;
+    // Return a simple function that creates a JSON object format
+    return () => ({ type: "json_object" });
   }
 }
 

@@ -20,6 +20,7 @@
     "chalk": "4.1.2",
     "clickhouse": "^2.6.0",
     "compression": "*",
+    "compromise": "^14.14.4",
     "cookie-parser": "*",
     "cors": "*",
     "crypto": "^1.0.1",

@@ -2,7 +2,7 @@
 
 const BaseLLMProvider = require('../base.llm.provider');
 const OpenAIWrapper = require('./openai.wrapper.cjs');
-const { handleOpenAIErrors } = require('../../../core/controllers/openai.errorhandler.js');
+const { handleOpenAIErrors } = require('../../../core/controllers/openai.errorhandler');
 const { getActiveModelData } = require('../../controllers/active.model.selection.js');
 const nlp = require('compromise');
 
@@ -43,7 +43,7 @@ class OpenAIProvider extends BaseLLMProvider {
       const response = await this.client.beta.chat.completions.parse({
         model: activeModel.name,
         messages,
-        response_format: zodResponseFormat(responseFormat.schema, responseFormat.schemaName),
+        response_format: responseFormat ? zodResponseFormat() : undefined,
         max_tokens: activeModel.maxTokens
       });
 
@@ -70,7 +70,7 @@ class OpenAIProvider extends BaseLLMProvider {
     let activeModel;
     
     try {
-      activeModel = await getActiveModelData();
+      activeModel = await getActiveModelData('gpt-4o');
       
       if (activeModel.provider !== 'openai') {
         throw new Error('Active model is not an OpenAI model');
@@ -81,11 +81,12 @@ class OpenAIProvider extends BaseLLMProvider {
       }
 
       const content = this._buildMultiModalContent(messages, images);
+      const zodResponseFormat = await OpenAIWrapper.getZodResponseFormat();
 
       const response = await this.client.chat.completions.create({
         model: activeModel.name,
         messages: content,
-        response_format: responseFormat ? OpenAIWrapper.getZodResponseFormat()(responseFormat.schema, responseFormat.schemaName) : undefined,
+        response_format: responseFormat ? zodResponseFormat() : undefined,
         max_tokens: activeModel.maxTokens
       });
 
