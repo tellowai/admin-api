@@ -20,8 +20,13 @@ module.exports.initMiddleware = function (app) {
   // Showing stack errors
   app.set('showStackError', true);
 
-  app.use(express.urlencoded({ extended: true }));
-  app.use(express.json());
+  app.use(express.urlencoded({ 
+    extended: true,
+    limit: '50mb' // Increased from default 100kb to 50mb
+  }));
+  app.use(express.json({
+    limit: '50mb' // Increased from default 100kb to 50mb
+  }));
 
   // Global multer error handler
   app.use((err, req, res, next) => {

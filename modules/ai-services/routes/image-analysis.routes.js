@@ -10,7 +10,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 50 * 1024 * 1024, // 50MB limit, increased from 10MB
   }
 });
 
@@ -23,4 +23,12 @@ module.exports = function(app) {
     upload.single('image'), 
     imageAnalysisController.analyzeImage
   );
+
+  // // New route for analyzing an image from URL (e.g., R2 bucket URL)
+  // app.route(
+  //   versionConfig.routePrefix + '/ai-services/image-analysis/url'
+  // ).post(
+  //   AuthMiddleware.isAuthorizedJWT,
+  //   imageAnalysisController.analyzeImageFromUrl
+  // );
 }; 

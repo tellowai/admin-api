@@ -44,21 +44,28 @@ exports.analyzeImage = async (req, res) => {
       You analyze images and provide:
       1. A concise, engaging title for a template based on this image
       2. A detailed prompt that captures the essence, style, and key elements of the image
+      3. The gender category of the subjects in the image
       
       VERY IMPORTANT: The prompt MUST begin with "a {{TRIGGER_WORD}} " followed by a description.
       For example: "a {{TRIGGER_WORD}} walking on a beach at sunset" or "a {{TRIGGER_WORD}} in a vintage car driving through mountains"
       
       DO NOT use phrases like "Create a..." or "Generate a..." - just describe what's in the image starting with "a {{TRIGGER_WORD}}".
       
-      Return your analysis in JSON format with 'title' and 'prompt' fields.
+      For the gender field, you must categorize the image as one of these options:
+      - "male" (if it only contains one or more male subjects)
+      - "female" (if it only contains one or more female subjects)
+      - "couple" (if it contains both male and female subjects or appears to be a couple)
+      
+      Return your analysis in JSON format with 'title', 'prompt', and 'gender' fields.
       The title should be short (2-6 words), catchy, and descriptive.
-      The prompt should be detailed enough to recreate the style and content of the image.`
+      The prompt should be detailed enough to recreate the style and content of the image.
+      The gender should be one of the three options mentioned above.`
     };
 
     // Create user message with the image
     const userMessage = {
       role: 'user',
-      content: 'Analyze this image and provide a creative title and detailed prompt that captures its essence, style, and key elements. Remember, the prompt MUST start with "a {{TRIGGER_WORD}} " followed by the description.'
+      content: 'Analyze this image and provide a creative title, detailed prompt that captures its essence, and the gender category (male, female, or couple). Remember, the prompt MUST start with "a {{TRIGGER_WORD}} " followed by the description.'
     };
 
     // Define response format
@@ -73,9 +80,14 @@ exports.analyzeImage = async (req, res) => {
           prompt: {
             type: "string",
             description: "A detailed prompt starting with 'a {{TRIGGER_WORD}} ' followed by a description of the style, elements, mood, and composition of the image"
+          },
+          gender: {
+            type: "string",
+            enum: ["male", "female", "couple"],
+            description: "The gender category of the subjects in the image (male, female, or couple)"
           }
         },
-        required: ["title", "prompt"]
+        required: ["title", "prompt", "gender"]
       },
       schemaName: "ImageAnalysis"
     };
