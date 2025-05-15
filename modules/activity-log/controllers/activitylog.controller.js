@@ -39,6 +39,10 @@ exports.getAllLogs = async function (req, res) {
         .filter(log => log.entity_type === 'EXPLORE_SECTION_ITEMS')
         .map(log => log.entity_id);
       
+      const packEntityIds = allLogs
+        .filter(log => log.entity_type === 'PACKS')
+        .map(log => log.entity_id);
+      
       const allUserIds = [...new Set([...userIds, ...adminUserEntityIds])];
       
       let userDetailsArr = [];
@@ -46,6 +50,7 @@ exports.getAllLogs = async function (req, res) {
       let collectionDetailsArr = [];
       let exploreSectionDetailsArr = [];
       let exploreSectionItemDetailsArr = [];
+      let packDetailsArr = [];
 
       if (allUserIds.length > 0) {
         userDetailsArr = await ActivitylogDbo.getUserDetailsByIds(allUserIds);
@@ -66,11 +71,16 @@ exports.getAllLogs = async function (req, res) {
       if (exploreSectionItemEntityIds.length > 0) {
         exploreSectionItemDetailsArr = await ActivitylogDbo.getExploreSectionItemDetailsByIds(exploreSectionItemEntityIds);
       }
+
+      if (packEntityIds.length > 0) {
+        packDetailsArr = await ActivitylogDbo.getPackDetailsByIds(packEntityIds);
+      }
       console.log('userDetailsArr:', userDetailsArr);
       console.log('templateDetailsArr:', templateDetailsArr);
       console.log(collectionEntityIds, 'collectionDetailsArr:', collectionDetailsArr);
       console.log('exploreSectionDetailsArr:', exploreSectionDetailsArr);
       console.log('exploreSectionItemDetailsArr:', exploreSectionItemDetailsArr);
+      console.log('packDetailsArr:', packDetailsArr);
       allLogs.forEach(log => {
         const userDetails = userDetailsArr.find(user => user.user_id == log.admin_user_id);
         if (userDetails) {
@@ -109,6 +119,13 @@ exports.getAllLogs = async function (req, res) {
           const exploreSectionItem = exploreSectionItemDetailsArr.find(item => item.explore_section_item_id == log.entity_id);
           if (exploreSectionItem) {
             log.exploreSectionItem = exploreSectionItem;
+          }
+        }
+
+        if (log.entity_type === 'PACKS') {
+          const pack = packDetailsArr.find(pack => pack.pack_id == log.entity_id);
+          if (pack) {
+            log.pack = pack;
           }
         }
       });

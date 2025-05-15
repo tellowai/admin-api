@@ -90,3 +90,20 @@ exports.getExploreSectionItemDetailsByIds = async function(itemIds) {
     
     return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
+
+exports.getPackDetailsByIds = async function(packIds) {
+    const query = `
+        SELECT 
+            pack_id,
+            pack_name,
+            thumbnail_cf_r2_key,
+            thumbnail_cf_r2_url,
+            additional_data,
+            created_at
+        FROM packs 
+        WHERE pack_id IN (?)
+    `;
+    const values = [packIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
