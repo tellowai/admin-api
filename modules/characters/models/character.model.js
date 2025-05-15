@@ -43,7 +43,7 @@ exports.listAdminUserCharacters = async function(pagination) {
   );
 };
 
-exports.listAllUserCharacters = async function(userId) {
+exports.listAllAdminCharacters = async function(userId) {
   const query = `
     SELECT 
       user_character_id,
@@ -58,7 +58,7 @@ exports.listAllUserCharacters = async function(userId) {
       user_id,
       created_by_admin_id
     FROM user_characters
-    WHERE (user_id = ? OR (user_id IS NULL AND created_by_admin_id IS NOT NULL))
+    WHERE user_id IS NULL AND created_by_admin_id IS NOT NULL
     AND archived_at IS NULL
     ORDER BY created_at DESC
   `;

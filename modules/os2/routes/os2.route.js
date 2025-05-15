@@ -21,4 +21,12 @@ module.exports = function(app) {
     PresignedValidator.validatePresignedUrlGeneration,
     PresignedCtrl.generatePresignedPublicBucketUrls
   );
+
+  app.route(
+    versionConfig.routePrefix + '/os2/presigned-urls/ephemeral'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    PresignedValidator.validatePresignedUrlGeneration,
+    PresignedCtrl.generateEphemeralPresignedUrls
+  );
 }; 

@@ -124,7 +124,7 @@ exports.listUserCharacters = async function(req, res) {
 exports.listAllUserCharacters = async function(req, res) {
   try {
     const userId = req.user.userId;
-    const characters = await CharacterModel.listAllUserCharacters(userId);
+    const characters = await CharacterModel.listAllAdminCharacters(userId);
 
     // Get storage provider for presigned URLs
     if (characters.length) {

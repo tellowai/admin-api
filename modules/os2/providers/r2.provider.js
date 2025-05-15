@@ -29,6 +29,10 @@ class R2StorageProvider extends StorageProvider {
     this.bucket = config.os2.r2.bucket;
     this.bucketUrl = config.os2.r2.bucketUrl;
     this.publicBucket = config.os2.r2.public.bucket;
+    this.ephemeral = {
+      bucket: config.os2.r2.ephemeral.bucket,
+      bucketUrl: config.os2.r2.ephemeral.bucketUrl
+    }
   }
 
   async generatePresignedUploadUrl(key, options = {}) {
@@ -48,9 +52,40 @@ class R2StorageProvider extends StorageProvider {
     return url;
   }
 
+  async generateEphemeralPresignedUploadUrl(key, options = {}) {
+    const command = new PutObjectCommand({
+      Bucket: this.ephemeral.bucket,
+      Key: key,
+      ContentType: options.contentType,
+      Metadata: options.metadata,
+      ACL: 'private'
+    });
+
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn || config.os2.upload.defaultExpiresIn,
+      signatureVersion: 'v4'
+    });
+
+    return { url, bucket: this.ephemeral.bucket };
+  }
+
   async generatePresignedDownloadUrl(key, options = {}) {
     const command = new GetObjectCommand({
       Bucket: this.bucket,
+      Key: key
+    });
+
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn || config.os2.download.defaultDownloadExpiresIn,
+      signatureVersion: 'v4'
+    });
+
+    return url;
+  }
+
+  async generateEphemeralPresignedDownloadUrl(key, options = {}) {
+    const command = new GetObjectCommand({
+      Bucket: this.ephemeral.bucket,
       Key: key
     });
 
