@@ -81,7 +81,7 @@ exports.createPhotoTuningSession = async function(req, res) {
           tuning_session_id: tuningSessionId,
           user_character_id,
           user_id: userId,
-          credits: 50
+          credits: 0
         }
       }],
       'start_model_photo_tuning'
