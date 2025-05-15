@@ -107,3 +107,26 @@ exports.getPackDetailsByIds = async function(packIds) {
     
     return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
+
+exports.getCharacterDetailsByIds = async function(characterIds) {
+    const query = `
+        SELECT 
+            user_character_id,
+            character_name,
+            character_type,
+            character_gender,
+            character_description,
+            thumb_cf_r2_key,
+            thumb_cf_r2_url,
+            trigger_word,
+            user_id,
+            created_by_admin_id,
+            training_status,
+            created_at
+        FROM user_characters 
+        WHERE user_character_id IN (?)
+    `;
+    const values = [characterIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};

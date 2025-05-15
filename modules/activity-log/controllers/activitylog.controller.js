@@ -43,6 +43,10 @@ exports.getAllLogs = async function (req, res) {
         .filter(log => log.entity_type === 'PACKS')
         .map(log => log.entity_id);
       
+      const characterEntityIds = allLogs
+        .filter(log => log.entity_type === 'CHARACTERS')
+        .map(log => log.entity_id);
+      
       const allUserIds = [...new Set([...userIds, ...adminUserEntityIds])];
       
       let userDetailsArr = [];
@@ -51,6 +55,7 @@ exports.getAllLogs = async function (req, res) {
       let exploreSectionDetailsArr = [];
       let exploreSectionItemDetailsArr = [];
       let packDetailsArr = [];
+      let characterDetailsArr = [];
 
       if (allUserIds.length > 0) {
         userDetailsArr = await ActivitylogDbo.getUserDetailsByIds(allUserIds);
@@ -74,6 +79,10 @@ exports.getAllLogs = async function (req, res) {
 
       if (packEntityIds.length > 0) {
         packDetailsArr = await ActivitylogDbo.getPackDetailsByIds(packEntityIds);
+      }
+
+      if (characterEntityIds.length > 0) {
+        characterDetailsArr = await ActivitylogDbo.getCharacterDetailsByIds(characterEntityIds);
       }
       
       allLogs.forEach(log => {
@@ -121,6 +130,13 @@ exports.getAllLogs = async function (req, res) {
           const pack = packDetailsArr.find(pack => pack.pack_id == log.entity_id);
           if (pack) {
             log.pack = pack;
+          }
+        }
+
+        if (log.entity_type === 'CHARACTERS') {
+          const character = characterDetailsArr.find(character => character.user_character_id == log.entity_id);
+          if (character) {
+            log.character = character;
           }
         }
       });
