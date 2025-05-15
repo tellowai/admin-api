@@ -103,7 +103,8 @@ exports.createPhotoTuningSession = async function(req, res) {
           admin_user_id: userId,
           entity_type: 'PHOTO_TUNING_SESSIONS',
           action_name: 'CREATE_PHOTO_TUNING_SESSION', 
-          entity_id: user_character_id
+          entity_id: user_character_id,
+          additional_data: JSON.stringify({ user_character_id, tuning_session_id: tuningSessionId })
         }
       }],
       'create_admin_activity_log'

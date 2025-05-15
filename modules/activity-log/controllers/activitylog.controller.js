@@ -47,6 +47,12 @@ exports.getAllLogs = async function (req, res) {
         .filter(log => log.entity_type === 'CHARACTERS')
         .map(log => log.entity_id);
       
+      const photoTuningSessionEntityIds = allLogs
+        .filter(log => log.entity_type === 'PHOTO_TUNING_SESSIONS')
+        .map(log => log.entity_id);
+      
+      const allCharacterIds = [...new Set([...characterEntityIds, ...photoTuningSessionEntityIds])];
+      
       const allUserIds = [...new Set([...userIds, ...adminUserEntityIds])];
       
       let userDetailsArr = [];
@@ -81,8 +87,8 @@ exports.getAllLogs = async function (req, res) {
         packDetailsArr = await ActivitylogDbo.getPackDetailsByIds(packEntityIds);
       }
 
-      if (characterEntityIds.length > 0) {
-        characterDetailsArr = await ActivitylogDbo.getCharacterDetailsByIds(characterEntityIds);
+      if (allCharacterIds.length > 0) {
+        characterDetailsArr = await ActivitylogDbo.getCharacterDetailsByIds(allCharacterIds);
       }
       
       allLogs.forEach(log => {
@@ -137,6 +143,13 @@ exports.getAllLogs = async function (req, res) {
           const character = characterDetailsArr.find(character => character.user_character_id == log.entity_id);
           if (character) {
             log.character = character;
+          }
+        }
+
+        if (log.entity_type === 'PHOTO_TUNING_SESSIONS') {
+          const photoTuningSession = characterDetailsArr.find(character => character.user_character_id == log.entity_id);
+          if (photoTuningSession) {
+            log.photoTuningSession = photoTuningSession;
           }
         }
       });
