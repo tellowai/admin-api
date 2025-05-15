@@ -75,12 +75,7 @@ exports.getAllLogs = async function (req, res) {
       if (packEntityIds.length > 0) {
         packDetailsArr = await ActivitylogDbo.getPackDetailsByIds(packEntityIds);
       }
-      console.log('userDetailsArr:', userDetailsArr);
-      console.log('templateDetailsArr:', templateDetailsArr);
-      console.log(collectionEntityIds, 'collectionDetailsArr:', collectionDetailsArr);
-      console.log('exploreSectionDetailsArr:', exploreSectionDetailsArr);
-      console.log('exploreSectionItemDetailsArr:', exploreSectionItemDetailsArr);
-      console.log('packDetailsArr:', packDetailsArr);
+      
       allLogs.forEach(log => {
         const userDetails = userDetailsArr.find(user => user.user_id == log.admin_user_id);
         if (userDetails) {

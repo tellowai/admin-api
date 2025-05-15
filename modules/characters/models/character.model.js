@@ -25,6 +25,7 @@ exports.listAdminUserCharacters = async function(pagination) {
       character_description,
       thumb_cf_r2_key,
       thumb_cf_r2_url,
+      training_status,
       created_at,
       updated_at,
       user_id,
