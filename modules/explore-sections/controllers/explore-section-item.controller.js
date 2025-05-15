@@ -189,6 +189,7 @@ exports.addSectionItems = async function(req, res) {
     });
 
   } catch (error) {
+    console.error(error)
     logger.error('Error adding section items:', { error: error.message, stack: error.stack });
     ExploreSectionErrorHandler.handleExploreSectionErrors(error, res);
   }

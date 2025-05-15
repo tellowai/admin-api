@@ -19,6 +19,7 @@ exports.runQueryInMaster = function(query, data) {
                 connection.query(query, data, function(err, rows) {
                     connection.release();
                     if (err) {
+                        console.log(err,'err')
                         console.error(chalk.red(err));
                         var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
                         reject(finalErrObj);
