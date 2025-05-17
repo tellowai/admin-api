@@ -129,3 +129,23 @@ exports.validateUpscaleImage = function(req, res, next) {
   req.validatedBody = value;
   next();
 }; 
+
+exports.validateCoupleInpainting = function(req, res, next) {
+  const schema = Joi.object({
+    user_character_ids: Joi.array().items(Joi.string()).required(),
+    user_character_genders: Joi.array().items(Joi.string()).required(),
+    asset_key: Joi.string().required(),
+    asset_bucket: Joi.string().required()
+  });
+
+  const { error, value } = schema.validate(req.body);
+
+  if (error) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: error.details[0].message
+    });
+  }
+
+  req.validatedBody = value;
+  next();
+}; 
