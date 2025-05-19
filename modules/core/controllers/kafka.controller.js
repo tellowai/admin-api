@@ -35,7 +35,7 @@ exports.sendMessage = async function(topic, messages, eventName) {
         version: 'v1',
         data: msg.value,
         metadata: {
-          producer: 'api-server',
+          producer: 'admin-api-server',
           environment: process.env.NODE_ENV
         }
       })

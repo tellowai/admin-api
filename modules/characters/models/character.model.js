@@ -97,16 +97,16 @@ exports.verifyCharacterOwnership = async function(characterId, userId) {
   return !!character;
 }; 
 
-exports.verifyCharacterOwnershipOfMultipleCharacters = async function(characterIds, userId) {
+exports.verifyCharacterOwnershipOfMultipleCharacters = async function(characterIds) {
   const query = `
     SELECT user_character_id 
     FROM user_characters 
     WHERE user_character_id IN (?) 
-    AND user_id = ? 
+    AND user_id IS NULL AND created_by_admin_id IS NOT NULL
     AND archived_at IS NULL
   `;
   
-  const characters = await mysqlQueryRunner.runQueryInSlave(query, [characterIds, userId]);
+  const characters = await mysqlQueryRunner.runQueryInSlave(query, [characterIds]);
   return characters.length === characterIds.length;
 }; 
 
