@@ -52,7 +52,12 @@ exports.getImageGenerationStatus = async function(req, res) {
           
           for (let mediaItem of parsedData.output.media) {
             if (mediaItem.cf_r2_key) {
-              const imageUrl = await storage.generatePresignedDownloadUrl(mediaItem.cf_r2_key, { expiresIn: 900 });
+              let imageUrl;
+              if (mediaItem.cf_r2_bucket && mediaItem.cf_r2_bucket.includes('ephemeral')) {
+                imageUrl = await storage.generateEphemeralPresignedDownloadUrl(mediaItem.cf_r2_key, { expiresIn: 900 });
+              } else {
+                imageUrl = await storage.generatePresignedDownloadUrl(mediaItem.cf_r2_key, { expiresIn: 900 });
+              }
               media.push({
                 r2_url: imageUrl
               });
