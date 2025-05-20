@@ -304,7 +304,14 @@ exports.recreateFromAsset = async function(req, res) {
 
 exports.handleCoupleInpainting = async function(req, res) {
   const generationId = uuidv4();
-  const { asset_key, asset_bucket, user_character_ids, user_character_genders } = req.validatedBody;
+  const { 
+    asset_key, 
+    asset_bucket, 
+    user_character_ids, 
+    user_character_genders,
+    male_prompt, 
+    female_prompt 
+  } = req.validatedBody;
   const userId = req.user.userId;
 
   try {
@@ -326,7 +333,9 @@ exports.handleCoupleInpainting = async function(req, res) {
         asset_bucket,
         user_id: userId,
         user_character_ids,
-        user_character_genders
+        user_character_genders,
+        male_prompt,
+        female_prompt
       })
     }]);
 
@@ -340,7 +349,9 @@ exports.handleCoupleInpainting = async function(req, res) {
           user_character_genders,
           user_id: userId,
           asset_key,
-          asset_bucket
+          asset_bucket,
+          male_prompt,
+          female_prompt
         }
       }],
       'start_couple_inpainting'
