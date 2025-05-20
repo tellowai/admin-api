@@ -304,6 +304,7 @@ exports.recreateFromAsset = async function(req, res) {
 
 exports.handleCoupleInpainting = async function(req, res) {
   const generationId = uuidv4();
+  const adminId = req.user.userId;
   const { 
     asset_key, 
     asset_bucket, 
@@ -355,6 +356,24 @@ exports.handleCoupleInpainting = async function(req, res) {
         }
       }],
       'start_couple_inpainting'
+    );
+
+    // Log admin activity
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'STUDIO_TOOLS',
+          action_name: 'COUPLE_INPAINTING', 
+          entity_id: generationId,
+          additional_data: JSON.stringify({
+            user_character_ids,
+            user_character_genders
+          })
+        }
+      }],
+      'create_admin_activity_log'
     );
 
     return res.status(HTTP_STATUS_CODES.OK).json({
