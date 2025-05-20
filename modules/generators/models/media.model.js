@@ -17,6 +17,7 @@ exports.listAdminMedia = async function(params) {
       user_id,
       created_by_admin_id,
       cf_r2_key,
+      cf_r2_bucket,
       cf_r2_url,
       tag,
       media_type,

@@ -28,7 +28,11 @@ exports.listAdminMedia = async function(req, res) {
       // Generate presigned URLs for media files
       await Promise.all(media.map(async (item) => {
         if (item.cf_r2_key) {
-          item.presigned_url = await storage.generatePresignedDownloadUrl(item.cf_r2_key);
+          if (item.cf_r2_bucket && item.cf_r2_bucket.includes('ephemeral')) {
+            item.presigned_url = await storage.generateEphemeralPresignedDownloadUrl(item.cf_r2_key);
+          } else {
+            item.presigned_url = await storage.generatePresignedDownloadUrl(item.cf_r2_key);
+          }
         }
       }));
     }
