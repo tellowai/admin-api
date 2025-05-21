@@ -134,8 +134,8 @@ exports.validateCoupleInpainting = function(req, res, next) {
   const schema = Joi.object({
     user_character_ids: Joi.array().items(Joi.string()).required(),
     user_character_genders: Joi.array().items(Joi.string()).required(),
-    male_prompt: Joi.string().required(),
-    female_prompt: Joi.string().required(),
+    male_prompt: Joi.string().optional(),
+    female_prompt: Joi.string().optional(),
     asset_key: Joi.string().required(),
     asset_bucket: Joi.string().required()
   });

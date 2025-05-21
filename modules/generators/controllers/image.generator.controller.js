@@ -324,6 +324,16 @@ exports.handleCoupleInpainting = async function(req, res) {
       });
     }
 
+    // Get character data for prompt generation if prompts not provided
+    let finalMalePrompt = male_prompt;
+    let finalFemalePrompt = female_prompt;
+    
+    if (!finalMalePrompt || !finalFemalePrompt) {
+      // Set fallback prompts if still not available
+      finalMalePrompt = 'restore';
+      finalFemalePrompt = 'restore';
+    }
+
     // Insert initial record in database
     await ImageGeneratorModel.insertResourceGenerationEvent([{
       resource_generation_event_id: uuidv4(),
@@ -335,8 +345,8 @@ exports.handleCoupleInpainting = async function(req, res) {
         user_id: userId,
         user_character_ids,
         user_character_genders,
-        male_prompt,
-        female_prompt
+        male_prompt: finalMalePrompt,
+        female_prompt: finalFemalePrompt
       })
     }]);
 
@@ -351,8 +361,8 @@ exports.handleCoupleInpainting = async function(req, res) {
           user_id: userId,
           asset_key,
           asset_bucket,
-          male_prompt,
-          female_prompt
+          male_prompt: finalMalePrompt,
+          female_prompt: finalFemalePrompt
         }
       }],
       'start_couple_inpainting'
