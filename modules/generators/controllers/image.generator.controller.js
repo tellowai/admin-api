@@ -439,7 +439,8 @@ exports.handleTextToImage = async function(req, res) {
     seed,
     guidance_scale,
     num_images,
-    output_format
+    output_format,
+    enable_safety_checker
   } = req.validatedBody;
 
   try {
@@ -453,6 +454,11 @@ exports.handleTextToImage = async function(req, res) {
       guidance_scale,
       output_format
     };
+
+    // Add enable_safety_checker only if it's provided
+    if (enable_safety_checker !== undefined) {
+      generationInput.enable_safety_checker = enable_safety_checker;
+    }
 
     // If character_id is provided, get lora weights
     if (character_id) {

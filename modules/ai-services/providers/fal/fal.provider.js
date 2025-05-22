@@ -123,7 +123,7 @@ class FalAIProvider extends BaseAIProvider {
         loras: loras,
         prompt: input.prompt,
         num_images: input.num_images || this.config.generation.defaultNumOfImage,
-        enable_safety_checker: true
+        enable_safety_checker: input.enable_safety_checker !== undefined ? input.enable_safety_checker : true
       };
 
       if(input.seed) {
@@ -162,7 +162,7 @@ class FalAIProvider extends BaseAIProvider {
       let falInput = {
         prompt: input.prompt,
         num_images: input.num_images || this.config.generation.defaultNumOfImage,
-        enable_safety_checker: true
+        enable_safety_checker: input.enable_safety_checker !== undefined ? input.enable_safety_checker : true
       };
 
       // Add optional parameters if provided

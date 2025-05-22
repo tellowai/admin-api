@@ -163,7 +163,8 @@ exports.validateTextToImage = function(req, res, next) {
     seed: Joi.string().optional(),
     guidance_scale: Joi.string().optional(),
     num_images: Joi.string().optional(),
-    output_format: Joi.string().optional()
+    output_format: Joi.string().optional(),
+    enable_safety_checker: Joi.boolean().optional()
   });
 
   const { error, value } = schema.validate(req.body);
