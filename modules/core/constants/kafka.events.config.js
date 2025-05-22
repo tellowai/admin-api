@@ -18,6 +18,7 @@ const TOPICS = {
   GENERATION_COMMAND_START_COUPLE_INPAINTING: `${env}.generation.command.start_couple_inpainting`,
   GENERATION_COMMAND_GENERATE_TEXT_TO_IMAGE: `${env}.generation.command.generate_image_from_text`,
   GENERATION_COMMAND_IMAGE_GENERATION_POST_PROCESS: `${env}.generation.command.start_image_generation_post_process`,
+  GENERATION_COMMAND_START_MULTI_CHARACTER_INPAINTING: `${env}.generation.command.start_multi_character_inpainting`,
 
   // event type
   AUTH_EVENT_SIGNED_UP: `${env}.auth.event.signed_up`,

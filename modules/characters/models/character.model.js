@@ -107,7 +107,7 @@ exports.verifyCharacterOwnershipOfMultipleCharacters = async function(characterI
   `;
   
   const characters = await mysqlQueryRunner.runQueryInSlave(query, [characterIds]);
-  return characters.length === characterIds.length;
+  return characters.length;
 }; 
 
 exports.getCharacterData = async function(userCharacterId) {

@@ -27,6 +27,15 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/image-generations/multi-character-inpainting/queue'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    GeneratorRateLimiterMiddleware.isGenerationRateLimited,
+    GeneratorValidator.validateMulticharacterInpainting,
+    ImageGenerator.handleMultiCharacterInpainting
+  );
+
+  app.route(
     versionConfig.routePrefix + '/image-generations/text-to-image/queue'
   ).post(
     AuthMiddleware.isAuthorizedJWT,

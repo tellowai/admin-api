@@ -433,6 +433,91 @@ exports.handleCoupleInpainting = async function(req, res) {
   }
 };
 
+exports.handleMultiCharacterInpainting = async function(req, res) {
+  const generationId = uuidv4();
+  const adminId = req.user.userId;
+  const { 
+    asset_key, 
+    asset_bucket, 
+    user_character_ids, 
+    user_character_genders,
+    user_character_prompts
+  } = req.validatedBody;
+  const userId = req.user.userId;
+
+  try {
+    // Verify character ownership
+    const hasAccess = await CharacterModel.verifyCharacterOwnershipOfMultipleCharacters(user_character_ids);
+    if (!hasAccess) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('character:CHARACTER_NOT_FOUND_OR_UNAUTHORIZED')
+      });
+    }
+
+    // Insert initial record in database
+    await ImageGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'SUBMITTED',
+      additional_data: JSON.stringify({
+        asset_key,
+        asset_bucket,
+        user_id: userId,
+        user_character_ids,
+        user_character_genders,
+        user_character_prompts
+      })
+    }]);
+
+    // Send to Kafka for processing
+    await kafkaCtrl.sendMessage(
+      TOPICS.GENERATION_COMMAND_START_MULTI_CHARACTER_INPAINTING,
+      [{
+        value: {
+          generation_id: generationId,
+          user_character_ids,
+          user_character_genders,
+          user_character_prompts,
+          user_id: userId,
+          asset_key,
+          asset_bucket
+        }
+      }],
+      'start_multi_character_inpainting'
+    );
+
+    // Log admin activity
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'STUDIO_TOOLS',
+          action_name: 'MULTI_CHARACTER_INPAINTING', 
+          entity_id: generationId,
+          additional_data: JSON.stringify({
+            user_character_ids,
+            user_character_genders,
+            user_character_prompts
+          })
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        generation_id: generationId,
+        status: 'SUBMITTED'
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error submitting couple inpainting request:', { error: error.message, stack: error.stack });
+    return GeneratorErrorHandler.handleGeneratorErrors(error, res);
+  }
+};
+
 exports.handleTextToImage = async function(req, res) {
   const generationId = uuidv4();
   const userId = req.user.userId;
