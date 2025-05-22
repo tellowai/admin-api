@@ -546,6 +546,29 @@ exports.handleTextToImage = async function(req, res) {
       'image_generation_request_submitted'
     );
 
+    // Log admin activity
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: userId,
+          entity_type: 'STUDIO_TOOLS',
+          action_name: 'TEXT_TO_IMAGE', 
+          entity_id: generationId,
+          additional_data: JSON.stringify({
+            character_id,
+            enable_safety_checker,
+            width,
+            height,
+            num_inference_steps,
+            guidance_scale,
+            num_images
+          })
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
     return res.status(HTTP_STATUS_CODES.ACCEPTED).json({
       data: {
         generation_id: generationId,
