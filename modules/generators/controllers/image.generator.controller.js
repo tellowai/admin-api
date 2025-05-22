@@ -19,6 +19,10 @@ const EncryptionCtrl = require('../../core/controllers/encryption.controller');
 const config = require('../../../config/config');
 const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
 
+const sanitizePrompt = (prompt) => {
+  if (!prompt) return prompt;
+  return prompt.replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+};
 
 exports.getImageGenerationStatus = async function(req, res) {
   const { generationId } = req.params;
@@ -45,6 +49,11 @@ exports.getImageGenerationStatus = async function(req, res) {
     if (['COMPLETED', 'POST_PROCESSING'].includes(generationEvent.event_type)) {
       try {
         const parsedData = JSON.parse(generationEvent.additional_data);
+        
+        // Sanitize prompt in fal_status if it exists
+        if (parsedData.fal_status?.prompt) {
+          parsedData.fal_status.prompt = sanitizePrompt(parsedData.fal_status.prompt);
+        }
 
         if (parsedData.output?.media?.length > 0) {
           const storage = StorageFactory.getProvider();
@@ -279,6 +288,24 @@ exports.recreateFromAsset = async function(req, res) {
       'create_template_from_recreation'
     );
 
+    // Sanitize queue_submission_result prompt if it exists
+    if (queueSubmissionResult?.fal_status?.prompt) {
+      queueSubmissionResult.fal_status.prompt = sanitizePrompt(queueSubmissionResult.fal_status.prompt);
+    }
+
+    // Insert initial record in database
+    await ImageGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'SUBMITTED',
+      additional_data: JSON.stringify({
+        user_id: userId,
+        character_id: null,
+        generationInput,
+        queue_submission_result: queueSubmissionResult
+      })
+    }]);
+
     return res.status(HTTP_STATUS_CODES.ACCEPTED).json({
       generation_id: generationId,
       message: req.t('generator:IMAGE_RECREATION_STARTED')
@@ -395,6 +422,145 @@ exports.handleCoupleInpainting = async function(req, res) {
 
   } catch (error) {
     logger.error('Error submitting couple inpainting request:', { error: error.message, stack: error.stack });
+    return GeneratorErrorHandler.handleGeneratorErrors(error, res);
+  }
+};
+
+exports.handleTextToImage = async function(req, res) {
+  const generationId = uuidv4();
+  const userId = req.user.userId;
+  const { 
+    prompt,
+    character_id,
+    imageSize,
+    width,
+    height,
+    num_inference_steps,
+    seed,
+    guidance_scale,
+    num_images,
+    output_format
+  } = req.validatedBody;
+
+  try {
+    let generationInput = {
+      prompt: sanitizePrompt(prompt),
+      num_images: parseInt(num_images || '1'),
+      width,
+      height,
+      num_inference_steps,
+      seed,
+      guidance_scale,
+      output_format
+    };
+
+    // If character_id is provided, get lora weights
+    if (character_id) {
+      // Verify character ownership
+      const hasAccess = await CharacterModel.verifyCharacterOwnershipOfMultipleCharacters([character_id], userId);
+      if (!hasAccess) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+          message: req.t('character:CHARACTER_NOT_FOUND_OR_UNAUTHORIZED')
+        });
+      }
+
+      // Get character data and lora weights
+      const characterData = await CharacterModel.getCharacterDataOfMultipleCharacters([character_id]);
+      if (!characterData || !characterData.length) {
+        throw new Error('Character data not found');
+      }
+
+      const triggerWord = characterData[0].trigger_word;
+      if (triggerWord) {
+        // Create trigger word with gender if needed
+        const selectedCharacterGender = characterData[0].character_gender;
+        let finalTriggerWordReplacement = triggerWord;
+        if (selectedCharacterGender && selectedCharacterGender !== 'couple') {
+          finalTriggerWordReplacement = `${triggerWord}, ${selectedCharacterGender}`;
+        }
+        
+        // Add trigger word to prompt
+        generationInput.prompt = `${generationInput.prompt}, ${finalTriggerWordReplacement}`;
+      }
+
+      // Get lora weights
+      const loraWeights = await CharacterMediaModel.getMediaOfMultiplesCharactersByTag([character_id], 'lora_weights');
+      if (loraWeights && loraWeights.length > 0) {
+        const loraWeightsFileR2Keys = loraWeights.map(weight => weight.cf_r2_key);
+        const storage = StorageFactory.getProvider();
+        const r2Options = { expiresIn: 900 };
+        const loras = await Promise.all(
+          loraWeightsFileR2Keys.map(key => storage.generatePresignedDownloadUrl(key, r2Options))
+        );
+        generationInput.loras = loras;
+      }
+    }
+
+    // Prepare webhook URL
+    const encryptedGenerationId = EncryptionCtrl.encrypt(generationId);
+    const encryptedGenerationIdHex = EncryptionCtrl.stringToHex(encryptedGenerationId);
+    const webhookUrl = config.apiDomainUrl + `/image-generations/${encryptedGenerationIdHex}/fal/webhook`;
+
+    // Get AI service provider for image and submit request
+    const AIServicesProvider = await AIServicesProviderFactory.createProvider('image');
+    const queueSubmissionResult = await AIServicesProvider.submitImageGenerationRequest(
+      generationInput,
+      { webhookUrl }
+    );
+
+    // Sanitize queue_submission_result prompt if it exists
+    if (queueSubmissionResult?.fal_status?.prompt) {
+      queueSubmissionResult.fal_status.prompt = sanitizePrompt(queueSubmissionResult.fal_status.prompt);
+    }
+
+    // Insert initial record in database
+    await ImageGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'SUBMITTED',
+      additional_data: JSON.stringify({
+        user_id: userId,
+        character_id,
+        generationInput,
+        queue_submission_result: queueSubmissionResult
+      })
+    }]);
+
+    // Publish to Kafka for post-processing
+    await kafkaCtrl.sendMessage(
+      TOPICS.GENERATION_EVENT_REQUEST_SUBMITTED_FOR_IMAGE_GENERATION,
+      [{
+        value: {
+          generation_id: generationId,
+          user_id: userId,
+          character_id,
+          queue_submission_result: queueSubmissionResult
+        }
+      }],
+      'image_generation_request_submitted'
+    );
+
+    return res.status(HTTP_STATUS_CODES.ACCEPTED).json({
+      data: {
+        generation_id: generationId,
+        message: req.t('generator:IMAGE_GENERATION_STARTED')
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error submitting text-to-image request:', { error: error.message, stack: error.stack });
+
+    // Insert failed status
+    await ImageGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'FAILED',
+      additional_data: JSON.stringify({
+        error: error.message,
+        character_id
+      })
+    }]);
+
     return GeneratorErrorHandler.handleGeneratorErrors(error, res);
   }
 };

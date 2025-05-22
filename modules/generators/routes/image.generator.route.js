@@ -25,4 +25,20 @@ module.exports = function(app) {
     GeneratorValidator.validateCoupleInpainting,
     ImageGenerator.handleCoupleInpainting
   );
+
+  app.route(
+    versionConfig.routePrefix + '/image-generations/text-to-image/queue'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    GeneratorRateLimiterMiddleware.isGenerationRateLimited,
+    GeneratorValidator.validateTextToImage,
+    ImageGenerator.handleTextToImage
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/image-generations/:generationId/fal/webhook'
+  ).post(
+    WebhookValidator.validateFalImageGenWebhook,
+    WebhookController.handleImageGenerationFalWebhook
+  );
 }; 

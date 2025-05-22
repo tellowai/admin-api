@@ -151,3 +151,29 @@ exports.validateCoupleInpainting = function(req, res, next) {
   req.validatedBody = value;
   next();
 }; 
+
+exports.validateTextToImage = function(req, res, next) {
+  const schema = Joi.object({
+    prompt: Joi.string().required(),
+    character_id: Joi.string().optional(),
+    imageSize: Joi.string().optional(),
+    width: Joi.number().optional(),
+    height: Joi.number().optional(),
+    num_inference_steps: Joi.string().optional(),
+    seed: Joi.string().optional(),
+    guidance_scale: Joi.string().optional(),
+    num_images: Joi.string().optional(),
+    output_format: Joi.string().optional()
+  });
+
+  const { error, value } = schema.validate(req.body);
+
+  if (error) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: error.details[0].message
+    });
+  }
+
+  req.validatedBody = value;
+  next();
+}; 

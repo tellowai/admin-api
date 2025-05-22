@@ -154,6 +154,69 @@ class FalAIProvider extends BaseAIProvider {
       throw new Error(`Error generating image with Fal: ${error.message}`);
     }
   }
+
+  async submitImageGenerationRequest(input, options = {}) {
+    try {
+      const modelId = this.config.generation.modelId;
+      
+      let falInput = {
+        prompt: input.prompt,
+        num_images: input.num_images || this.config.generation.defaultNumOfImage,
+        enable_safety_checker: true
+      };
+
+      // Add optional parameters if provided
+      if (input.seed) {
+        falInput.seed = parseInt(input.seed);
+      }
+      if (input.num_inference_steps) {
+        falInput.num_inference_steps = parseInt(input.num_inference_steps);
+      }
+      if (input.guidance_scale) {
+        falInput.guidance_scale = parseFloat(input.guidance_scale);
+      }
+      if (input.width) {
+        falInput.width = parseInt(input.width);
+      }
+      if (input.height) {
+        falInput.height = parseInt(input.height);
+      }
+      if (input.output_format) {
+        falInput.output_format = input.output_format;
+      }
+
+      // Add loras if provided
+      if (input.loras && Array.isArray(input.loras)) {
+        falInput.loras = input.loras.map(url => ({
+          path: url
+        }));
+      }
+
+      const result = await fal.queue.submit(modelId, {
+        input: falInput,
+        webhookUrl: options.webhookUrl,
+        ...options
+      });
+console.log(result,'--result')
+      log.info('Submitted image generation request to Fal queue', {
+        requestId: result.request_id,
+        modelId
+      });
+
+      return {
+        request_id: result.request_id
+      };
+    } catch (error) {
+      const {status, body} = error;
+
+      log.error('Error submitting image generation request to Fal queue', {
+        error: error.message,
+        stack: error.stack
+      });
+      throw new Error(`Error submitting image generation request to Fal queue: ${error.message}, Status: ${status}, Body: ${JSON.stringify(body)}`);
+    }
+  }
+
 }
 
 module.exports = FalAIProvider;
