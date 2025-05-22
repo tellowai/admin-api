@@ -439,13 +439,14 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
   const { 
     asset_key, 
     asset_bucket, 
-    user_character_ids, 
-    user_character_genders,
-    user_character_prompts
+    user_characters
   } = req.validatedBody;
   const userId = req.user.userId;
 
   try {
+    // Extract character IDs for ownership verification
+    const user_character_ids = user_characters.map(char => char.id);
+    
     // Verify character ownership
     const hasAccess = await CharacterModel.verifyCharacterOwnershipOfMultipleCharacters(user_character_ids);
     if (!hasAccess) {
@@ -453,6 +454,11 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
         message: req.t('character:CHARACTER_NOT_FOUND_OR_UNAUTHORIZED')
       });
     }
+
+    // Extract other data from user_characters
+    const user_character_genders = user_characters.map(char => char.gender);
+    const user_character_prompts = user_characters.map(char => char.prompt);
+    const user_character_mask_prompts = user_characters.map(char => char.mask_prompt || null);
 
     // Insert initial record in database
     await ImageGeneratorModel.insertResourceGenerationEvent([{
@@ -465,7 +471,9 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
         user_id: userId,
         user_character_ids,
         user_character_genders,
-        user_character_prompts
+        user_character_prompts,
+        user_character_mask_prompts,
+        user_characters // Store the complete user_characters array for reference
       })
     }]);
 
@@ -478,6 +486,8 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
           user_character_ids,
           user_character_genders,
           user_character_prompts,
+          user_character_mask_prompts,
+          user_characters, // Include the complete user_characters array
           user_id: userId,
           asset_key,
           asset_bucket
@@ -498,7 +508,9 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
           additional_data: JSON.stringify({
             user_character_ids,
             user_character_genders,
-            user_character_prompts
+            user_character_prompts,
+            user_character_mask_prompts,
+            user_characters // Include the complete user_characters array
           })
         }
       }],
@@ -513,7 +525,7 @@ exports.handleMultiCharacterInpainting = async function(req, res) {
     });
 
   } catch (error) {
-    logger.error('Error submitting couple inpainting request:', { error: error.message, stack: error.stack });
+    logger.error('Error submitting multi-character inpainting request:', { error: error.message, stack: error.stack });
     return GeneratorErrorHandler.handleGeneratorErrors(error, res);
   }
 };

@@ -154,12 +154,17 @@ exports.validateCoupleInpainting = function(req, res, next) {
 
 exports.validateMulticharacterInpainting = function(req, res, next) {
   const schema = Joi.object({
-    user_character_ids: Joi.array().items(Joi.string()).required(),
-    user_character_genders: Joi.array().items(Joi.string().valid('male', 'female', 'other')).required(),
-    user_character_prompts: Joi.array().items(Joi.string()).required(),
+    user_characters: Joi.array().items(
+      Joi.object({
+        id: Joi.string().required(),
+        gender: Joi.string().valid('male', 'female', 'other').required(),
+        prompt: Joi.string().required(),
+        mask_prompt: Joi.string().optional()
+      })
+    ).required(),
     asset_key: Joi.string().required(),
     asset_bucket: Joi.string().required()
-  });
+  });  
 
   const { error, value } = schema.validate(req.body);
 
