@@ -55,6 +55,15 @@ exports.getImageGenerationStatus = async function(req, res) {
           parsedData.fal_status.prompt = sanitizePrompt(parsedData.fal_status.prompt);
         }
 
+        // Initialize the response object
+        let responseData = {};
+
+        // Handle masks if they exist
+        if (parsedData.masks) {
+          responseData.masks = parsedData.masks;
+        }
+
+        // Handle media output
         if (parsedData.output?.media?.length > 0) {
           const storage = StorageFactory.getProvider();
           const media = [];
@@ -73,14 +82,12 @@ exports.getImageGenerationStatus = async function(req, res) {
             }
           }
           
-          generationEvent.additional_data = {
-            media
-          };
+          responseData.media = media;
         } else {
-          generationEvent.additional_data = {
-            media: []
-          };
+          responseData.media = [];
         }
+
+        generationEvent.additional_data = responseData;
 
       } catch (err) {
         logger.error('Error parsing or processing additional_data:', {
