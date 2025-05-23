@@ -67,6 +67,22 @@ exports.getImageGenerationStatus = async function(req, res) {
           responseData.error = parsedData.event_data.error;
         }
 
+        if (parsedData.original_image) {
+          const storage = StorageFactory.getProvider();
+          let imageUrl;
+          
+          if (parsedData.original_image.bucket?.includes('ephemeral')) {
+            imageUrl = await storage.generateEphemeralPresignedDownloadUrl(parsedData.original_image.key, { expiresIn: 900 });
+          } else {
+            imageUrl = await storage.generatePresignedDownloadUrl(parsedData.original_image.key, { expiresIn: 900 });
+          }
+          
+          responseData.original_image = {
+            ...parsedData.original_image,
+            r2_url: imageUrl
+          };
+        }
+
         // Handle media output
         if (parsedData.output?.media?.length > 0) {
           const storage = StorageFactory.getProvider();
