@@ -159,7 +159,13 @@ exports.validateMulticharacterInpainting = function(req, res, next) {
         id: Joi.string().required(),
         gender: Joi.string().valid('male', 'female', 'other').required(),
         prompt: Joi.string().required(),
-        mask_prompt: Joi.string().optional()
+        mask_prompt: Joi.string().allow(null, '').optional()
+          .custom((value, helpers) => {
+            if (!value) {
+              return helpers.omit();
+            }
+            return value;
+          })
       })
     ).required(),
     asset_key: Joi.string().required(),
