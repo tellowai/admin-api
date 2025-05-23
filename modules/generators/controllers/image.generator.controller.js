@@ -63,6 +63,10 @@ exports.getImageGenerationStatus = async function(req, res) {
           responseData.masks = parsedData.masks;
         }
 
+        if (parsedData?.event_data?.error) {
+          responseData.error = parsedData.event_data.error;
+        }
+
         // Handle media output
         if (parsedData.output?.media?.length > 0) {
           const storage = StorageFactory.getProvider();
