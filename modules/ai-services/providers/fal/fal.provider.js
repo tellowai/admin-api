@@ -157,7 +157,8 @@ class FalAIProvider extends BaseAIProvider {
 
   async submitImageGenerationRequest(input, options = {}) {
     try {
-      const modelId = this.config.generation.modelId;
+      // Use the model ID from options if provided, otherwise use the default from config
+      const modelId = options.modelId || this.config.generation.modelId;
       
       let falInput = {
         prompt: input.prompt,
@@ -192,6 +193,15 @@ class FalAIProvider extends BaseAIProvider {
         }));
       }
 
+      // Add support for image_url input (for edit operations)
+      if (input.image_url) {
+        if (Array.isArray(input.image_url)) {
+          falInput.image_url = input.image_url[0]; // Take the first image if array
+        } else {
+          falInput.image_url = input.image_url;
+        }
+      }
+
       const result = await fal.queue.submit(modelId, {
         input: falInput,
         webhookUrl: options.webhookUrl,
@@ -214,6 +224,64 @@ console.log(result,'--result')
         stack: error.stack
       });
       throw new Error(`Error submitting image generation request to Fal queue: ${error.message}, Status: ${status}, Body: ${JSON.stringify(body)}`);
+    }
+  }
+
+  async checkImageGenerationStatus(requestId, options = {}) {
+    try {
+      // Use model ID from options if provided, otherwise use the default
+      const modelId = options.modelId || this.config.generation.modelId;
+
+      const status = await fal.queue.status(modelId, {
+        requestId,
+        logs: true
+      });
+      
+      log.info('Retrieved image generation status from Fal', {
+        requestId,
+        status
+      });
+
+      return {
+        status: status.status,
+        logs: status.logs || [],
+        progress: status.progress || 0
+      };
+    } catch (error) {
+      log.error('Error checking image generation status with Fal', {
+        error: error.message,
+        stack: error.stack,
+        requestId
+      });
+      throw new Error(`Error checking image generation status: ${error.message}`);
+    }
+  }
+
+  async getImageGenerationResult(requestId, options = {}) {
+    try {
+      // Use model ID from options if provided, otherwise use the default
+      const modelId = options.modelId || this.config.generation.modelId;
+
+      const result = await fal.queue.result(modelId, {
+        requestId
+      });
+
+      log.info('Retrieved image generation results from Fal', {
+        requestId,
+        result
+      });
+
+      return {
+        status: 'completed',
+        data: result.data
+      };
+    } catch (error) {
+      log.error('Error getting image generation results from Fal', {
+        error: error.message,
+        stack: error.stack,
+        requestId
+      });
+      throw new Error(`Error getting image generation results: ${error.message}`);
     }
   }
 
