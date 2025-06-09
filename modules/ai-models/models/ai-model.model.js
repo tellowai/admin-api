@@ -12,6 +12,7 @@ exports.listAllAiModels = async function(searchParams = {}) {
       platform_model_id,
       input_types,
       output_types,
+      supported_video_qualities,
       costs,
       generation_time_ms,
       status,
