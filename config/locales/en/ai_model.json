@@ -1,0 +1,10 @@
+{
+  "AI_MODEL_LIST_FAILED": "Failed to fetch AI models",
+  "AI_MODEL_NOT_FOUND": "AI model not found",
+  "AI_MODEL_TABLE_NOT_FOUND": "AI models table not found",
+  "AI_MODEL_FIELD_ERROR": "Invalid field in AI models query",
+  "NO_AI_MODELS_FOUND": "No AI models available",
+  "AI_MODEL_OPERATION_FAILED": "AI model operation failed",
+  "PLATFORM_NOT_FOUND": "AI model platform not found",
+  "INVALID_AI_MODEL_DATA": "Invalid AI model data provided"
+} 

@@ -1,0 +1,10 @@
+{
+  "AI_MODEL_LIST_FAILED": "AI మోడల్‌లను పొందడంలో విఫలమైంది",
+  "AI_MODEL_NOT_FOUND": "AI మోడల్ కనుగొనబడలేదు",
+  "AI_MODEL_TABLE_NOT_FOUND": "AI మోడల్‌ల టేబుల్ కనుగొనబడలేదు",
+  "AI_MODEL_FIELD_ERROR": "AI మోడల్‌ల క్వెరీలో చెల్లని ఫీల్డ్",
+  "NO_AI_MODELS_FOUND": "AI మోడల్‌లు అందుబాటులో లేవు",
+  "AI_MODEL_OPERATION_FAILED": "AI మోడల్ ఆపరేషన్ విఫలమైంది",
+  "PLATFORM_NOT_FOUND": "AI మోడల్ ప్లాట్‌ఫారమ్ కనుగొనబడలేదు",
+  "INVALID_AI_MODEL_DATA": "చెల్లని AI మోడల్ డేటా అందించబడింది"
+} 
