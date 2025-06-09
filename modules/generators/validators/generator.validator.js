@@ -227,6 +227,11 @@ exports.validateVideoFlowComposer = function(req, res, next) {
       then: Joi.required(),
       otherwise: Joi.forbidden()
     }),
+    video_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
+      is: 'ai',
+      then: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').default('360p'),
+      otherwise: Joi.forbidden()
+    }),
     characters: Joi.array().items(
       Joi.object({
         character: Joi.object({

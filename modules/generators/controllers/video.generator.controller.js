@@ -424,6 +424,14 @@ exports.handleVideoFlowComposer = async function(req, res) {
       }
     }
 
+    // Extract video quality information for AI clips
+    const aiClipsWithQuality = clipsData
+      .filter(clip => clip.video_type === 'ai')
+      .map(clip => ({
+        clip_index: clip.clip_index,
+        video_quality: clip.video_quality || '360p'
+      }));
+
     // Insert initial resource generation record in ClickHouse
     await VideoGeneratorModel.insertResourceGeneration([{
       resource_generation_id: generationId,
@@ -437,7 +445,8 @@ exports.handleVideoFlowComposer = async function(req, res) {
         clips_data: clipsData,
         total_clips: clipsData.length,
         ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
-        static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length
+        static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
+        video_qualities: aiClipsWithQuality
       })
     }]);
 
@@ -451,9 +460,21 @@ exports.handleVideoFlowComposer = async function(req, res) {
         user_id: userId,
         character_ids: characterIds,
         total_clips: clipsData.length,
+        video_qualities: aiClipsWithQuality,
         request_payload: req.validatedBody
       })
     }]);
+
+    // Process clips data and extract video quality information
+    const processedClipsData = clipsData.map(clip => {
+      if (clip.video_type === 'ai' && clip.video_quality) {
+        return {
+          ...clip,
+          video_quality: clip.video_quality || '360p' // Default to 360p if not specified
+        };
+      }
+      return clip;
+    });
 
     // Send to Kafka for processing
     await kafkaCtrl.sendMessage(
@@ -461,10 +482,13 @@ exports.handleVideoFlowComposer = async function(req, res) {
       [{
         value: {
           generation_id: generationId,
-          clips_data: clipsData,
+          clips_data: processedClipsData,
           user_id: userId,
           character_ids: characterIds,
-          total_clips: clipsData.length
+          total_clips: clipsData.length,
+          video_qualities: processedClipsData
+            .filter(clip => clip.video_type === 'ai')
+            .map(clip => clip.video_quality || '360p')
         }
       }],
       'start_video_flow_composer'
@@ -483,7 +507,8 @@ exports.handleVideoFlowComposer = async function(req, res) {
             total_clips: clipsData.length,
             character_ids: characterIds,
             ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
-            static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length
+            static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
+            video_qualities: aiClipsWithQuality
           })
         }
       }],
@@ -500,7 +525,8 @@ exports.handleVideoFlowComposer = async function(req, res) {
           total_clips: clipsData.length,
           ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
           static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
-          character_ids: characterIds
+          character_ids: characterIds,
+          video_qualities: aiClipsWithQuality
         }
       }],
       'video_flow_composer_request_submitted'
