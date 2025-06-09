@@ -440,14 +440,14 @@ exports.handleVideoFlowComposer = async function(req, res) {
       template_id: '', // Empty string for video flow composer (no template)
       type: 'generation',
       media_type: 'video',
-      additional_data: JSON.stringify({
-        generation_type: 'video_flow_composer',
-        clips_data: clipsData,
-        total_clips: clipsData.length,
-        ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
-        static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
-        video_qualities: aiClipsWithQuality
-      })
+              additional_data: JSON.stringify({
+          generation_type: 'video_flow_composer',
+          clips_data: clipsData,
+          total_clips: clipsData.length,
+          ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
+          static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
+          video_qualities: aiClipsWithQuality
+        })
     }]);
 
     // Insert SUBMITTED event in ClickHouse
@@ -455,14 +455,14 @@ exports.handleVideoFlowComposer = async function(req, res) {
       resource_generation_event_id: uuidv4(),
       resource_generation_id: generationId,
       event_type: 'SUBMITTED',
-      additional_data: JSON.stringify({
-        clips_data: clipsData,
-        user_id: userId,
-        character_ids: characterIds,
-        total_clips: clipsData.length,
-        video_qualities: aiClipsWithQuality,
-        request_payload: req.validatedBody
-      })
+              additional_data: JSON.stringify({
+          clips_data: clipsData,
+          user_id: userId,
+          character_ids: characterIds,
+          total_clips: clipsData.length,
+          video_qualities: aiClipsWithQuality,
+          request_payload: req.validatedBody
+        })
     }]);
 
     // Process clips data and extract video quality information

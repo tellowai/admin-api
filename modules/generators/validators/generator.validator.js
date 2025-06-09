@@ -257,7 +257,12 @@ exports.validateVideoFlowComposer = function(req, res, next) {
       then: Joi.required(),
       otherwise: Joi.forbidden()
     }),
-    template_image: Joi.string().when('reference_image_type', {
+    template_image_asset_key: Joi.string().when('reference_image_type', {
+      is: 'ai',
+      then: Joi.required(),
+      otherwise: Joi.forbidden()
+    }),
+    template_image_asset_bucket: Joi.string().when('reference_image_type', {
       is: 'ai',
       then: Joi.required(),
       otherwise: Joi.forbidden()
@@ -267,8 +272,18 @@ exports.validateVideoFlowComposer = function(req, res, next) {
       then: Joi.required(),
       otherwise: Joi.forbidden()
     }),
+    reference_image_file_asset_bucket: Joi.string().when('reference_image_type', {
+      is: 'upload',
+      then: Joi.required(),
+      otherwise: Joi.forbidden()
+    }),
     // Static video specific fields
     video_file_asset_key: Joi.string().when('video_type', {
+      is: 'static',
+      then: Joi.required(),
+      otherwise: Joi.forbidden()
+    }),
+    video_file_asset_bucket: Joi.string().when('video_type', {
       is: 'static',
       then: Joi.required(),
       otherwise: Joi.forbidden()
