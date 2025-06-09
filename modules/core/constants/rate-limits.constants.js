@@ -29,6 +29,11 @@ module.exports.limits = {
     "HOURLY": 200,
     "MINUTE": 30
   },
+  GENERATE_VIDEO_FLOW_COMPOSER: {
+    "DAILY": 50,
+    "HOURLY": 20,
+    "MINUTE": 5
+  },
   PHOTO_MODEL_TUNING: {
     "DAILY": 15,
     "HOURLY": 10,

@@ -3,6 +3,7 @@
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const logger = require('../../../config/lib/logger');
 const GeneratorErrorHandler = require('../middlewares/generator.error.handler');
+const GeneratorRateLimiterMiddleware = require('../middlewares/generator.ratelimiter.middleware');
 const CharacterModel = require('../../characters/models/character.model');
 const CharacterMediaModel = require('../../characters/models/media.character.model');
 const TemplateModel = require('../../templates/models/template.model');
@@ -13,7 +14,7 @@ const moment = require('moment');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { v4: uuidv4 } = require('uuid');
-const CreditsService = require('../../credits/services/credits.service');
+
 const MediaFiles = require('../models/media.files.model');
 const PaginationController = require('../../core/controllers/pagination.controller');
 const config = require("../../../config/config");
@@ -67,14 +68,7 @@ exports.generateVideos = async function(req, res) {
       });
     }
     
-    // Reserve credits for video generation
-    await CreditsService.reserveCredits(
-      userId, 
-      template.credits, 
-      'video_generation', 
-      generationId, 
-      `Video generation with template id ${template_id}`
-    );
+
 
     // Insert initial record in ClickHouse
     await VideoGeneratorModel.insertResourceGeneration([{
@@ -144,14 +138,7 @@ exports.generateVideos = async function(req, res) {
       })
     }]);
 
-    // Deduct reserved credits
-    await CreditsService.deductReservedCredits(
-      userId, 
-      template.credits, 
-      'video_generation', 
-      generationId, 
-      `Video generation with template id ${template_id}`
-    );
+
 
     // Publish to Kafka for post-processing
     await kafkaCtrl.sendMessage(
@@ -176,15 +163,7 @@ exports.generateVideos = async function(req, res) {
   } catch (error) {
     logger.error('Error starting video generation:', { error: error.message, stack: error.stack });
 
-    if (error?.code !== 'INSUFFICIENT_CREDITS') {
-      await CreditsService.releaseReservedCredits(
-        userId, 
-        template.credits, 
-        'video_generation', 
-        generationId, 
-        `Video generation with template id ${template_id}`
-      );
-    }
+
 
     // Insert failed status in ClickHouse
     await VideoGeneratorModel.insertResourceGenerationEvent([{
@@ -411,6 +390,137 @@ exports.getVideoGenerationStatusFromServiceProvider = async function(req, res) {
 
   } catch (error) {
     logger.error('Error checking generation status:', { error: error.message, stack: error.stack });
+    return GeneratorErrorHandler.handleGeneratorErrors(error, res);
+  }
+};
+
+exports.handleVideoFlowComposer = async function(req, res) {
+  const generationId = uuidv4();
+  const adminId = req.user.userId;
+  const clipsData = req.validatedBody.clips;
+  const userId = req.user.userId;
+
+  try {
+    // Extract character IDs from all clips for ownership verification
+    const characterIds = [];
+    for (const clip of clipsData) {
+      if (clip.video_type === 'ai' && clip.characters && clip.characters.length > 0) {
+        clip.characters.forEach(char => {
+          if (char.character && char.character.character_id) {
+            characterIds.push(char.character.character_id);
+          }
+        });
+      }
+    }
+
+    // Verify character ownership if characters are present
+    if (characterIds.length > 0) {
+      const uniqueCharacterIds = [...new Set(characterIds)];
+      const hasAccess = await CharacterModel.verifyCharacterOwnershipOfMultipleCharacters(uniqueCharacterIds);
+      if (!hasAccess) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+          message: req.t('character:CHARACTER_NOT_FOUND_OR_UNAUTHORIZED')
+        });
+      }
+    }
+
+    // Insert initial resource generation record in ClickHouse
+    await VideoGeneratorModel.insertResourceGeneration([{
+      resource_generation_id: generationId,
+      user_character_ids: characterIds.join(','),
+      user_id: userId,
+      template_id: '', // Empty string for video flow composer (no template)
+      type: 'generation',
+      media_type: 'video',
+      additional_data: JSON.stringify({
+        generation_type: 'video_flow_composer',
+        clips_data: clipsData,
+        total_clips: clipsData.length,
+        ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
+        static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length
+      })
+    }]);
+
+    // Insert SUBMITTED event in ClickHouse
+    await VideoGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'SUBMITTED',
+      additional_data: JSON.stringify({
+        clips_data: clipsData,
+        user_id: userId,
+        character_ids: characterIds,
+        total_clips: clipsData.length,
+        request_payload: req.validatedBody
+      })
+    }]);
+
+    // Send to Kafka for processing
+    await kafkaCtrl.sendMessage(
+      TOPICS.GENERATION_COMMAND_START_VIDEO_FLOW_COMPOSER,
+      [{
+        value: {
+          generation_id: generationId,
+          clips_data: clipsData,
+          user_id: userId,
+          character_ids: characterIds,
+          total_clips: clipsData.length
+        }
+      }],
+      'start_video_flow_composer'
+    );
+
+    // Log admin activity
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'STUDIO_TOOLS',
+          action_name: 'VIDEO_FLOW_COMPOSER', 
+          entity_id: generationId,
+          additional_data: JSON.stringify({
+            total_clips: clipsData.length,
+            character_ids: characterIds,
+            ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
+            static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length
+          })
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    // Publish event for analytics
+    await kafkaCtrl.sendMessage(
+      TOPICS.GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_FLOW_COMPOSER,
+      [{
+        value: {
+          generation_id: generationId,
+          user_id: userId,
+          total_clips: clipsData.length,
+          ai_clips_count: clipsData.filter(clip => clip.video_type === 'ai').length,
+          static_clips_count: clipsData.filter(clip => clip.video_type === 'static').length,
+          character_ids: characterIds
+        }
+      }],
+      'video_flow_composer_request_submitted'
+    );
+
+    // Store rate limiter action
+    await GeneratorRateLimiterMiddleware.storeVideoFlowComposerAction(userId);
+
+    setTimeout(() => {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: {
+          generation_id: generationId,
+          status: 'SUBMITTED',
+          total_clips: clipsData.length
+        }
+      });
+    }, 15000);
+
+  } catch (error) {
+    logger.error('Error submitting video flow composer request:', { error: error.message, stack: error.stack });
     return GeneratorErrorHandler.handleGeneratorErrors(error, res);
   }
 };
