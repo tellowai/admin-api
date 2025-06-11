@@ -121,4 +121,26 @@ exports.getLatestGenerationEvent = async function(generationId) {
     logger.error('Error fetching latest generation event:', { error: error.message, stack: error.stack });
     throw error;
   }
+};
+
+exports.getAllGenerationEvents = async function(generationId) {
+  const query = `
+    SELECT 
+      resource_generation_event_id,
+      resource_generation_id,
+      event_type,
+      additional_data,
+      created_at
+    FROM resource_generation_events
+    WHERE resource_generation_id = '${generationId}'
+    ORDER BY created_at ASC
+  `;
+
+  try {
+    const result = await RunCHQueryingInSlave(query);
+    return result || [];
+  } catch (error) {
+    logger.error('Error fetching all generation events:', { error: error.message, stack: error.stack });
+    throw error;
+  }
 }; 

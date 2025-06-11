@@ -9,10 +9,10 @@ const GeneratorRateLimiterMiddleware = require('../middlewares/generator.ratelim
 module.exports = function(app) {
 
   app.route(
-    versionConfig.routePrefix + '/video-generations/:generationId/status'
+    versionConfig.routePrefix + '/video-generations/video-flow-composer/:generationId/status'
   ).get(
     AuthMiddleware.isAuthorizedJWT,
-    VideoGenerator.getVideoGenerationStatus
+    VideoGenerator.getVideoFlowComposerGenerationStatus
   );
 
   app.route(
