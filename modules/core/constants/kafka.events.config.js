@@ -20,6 +20,7 @@ const TOPICS = {
   GENERATION_COMMAND_IMAGE_GENERATION_POST_PROCESS: `${env}.generation.command.start_image_generation_post_process`,
   GENERATION_COMMAND_START_MULTI_CHARACTER_INPAINTING: `${env}.generation.command.start_multi_character_inpainting`,
   GENERATION_COMMAND_START_VIDEO_FLOW_COMPOSER: `${env}.generation.command.start_video_flow_composer`,
+  VIDEO_EDITING_COMMAND_MERGE_VIDEOS: `${env}.video_editing.command.merge_videos`,
 
   // event type
   AUTH_EVENT_SIGNED_UP: `${env}.auth.event.signed_up`,

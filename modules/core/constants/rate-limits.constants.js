@@ -38,5 +38,10 @@ module.exports.limits = {
     "DAILY": 15,
     "HOURLY": 10,
     "MINUTE": 5
+  },
+  MERGE_VIDEOS: {
+    "DAILY": 50,
+    "HOURLY": 10,
+    "MINUTE": 3
   }
 }
