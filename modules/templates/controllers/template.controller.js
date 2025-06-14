@@ -39,8 +39,11 @@ exports.listTemplates = async function(req, res) {
         }
         
 
-        // Parse JSON fields if they are strings
-        if (template.faces_needed && typeof template.faces_needed === 'string') {
+        // Parse JSON fields if they are strings and load video clips for video templates
+        if (template.template_output_type === 'video') {
+          // Load video clips for video templates
+          template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+        } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
 
@@ -59,7 +62,7 @@ exports.listTemplates = async function(req, res) {
               value: template.faces_needed
             });
           }
-        } else {
+        } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
           template.faces_needed = template.faces_needed.map(face => {
             if (face.character_face_r2_key) {
               face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
@@ -125,8 +128,11 @@ exports.searchTemplates = async function(req, res) {
           template.r2_url = template.cf_r2_url;
         }
         
-        // Parse JSON fields if they are strings
-        if (template.faces_needed && typeof template.faces_needed === 'string') {
+        // Parse JSON fields if they are strings and load video clips for video templates
+        if (template.template_output_type === 'video') {
+          // Load video clips for video templates
+          template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+        } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
           } catch (err) {
@@ -158,13 +164,16 @@ exports.searchTemplates = async function(req, res) {
  *
  * @apiBody {String} template_name Template name
  * @apiBody {String} template_code Unique template code
+ * @apiBody {String} template_output_type Template output type (image, video, audio)
+ * @apiBody {String} [template_gender] Template gender (male, female, unisex, couple)
  * @apiBody {String} description Template description
- * @apiBody {String} prompt Template prompt
- * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [prompt] Template prompt (required for image templates)
+ * @apiBody {Object} [faces_needed] Required faces configuration (only for image templates)
  * @apiBody {String} [cf_r2_key] Cloudflare R2 key
  * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
  * @apiBody {Number} [credits=1] Credits required
  * @apiBody {Object} [additional_data] Additional template data
+ * @apiBody {Array} [clips] Video clips array (required for video templates)
  */
 exports.createTemplate = async function(req, res) {
   try {
@@ -200,29 +209,52 @@ exports.createTemplate = async function(req, res) {
 };
 
 /**
- * @api {put} /templates/:templateId Update template
+ * @api {patch} /templates/:templateId Update template
  * @apiVersion 1.0.0
  * @apiName UpdateTemplate
  * @apiGroup Templates
  * @apiPermission JWT
  *
  * @apiParam {String} templateId Template ID
- * @apiBody {String} template_name Template name
- * @apiBody {String} template_code Unique template code
- * @apiBody {String} description Template description
- * @apiBody {String} prompt Template prompt
- * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [template_name] Template name
+ * @apiBody {String} [template_code] Unique template code
+ * @apiBody {String} [template_output_type] Template output type (image, video, audio)
+ * @apiBody {String} [template_gender] Template gender (male, female, unisex, couple)
+ * @apiBody {String} [description] Template description
+ * @apiBody {String} [prompt] Template prompt
+ * @apiBody {Object} [faces_needed] Required faces configuration (only for image templates)
  * @apiBody {String} [cf_r2_key] Cloudflare R2 key
  * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
  * @apiBody {Number} [credits] Credits required
  * @apiBody {Object} [additional_data] Additional template data
+ * @apiBody {Array} [clips] Video clips array (for video templates)
  */
 exports.updateTemplate = async function(req, res) {
   try {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
     
-    const updated = await TemplateModel.updateTemplate(templateId, templateData);
+    // Check if template exists and get current template info
+    const existingTemplate = await TemplateModel.getTemplateById(templateId);
+    if (!existingTemplate) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    // Determine if this is a video template with clips
+    const isVideoTemplate = (templateData.template_output_type === 'video') || 
+                           (existingTemplate.template_output_type === 'video' && !templateData.template_output_type);
+    const hasClips = templateData.clips && templateData.clips.length > 0;
+
+    let updated;
+    if (isVideoTemplate && hasClips) {
+      // Use transaction for video template updates with clips
+      updated = await TemplateModel.updateTemplateWithClips(templateId, templateData);
+    } else {
+      // Use regular update for non-video templates or video templates without clips
+      updated = await TemplateModel.updateTemplate(templateId, templateData);
+    }
     
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
