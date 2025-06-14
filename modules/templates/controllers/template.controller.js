@@ -43,6 +43,23 @@ exports.listTemplates = async function(req, res) {
         if (template.template_output_type === 'video') {
           // Load video clips for video templates
           template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+          
+          // Generate R2 URLs for video clip assets
+          if (template.clips && template.clips.length > 0) {
+            template.clips = template.clips.map(clip => {
+              // Generate R2 URL for template image asset
+              if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+                clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+              }
+              
+              // Generate R2 URL for video file asset
+              if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+                clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+              }
+              
+              return clip;
+            });
+          }
         } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
@@ -132,6 +149,23 @@ exports.searchTemplates = async function(req, res) {
         if (template.template_output_type === 'video') {
           // Load video clips for video templates
           template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+          
+          // Generate R2 URLs for video clip assets
+          if (template.clips && template.clips.length > 0) {
+            template.clips = template.clips.map(clip => {
+              // Generate R2 URL for template image asset
+              if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+                clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+              }
+              
+              // Generate R2 URL for video file asset
+              if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+                clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+              }
+              
+              return clip;
+            });
+          }
         } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
