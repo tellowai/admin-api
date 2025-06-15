@@ -215,6 +215,11 @@ exports.createTemplate = async function(req, res) {
     // Generate UUID for template_id
     templateData.template_id = uuidv4();
 
+    // Generate faces_needed from clips data for video templates
+    if (templateData.template_output_type === 'video' && templateData.clips && templateData.clips.length > 0) {
+      templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+    }
+
     await TemplateModel.createTemplate(templateData);
     
     // Publish activity log command with the UUID template_id
@@ -241,6 +246,79 @@ exports.createTemplate = async function(req, res) {
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 };
+
+/**
+ * Generate faces_needed array from clips data
+ * @param {Array} clips - Array of clip objects
+ * @returns {Array} Array of unique faces needed
+ */
+function generateFacesNeededFromClips(clips) {
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    return [];
+  }
+
+  const facesMap = new Map();
+  
+  clips.forEach((clip, clipIndex) => {
+    if (clip.video_type === 'ai' && clip.characters && Array.isArray(clip.characters) && clip.characters.length > 0) {
+      clip.characters.forEach((character, charIndex) => {
+        if (character.character && 
+            character.character.character_name && 
+            character.character.character_gender && 
+            typeof character.character.character_name === 'string' &&
+            typeof character.character.character_gender === 'string') {
+          
+          const name = character.character.character_name.trim();
+          const gender = character.character.character_gender.toLowerCase().trim();
+          
+          // Skip if empty after trimming
+          if (!name || !gender) {
+            logger.warn('Skipping character with empty name or gender:', {
+              clipIndex,
+              charIndex,
+              name,
+              gender
+            });
+            return;
+          }
+          
+          const key = `${gender}_${name}`;
+          
+          if (!facesMap.has(key)) {
+            facesMap.set(key, {
+              character_name: name,
+              character_gender: gender
+            });
+          }
+        } else {
+          logger.warn('Skipping invalid character data:', {
+            clipIndex,
+            charIndex,
+            character: character.character
+          });
+        }
+      });
+    }
+  });
+  
+  // Convert Map to Array and sort by gender and name for consistency
+  const facesArray = Array.from(facesMap.values());
+  facesArray.sort((a, b) => {
+    if (a.character_gender !== b.character_gender) {
+      return a.character_gender.localeCompare(b.character_gender);
+    }
+    return a.character_name.localeCompare(b.character_name);
+  });
+  
+  logger.info('Generated faces_needed:', {
+    totalClips: clips.length,
+    aiClips: clips.filter(c => c.video_type === 'ai').length,
+    uniqueFaces: facesArray.length,
+    faces: facesArray
+  });
+  
+  return facesArray;
+}
 
 /**
  * @api {patch} /templates/:templateId Update template
@@ -280,6 +358,21 @@ exports.updateTemplate = async function(req, res) {
     const isVideoTemplate = (templateData.template_output_type === 'video') || 
                            (existingTemplate.template_output_type === 'video' && !templateData.template_output_type);
     const hasClips = templateData.clips && templateData.clips.length > 0;
+
+    // Handle faces_needed for video templates
+    if (isVideoTemplate) {
+      if (hasClips) {
+        // Generate faces_needed from clips data when clips are provided
+        templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      } else if (templateData.clips !== undefined) {
+        // If clips array is explicitly provided but empty, clear faces_needed
+        templateData.faces_needed = [];
+      }
+      // If clips is undefined, don't modify faces_needed (partial update)
+    } else if (templateData.template_output_type && templateData.template_output_type !== 'video') {
+      // If changing from video to non-video template, clear faces_needed
+      templateData.faces_needed = null;
+    }
 
     let updated;
     if (isVideoTemplate && hasClips) {
