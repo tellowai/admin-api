@@ -34,7 +34,7 @@ const customInputFieldSchema = Joi.object({
   }).required()
 });
 
-// Video clip schema
+// Video clip schema for create operations
 const videoClipSchema = Joi.object({
   clip_index: Joi.number().integer().min(1).required(),
   video_type: Joi.string().valid('ai', 'static').required(),
@@ -66,6 +66,53 @@ const videoClipSchema = Joi.object({
     then: Joi.optional(),
     otherwise: Joi.forbidden()
   }),
+  // Static video fields
+  video_file_asset_key: Joi.string().when('video_type', {
+    is: 'static',
+    then: Joi.required(),
+    otherwise: Joi.forbidden()
+  }),
+  requires_user_input: Joi.boolean().when('video_type', {
+    is: 'static',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden()
+  }),
+  custom_input_fields: Joi.array().items(customInputFieldSchema).when('requires_user_input', {
+    is: true,
+    then: Joi.required(),
+    otherwise: Joi.forbidden()
+  })
+});
+
+// Video clip schema for update operations (more flexible)
+const updateVideoClipSchema = Joi.object({
+  clip_index: Joi.number().integer().min(1).required(),
+  video_type: Joi.string().valid('ai', 'static').required(),
+  created_at: Joi.string().isoDate().required(),
+  updated_at: Joi.string().isoDate().required(),
+  // AI video fields
+  video_prompt: Joi.string().when('video_type', {
+    is: 'ai',
+    then: Joi.required(),
+    otherwise: Joi.forbidden()
+  }),
+  video_ai_model: Joi.string().when('video_type', {
+    is: 'ai',
+    then: Joi.required(),
+    otherwise: Joi.forbidden()
+  }),
+  video_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
+    is: 'ai',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden()
+  }),
+  characters: Joi.array().items(characterSchema).when('video_type', {
+    is: 'ai',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden()
+  }),
+  // Allow template_image_asset_key for both types in updates (more flexible)
+  template_image_asset_key: Joi.string().allow(null, '').optional(),
   // Static video fields
   video_file_asset_key: Joi.string().when('video_type', {
     is: 'static',
@@ -136,7 +183,7 @@ const updateTemplateSchema = Joi.object().keys({
   cf_r2_url: Joi.string().max(1000).allow(null).optional(),
   credits: Joi.number().integer().min(1).optional(),
   additional_data: Joi.object().allow(null).optional(),
-  clips: Joi.array().items(videoClipSchema).optional()
+  clips: Joi.array().items(updateVideoClipSchema).optional()
 });
 
 exports.createTemplateSchema = createTemplateSchema;

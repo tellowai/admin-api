@@ -114,10 +114,10 @@ exports.createTemplate = async function(templateData) {
           ${fields.join(', ')}
         ) VALUES (${placeholders.join(', ')})
       `;
-console.log(insertQuery,'insertQuery',values)
+
       // Create template within transaction
       const result = await connection.query(insertQuery, values);
-      console.log(result,'result')
+
       // Create video clips within the same transaction
       await this.createTemplateVideoClipsInTransaction(connection, templateData.template_id, clips);
       
@@ -335,32 +335,34 @@ exports.createTemplateVideoClipsInTransaction = async function(connection, templ
 
     // Add type-specific fields
     if (clip.video_type === 'ai') {
+      const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
         video_prompt: clip.video_prompt || null,
         video_ai_model: clip.video_ai_model || null,
         video_quality: clip.video_quality || null,
         characters: clip.characters ? JSON.stringify(clip.characters) : null,
-        reference_image_type: 'ai', // Default as per schema
+        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
         reference_image_ai_model: null, // Can be set if needed
-        template_image_asset_key: clip.template_image_asset_key || null,
-        template_image_asset_bucket: config.os2.r2.public.bucket,
+        template_image_asset_key: templateImageAssetKey,
+        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
         video_file_asset_key: null,
         video_file_asset_bucket: null,
         requires_user_input: null,
         custom_input_fields: null
       });
     } else if (clip.video_type === 'static') {
+      const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
         video_prompt: null,
         video_ai_model: null,
         video_quality: null,
         characters: null,
-        reference_image_type: 'ai', // Default as per schema
+        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
         reference_image_ai_model: null,
-        template_image_asset_key: null,
-        template_image_asset_bucket: config.os2.r2.public.bucket,
+        template_image_asset_key: templateImageAssetKey,
+        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
         video_file_asset_key: clip.video_file_asset_key || null,
-        video_file_asset_bucket: null, // Can be set if needed
+        video_file_asset_bucket: clip.video_file_asset_key ? config.os2.r2.public.bucket : null,
         requires_user_input: clip.requires_user_input || null,
         custom_input_fields: clip.custom_input_fields ? JSON.stringify(clip.custom_input_fields) : null
       });
@@ -382,8 +384,7 @@ exports.createTemplateVideoClipsInTransaction = async function(connection, templ
       `;
     
     const values = clipData.flatMap(clip => Object.values(clip));
-      
-    console.log(insertQuery,'insertQuery2', values)
+
     await connection.query(insertQuery, values);
   }
 };
@@ -409,32 +410,34 @@ exports.createTemplateVideoClips = async function(templateId, clips) {
 
     // Add type-specific fields
     if (clip.video_type === 'ai') {
+      const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
         video_prompt: clip.video_prompt || null,
         video_ai_model: clip.video_ai_model || null,
         video_quality: clip.video_quality || null,
         characters: clip.characters ? JSON.stringify(clip.characters) : null,
-        reference_image_type: 'ai', // Default as per schema
+        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
         reference_image_ai_model: null, // Can be set if needed
-        template_image_asset_key: clip.template_image_asset_key || null,
-        template_image_asset_bucket: null, // Can be set if needed
+        template_image_asset_key: templateImageAssetKey,
+        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
         video_file_asset_key: null,
         video_file_asset_bucket: null,
         requires_user_input: null,
         custom_input_fields: null
       });
     } else if (clip.video_type === 'static') {
+      const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
         video_prompt: null,
         video_ai_model: null,
         video_quality: null,
         characters: null,
-        reference_image_type: 'ai', // Default as per schema
+        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
         reference_image_ai_model: null,
-        template_image_asset_key: null,
-        template_image_asset_bucket: null,
+        template_image_asset_key: templateImageAssetKey,
+        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
         video_file_asset_key: clip.video_file_asset_key || null,
-        video_file_asset_bucket: null, // Can be set if needed
+        video_file_asset_bucket: clip.video_file_asset_key ? config.os2.r2.public.bucket : null,
         requires_user_input: clip.requires_user_input || null,
         custom_input_fields: clip.custom_input_fields ? JSON.stringify(clip.custom_input_fields) : null
       });
