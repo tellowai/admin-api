@@ -157,10 +157,21 @@ const createTemplateSchema = Joi.object().keys({
   cf_r2_url: Joi.string().max(1000).allow(null),
   credits: Joi.number().integer().min(1).default(1),
   additional_data: Joi.object().allow(null),
-  // Video specific field
+  // Video specific fields
   clips: Joi.when('template_output_type', {
     is: 'video',
     then: Joi.array().items(videoClipSchema).required().min(1),
+    otherwise: Joi.forbidden()
+  }),
+  sounds: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.array().items(
+      Joi.object({
+        asset_key: Joi.string().required(),
+        asset_bucket: Joi.string().required(),
+        sound_index: Joi.number().integer().min(0).required()
+      })
+    ).min(1).optional(),
     otherwise: Joi.forbidden()
   })
 });
@@ -183,7 +194,14 @@ const updateTemplateSchema = Joi.object().keys({
   cf_r2_url: Joi.string().max(1000).allow(null).optional(),
   credits: Joi.number().integer().min(1).optional(),
   additional_data: Joi.object().allow(null).optional(),
-  clips: Joi.array().items(updateVideoClipSchema).optional()
+  clips: Joi.array().items(updateVideoClipSchema).optional(),
+  sounds: Joi.array().items(
+    Joi.object({
+      asset_key: Joi.string().required(),
+      asset_bucket: Joi.string().required(),
+      sound_index: Joi.number().integer().min(0).required()
+    })
+  ).optional()
 });
 
 exports.createTemplateSchema = createTemplateSchema;

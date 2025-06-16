@@ -98,6 +98,40 @@ exports.listTemplates = async function(req, res) {
             });
           }
         }
+        
+        if (template.sounds && typeof template.sounds === 'string') {
+          try {
+            template.sounds = JSON.parse(template.sounds);
+          } catch (err) {
+            logger.error('Error parsing sounds:', {
+              error: err.message,
+              value: template.sounds
+            });
+          }
+        }
+        
+        // Generate R2 URLs for sound assets
+        if (template.sounds && Array.isArray(template.sounds)) {
+          template.sounds = await Promise.all(template.sounds.map(async (sound) => {
+            if (sound.asset_key && sound.asset_bucket) {
+              if (sound.asset_bucket === 'public') {
+                // For public bucket, use direct URL
+                sound.r2_url = `${config.os2.r2.public.bucketUrl}/${sound.asset_key}`;
+              } else {
+                // For private bucket, generate presigned URL
+                try {
+                  sound.r2_url = await storage.generatePresignedDownloadUrl(sound.asset_key, { expiresIn: 3600 });
+                } catch (err) {
+                  logger.error('Error generating presigned URL for sound:', {
+                    error: err.message,
+                    asset_key: sound.asset_key
+                  });
+                }
+              }
+            }
+            return sound;
+          }));
+        }
       }));
     }
 
@@ -176,6 +210,51 @@ exports.searchTemplates = async function(req, res) {
             });
           }
         }
+
+        if (template.additional_data && typeof template.additional_data === 'string') {
+          try {
+            template.additional_data = JSON.parse(template.additional_data);
+          } catch (err) {
+            logger.error('Error parsing additional_data:', {
+              error: err.message,
+              value: template.additional_data
+            });
+          }
+        }
+        
+        if (template.sounds && typeof template.sounds === 'string') {
+          try {
+            template.sounds = JSON.parse(template.sounds);
+          } catch (err) {
+            logger.error('Error parsing sounds:', {
+              error: err.message,
+              value: template.sounds
+            });
+          }
+        }
+        
+        // Generate R2 URLs for sound assets
+        if (template.sounds && Array.isArray(template.sounds)) {
+          template.sounds = await Promise.all(template.sounds.map(async (sound) => {
+            if (sound.asset_key && sound.asset_bucket) {
+              if (sound.asset_bucket === 'public') {
+                // For public bucket, use direct URL
+                sound.r2_url = `${config.os2.r2.public.bucketUrl}/${sound.asset_key}`;
+              } else {
+                // For private bucket, generate presigned URL
+                try {
+                  sound.r2_url = await storage.generatePresignedDownloadUrl(sound.asset_key, { expiresIn: 3600 });
+                } catch (err) {
+                  logger.error('Error generating presigned URL for sound:', {
+                    error: err.message,
+                    asset_key: sound.asset_key
+                  });
+                }
+              }
+            }
+            return sound;
+          }));
+        }
       }));
     }
 
@@ -208,6 +287,7 @@ exports.searchTemplates = async function(req, res) {
  * @apiBody {Number} [credits=1] Credits required
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} [clips] Video clips array (required for video templates)
+ * @apiBody {Array} [sounds] Audio tracks array (for video templates)
  */
 exports.createTemplate = async function(req, res) {
   try {
@@ -340,6 +420,7 @@ function generateFacesNeededFromClips(clips) {
  * @apiBody {Number} [credits] Credits required
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} [clips] Video clips array (for video templates)
+ * @apiBody {Array} [sounds] Audio tracks array (for video templates)
  */
 exports.updateTemplate = async function(req, res) {
   try {

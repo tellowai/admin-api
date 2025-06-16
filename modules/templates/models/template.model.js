@@ -20,6 +20,7 @@ exports.listTemplates = async function(pagination) {
       cf_r2_url,
       credits,
       additional_data,
+      sounds,
       created_at
     FROM templates
     WHERE archived_at IS NULL
@@ -66,6 +67,8 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
       cf_r2_key,
       cf_r2_url,
       credits,
+      sounds,
+      additional_data,
       created_at
     FROM templates
     WHERE LOWER(template_name) LIKE LOWER(?)
@@ -103,7 +106,7 @@ exports.createTemplate = async function(templateData) {
         if (value !== undefined) {
           fields.push(key);
           values.push(value === null ? null : 
-            (key === 'faces_needed' || key === 'additional_data') ? 
+            (key === 'faces_needed' || key === 'additional_data' || key === 'sounds') ? 
             JSON.stringify(value) : value);
           placeholders.push('?');
         }
@@ -145,7 +148,7 @@ exports.createTemplate = async function(templateData) {
       if (value !== undefined) {
         fields.push(key);
         values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data') ? 
+          (key === 'faces_needed' || key === 'additional_data' || key === 'sounds') ? 
           JSON.stringify(value) : value);
         placeholders.push('?');
       }
@@ -175,7 +178,7 @@ exports.updateTemplate = async function(templateId, templateData) {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
       values.push(value === null ? null : 
-        (key === 'faces_needed' || key === 'additional_data') ? 
+        (key === 'faces_needed' || key === 'additional_data' || key === 'sounds') ? 
         JSON.stringify(value) : value);
     }
   });
@@ -215,7 +218,7 @@ exports.updateTemplateWithClips = async function(templateId, templateData) {
       if (value !== undefined) {
         setClause.push(`${key} = ?`);
         values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data') ? 
+          (key === 'faces_needed' || key === 'additional_data' || key === 'sounds') ? 
           JSON.stringify(value) : value);
       }
     });
@@ -278,6 +281,7 @@ exports.getTemplateById = async function(templateId) {
       cf_r2_url,
       credits,
       additional_data,
+      sounds,
       created_at
     FROM templates
     WHERE template_id = ?
