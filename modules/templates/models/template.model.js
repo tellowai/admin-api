@@ -85,9 +85,11 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
   );
 }; 
 
-exports.createTemplate = async function(templateData) {
-  // For video templates with clips, use transaction to ensure data consistency
-  if (templateData.template_output_type === 'video' && templateData.clips && templateData.clips.length > 0) {
+exports.createTemplate = async function(templateData, aeAssetData = null) {
+  // For video templates with clips or AE assets, use transaction to ensure data consistency
+  const needsTransaction = (templateData.template_output_type === 'video' && templateData.clips && templateData.clips.length > 0) || aeAssetData;
+  
+  if (needsTransaction) {
     const connection = await mysqlQueryRunner.getConnectionFromMaster();
     
     try {
@@ -121,8 +123,15 @@ exports.createTemplate = async function(templateData) {
       // Create template within transaction
       const result = await connection.query(insertQuery, values);
 
-      // Create video clips within the same transaction
-      await this.createTemplateVideoClipsInTransaction(connection, templateData.template_id, clips);
+      // Create video clips within the same transaction if they exist
+      if (clips && clips.length > 0) {
+        await this.createTemplateVideoClipsInTransaction(connection, templateData.template_id, clips);
+      }
+
+      // Create AE assets within the same transaction if they exist
+      if (aeAssetData) {
+        await this.createTemplateAeAssetsInTransaction(connection, aeAssetData);
+      }
       
       await connection.commit();
       return result;
@@ -200,7 +209,7 @@ exports.updateTemplate = async function(templateId, templateData) {
 /**
  * Update template with clips (transaction-aware version)
  */
-exports.updateTemplateWithClips = async function(templateId, templateData) {
+exports.updateTemplateWithClips = async function(templateId, templateData, aeAssetData = null) {
   const connection = await mysqlQueryRunner.getConnectionFromMaster();
   
   try {
@@ -251,6 +260,15 @@ exports.updateTemplateWithClips = async function(templateId, templateData) {
       // Insert new clips
       await this.createTemplateVideoClipsInTransaction(connection, templateId, clips);
     }
+
+    // Update AE assets within the same transaction
+    if (aeAssetData) {
+      // Delete existing AE assets for this template
+      await this.deleteTemplateAeAssetsInTransaction(connection, templateId);
+      
+      // Insert new AE assets
+      await this.createTemplateAeAssetsInTransaction(connection, aeAssetData);
+    }
     
     await connection.commit();
     return true;
@@ -293,11 +311,49 @@ exports.getTemplateById = async function(templateId) {
 };
 
 /**
+ * Get template by ID with AE assets (complete template data)
+ */
+exports.getTemplateByIdWithAssets = async function(templateId) {
+  const template = await this.getTemplateById(templateId);
+  
+  if (!template) {
+    return null;
+  }
+
+  // Get AE assets for video templates
+  if (template.template_output_type === 'video') {
+    const aeAssets = await this.getTemplateAeAssets(templateId);
+    if (aeAssets) {
+      template.ae_assets = aeAssets;
+    }
+
+    // Get video clips for video templates
+    template.clips = await this.getTemplateVideoClips(templateId);
+  }
+
+  return template;
+};
+
+/**
  * Delete video clips for a template (transaction-aware version)
  */
 exports.deleteTemplateVideoClipsInTransaction = async function(connection, templateId) {
   const deleteQuery = `
     UPDATE template_video_clips
+    SET deleted_at = NOW()
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  await connection.query(deleteQuery, [templateId]);
+};
+
+/**
+ * Delete AE assets for a template (transaction-aware version)
+ */
+exports.deleteTemplateAeAssetsInTransaction = async function(connection, templateId) {
+  const deleteQuery = `
+    UPDATE template_ae_assets
     SET deleted_at = NOW()
     WHERE template_id = ?
     AND deleted_at IS NULL
@@ -341,14 +397,16 @@ exports.createTemplateVideoClipsInTransaction = async function(connection, templ
     if (clip.video_type === 'ai') {
       const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
-        video_prompt: clip.video_prompt || null,
-        video_ai_model: clip.video_ai_model || null,
-        video_quality: clip.video_quality || null,
+        asset_prompt: clip.asset_prompt || null,
+        asset_ai_model: clip.asset_ai_model || null,
+        asset_quality: clip.asset_quality || null,
         characters: clip.characters ? JSON.stringify(clip.characters) : null,
-        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
-        reference_image_ai_model: null, // Can be set if needed
+        asset_type: clip.asset_type || 'video',
+        generation_type: clip.generation_type || 'generate',
+        reference_image_type: clip.reference_image_type || (templateImageAssetKey ? 'ai' : 'none'),
+        reference_image_ai_model: clip.reference_image_ai_model || null,
         template_image_asset_key: templateImageAssetKey,
-        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
+        template_image_asset_bucket: clip.template_image_asset_bucket || (templateImageAssetKey ? config.os2.r2.public.bucket : null),
         video_file_asset_key: null,
         video_file_asset_bucket: null,
         requires_user_input: null,
@@ -357,16 +415,18 @@ exports.createTemplateVideoClipsInTransaction = async function(connection, templ
     } else if (clip.video_type === 'static') {
       const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
-        video_prompt: null,
-        video_ai_model: null,
-        video_quality: null,
+        asset_prompt: null,
+        asset_ai_model: null,
+        asset_quality: null,
         characters: null,
-        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
-        reference_image_ai_model: null,
+        asset_type: clip.asset_type || 'video',
+        generation_type: clip.generation_type || 'generate',
+        reference_image_type: clip.reference_image_type || (templateImageAssetKey ? 'ai' : 'none'),
+        reference_image_ai_model: clip.reference_image_ai_model || null,
         template_image_asset_key: templateImageAssetKey,
-        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
+        template_image_asset_bucket: clip.template_image_asset_bucket || (templateImageAssetKey ? config.os2.r2.public.bucket : null),
         video_file_asset_key: clip.video_file_asset_key || null,
-        video_file_asset_bucket: clip.video_file_asset_key ? config.os2.r2.public.bucket : null,
+        video_file_asset_bucket: clip.video_file_asset_bucket || (clip.video_file_asset_key ? config.os2.r2.public.bucket : null),
         requires_user_input: clip.requires_user_input || null,
         custom_input_fields: clip.custom_input_fields ? JSON.stringify(clip.custom_input_fields) : null
       });
@@ -394,6 +454,88 @@ exports.createTemplateVideoClipsInTransaction = async function(connection, templ
 };
 
 /**
+ * Create AE assets for a template (transaction-aware version)
+ */
+exports.createTemplateAeAssetsInTransaction = async function(connection, aeAssetData) {
+  // Filter out undefined values and prepare fields and values
+  const fields = [];
+  const values = [];
+  const placeholders = [];
+
+  Object.entries(aeAssetData).forEach(([key, value]) => {
+    if (value !== undefined) {
+      fields.push(key);
+      values.push(value);
+      placeholders.push('?');
+    }
+  });
+
+  if (fields.length > 0) {
+    const insertQuery = `
+      INSERT INTO template_ae_assets (
+        ${fields.join(', ')}
+      ) VALUES (${placeholders.join(', ')})
+    `;
+
+    await connection.query(insertQuery, values);
+  }
+};
+
+/**
+ * Get AE assets for a template
+ */
+exports.getTemplateAeAssets = async function(templateId) {
+  const query = `
+    SELECT 
+      taae_id,
+      template_id,
+      color_video_bucket,
+      color_video_key,
+      mask_video_bucket,
+      mask_video_key,
+      bodymovin_json_bucket,
+      bodymovin_json_key,
+      created_at,
+      updated_at
+    FROM template_ae_assets
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  const [aeAssets] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  return aeAssets;
+};
+
+/**
+ * Get AE assets for multiple templates (batch fetch)
+ */
+exports.getTemplateAeAssetsBatch = async function(templateIds) {
+  if (!templateIds || templateIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      taae_id,
+      template_id,
+      color_video_bucket,
+      color_video_key,
+      mask_video_bucket,
+      mask_video_key,
+      bodymovin_json_bucket,
+      bodymovin_json_key,
+      created_at,
+      updated_at
+    FROM template_ae_assets
+    WHERE template_id IN (${placeholders})
+    AND deleted_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+};
+
+/**
  * Create video clips for a template (standalone version - kept for compatibility)
  */
 exports.createTemplateVideoClips = async function(templateId, clips) {
@@ -416,14 +558,16 @@ exports.createTemplateVideoClips = async function(templateId, clips) {
     if (clip.video_type === 'ai') {
       const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
-        video_prompt: clip.video_prompt || null,
-        video_ai_model: clip.video_ai_model || null,
-        video_quality: clip.video_quality || null,
+        asset_prompt: clip.asset_prompt || null,
+        asset_ai_model: clip.asset_ai_model || null,
+        asset_quality: clip.asset_quality || null,
         characters: clip.characters ? JSON.stringify(clip.characters) : null,
-        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
-        reference_image_ai_model: null, // Can be set if needed
+        asset_type: clip.asset_type || 'video',
+        generation_type: clip.generation_type || 'generate',
+        reference_image_type: clip.reference_image_type || (templateImageAssetKey ? 'ai' : 'none'),
+        reference_image_ai_model: clip.reference_image_ai_model || null,
         template_image_asset_key: templateImageAssetKey,
-        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
+        template_image_asset_bucket: clip.template_image_asset_bucket || (templateImageAssetKey ? config.os2.r2.public.bucket : null),
         video_file_asset_key: null,
         video_file_asset_bucket: null,
         requires_user_input: null,
@@ -432,16 +576,18 @@ exports.createTemplateVideoClips = async function(templateId, clips) {
     } else if (clip.video_type === 'static') {
       const templateImageAssetKey = clip.template_image_asset_key || null;
       Object.assign(baseClipData, {
-        video_prompt: null,
-        video_ai_model: null,
-        video_quality: null,
+        asset_prompt: null,
+        asset_ai_model: null,
+        asset_quality: null,
         characters: null,
-        reference_image_type: templateImageAssetKey ? 'ai' : 'none',
-        reference_image_ai_model: null,
+        asset_type: clip.asset_type || 'video',
+        generation_type: clip.generation_type || 'generate',
+        reference_image_type: clip.reference_image_type || (templateImageAssetKey ? 'ai' : 'none'),
+        reference_image_ai_model: clip.reference_image_ai_model || null,
         template_image_asset_key: templateImageAssetKey,
-        template_image_asset_bucket: templateImageAssetKey ? config.os2.r2.public.bucket : null,
+        template_image_asset_bucket: clip.template_image_asset_bucket || (templateImageAssetKey ? config.os2.r2.public.bucket : null),
         video_file_asset_key: clip.video_file_asset_key || null,
-        video_file_asset_bucket: clip.video_file_asset_key ? config.os2.r2.public.bucket : null,
+        video_file_asset_bucket: clip.video_file_asset_bucket || (clip.video_file_asset_key ? config.os2.r2.public.bucket : null),
         requires_user_input: clip.requires_user_input || null,
         custom_input_fields: clip.custom_input_fields ? JSON.stringify(clip.custom_input_fields) : null
       });
@@ -478,10 +624,12 @@ exports.getTemplateVideoClips = async function(templateId) {
       template_id,
       clip_index,
       video_type,
-      video_prompt,
-      video_ai_model,
-      video_quality,
+      asset_prompt,
+      asset_ai_model,
+      asset_quality,
       characters,
+      asset_type,
+      generation_type,
       reference_image_type,
       reference_image_ai_model,
       template_image_asset_key,

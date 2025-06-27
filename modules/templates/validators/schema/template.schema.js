@@ -40,18 +40,29 @@ const videoClipSchema = Joi.object({
   video_type: Joi.string().valid('ai', 'static').required(),
   created_at: Joi.string().isoDate().required(),
   updated_at: Joi.string().isoDate().required(),
-  // AI video fields
-  video_prompt: Joi.string().when('video_type', {
+  // Asset type and generation type fields
+  asset_type: Joi.string().valid('image', 'video').required(),
+  generation_type: Joi.string().valid('inpainting', 'generate').default('generate').required(),
+  // AI asset fields
+  asset_prompt: Joi.string().allow('').when('video_type', {
     is: 'ai',
-    then: Joi.required(),
+    then: Joi.when('asset_type', {
+      is: 'video',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
     otherwise: Joi.forbidden()
   }),
-  video_ai_model: Joi.string().when('video_type', {
+  asset_ai_model: Joi.string().allow('').when('video_type', {
     is: 'ai',
-    then: Joi.required(),
+    then: Joi.when('generation_type', {
+      is: 'generate',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
     otherwise: Joi.forbidden()
   }),
-  video_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
+  asset_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
     is: 'ai',
     then: Joi.optional(),
     otherwise: Joi.forbidden()
@@ -66,10 +77,26 @@ const videoClipSchema = Joi.object({
     then: Joi.optional(),
     otherwise: Joi.forbidden()
   }),
+  template_image_asset_bucket: Joi.string().when('video_type', {
+    is: 'ai',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden()
+  }),
+  reference_image_type: Joi.string().valid('ai', 'none').default('ai').optional(),
+  reference_image_ai_model: Joi.string().when('reference_image_type', {
+    is: 'ai',
+    then: Joi.optional(),
+    otherwise: Joi.forbidden()
+  }),
   // Static video fields
   video_file_asset_key: Joi.string().when('video_type', {
     is: 'static',
     then: Joi.required(),
+    otherwise: Joi.forbidden()
+  }),
+  video_file_asset_bucket: Joi.string().when('video_type', {
+    is: 'static',
+    then: Joi.optional(),
     otherwise: Joi.forbidden()
   }),
   requires_user_input: Joi.boolean().when('video_type', {
@@ -90,18 +117,29 @@ const updateVideoClipSchema = Joi.object({
   video_type: Joi.string().valid('ai', 'static').required(),
   created_at: Joi.string().isoDate().required(),
   updated_at: Joi.string().isoDate().required(),
-  // AI video fields
-  video_prompt: Joi.string().when('video_type', {
+  // Asset type and generation type fields
+  asset_type: Joi.string().valid('image', 'video').optional(),
+  generation_type: Joi.string().valid('inpainting', 'generate').optional(),
+  // AI asset fields
+  asset_prompt: Joi.string().allow('').when('video_type', {
     is: 'ai',
-    then: Joi.required(),
+    then: Joi.when('asset_type', {
+      is: 'video',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
     otherwise: Joi.forbidden()
   }),
-  video_ai_model: Joi.string().when('video_type', {
+  asset_ai_model: Joi.string().allow('').when('video_type', {
     is: 'ai',
-    then: Joi.required(),
+    then: Joi.when('generation_type', {
+      is: 'generate',
+      then: Joi.required(),
+      otherwise: Joi.optional()
+    }),
     otherwise: Joi.forbidden()
   }),
-  video_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
+  asset_quality: Joi.string().valid('360p', '720p', '1080p', '1440p', '2160p').when('video_type', {
     is: 'ai',
     then: Joi.optional(),
     otherwise: Joi.forbidden()
@@ -113,12 +151,16 @@ const updateVideoClipSchema = Joi.object({
   }),
   // Allow template_image_asset_key for both types in updates (more flexible)
   template_image_asset_key: Joi.string().allow(null, '').optional(),
+  template_image_asset_bucket: Joi.string().allow(null, '').optional(),
+  reference_image_type: Joi.string().valid('ai', 'none').default('ai').optional(),
+  reference_image_ai_model: Joi.string().allow(null, '').optional(),
   // Static video fields
   video_file_asset_key: Joi.string().when('video_type', {
     is: 'static',
     then: Joi.required(),
     otherwise: Joi.forbidden()
   }),
+  video_file_asset_bucket: Joi.string().allow(null, '').optional(),
   requires_user_input: Joi.boolean().when('video_type', {
     is: 'static',
     then: Joi.optional(),
@@ -173,6 +215,37 @@ const createTemplateSchema = Joi.object().keys({
       })
     ).min(1).optional(),
     otherwise: Joi.forbidden()
+  }),
+  // AE (After Effects) asset fields for video templates
+  color_video_bucket: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(255).optional(),
+    otherwise: Joi.forbidden()
+  }),
+  color_video_key: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(512).optional(),
+    otherwise: Joi.forbidden()
+  }),
+  mask_video_bucket: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(255).optional(),
+    otherwise: Joi.forbidden()
+  }),
+  mask_video_key: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(512).optional(),
+    otherwise: Joi.forbidden()
+  }),
+  bodymovin_json_bucket: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(255).optional(),
+    otherwise: Joi.forbidden()
+  }),
+  bodymovin_json_key: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.string().max(512).optional(),
+    otherwise: Joi.forbidden()
   })
 });
 
@@ -201,7 +274,14 @@ const updateTemplateSchema = Joi.object().keys({
       asset_bucket: Joi.string().required(),
       sound_index: Joi.number().integer().min(0).required()
     })
-  ).optional()
+  ).optional(),
+  // AE (After Effects) asset fields for video templates
+  color_video_bucket: Joi.string().max(255).optional(),
+  color_video_key: Joi.string().max(512).optional(),
+  mask_video_bucket: Joi.string().max(255).optional(),
+  mask_video_key: Joi.string().max(512).optional(),
+  bodymovin_json_bucket: Joi.string().max(255).optional(),
+  bodymovin_json_key: Joi.string().max(512).optional()
 });
 
 exports.createTemplateSchema = createTemplateSchema;
