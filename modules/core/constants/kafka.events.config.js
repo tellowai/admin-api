@@ -19,6 +19,8 @@ const TOPICS = {
   GENERATION_COMMAND_GENERATE_TEXT_TO_IMAGE: `${env}.generation.command.generate_image_from_text`,
   GENERATION_COMMAND_IMAGE_GENERATION_POST_PROCESS: `${env}.generation.command.start_image_generation_post_process`,
   GENERATION_COMMAND_START_MULTI_CHARACTER_INPAINTING: `${env}.generation.command.start_multi_character_inpainting`,
+  GENERATION_COMMAND_START_VIDEO_FLOW_COMPOSER: `${env}.generation.command.start_video_flow_composer`,
+  VIDEO_EDITING_COMMAND_MERGE_VIDEOS: `${env}.video_editing.command.merge_videos`,
 
   // event type
   AUTH_EVENT_SIGNED_UP: `${env}.auth.event.signed_up`,
@@ -27,7 +29,9 @@ const TOPICS = {
   USER_EVENT_PROFILE_UPDATED: `${env}.user.event.profile_updated`,
   PROJECT_EVENT_CREATED: `${env}.project.event.project_created`,
   MODEL_TUNING_EVENT_PHOTO_TUNING_COMPLETED: `${env}.model_tuning.event.photo_tuning_completed`,
-  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_IMAGE_GENERATION: `${env}.generation.event.image_generation_request_submitted`
+  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_IMAGE_GENERATION: `${env}.generation.event.image_generation_request_submitted`,
+  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_GENERATION: `${env}.generation.event.video_generation_request_submitted`,
+  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_FLOW_COMPOSER: `${env}.generation.event.video_flow_composer_request_submitted`
 
 };
 

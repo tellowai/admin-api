@@ -1,0 +1,18 @@
+{
+  "AI_MODEL_LIST_FAILED": "Failed to fetch AI models",
+  "AI_MODEL_NOT_FOUND": "AI model not found",
+  "AI_MODEL_TABLE_NOT_FOUND": "AI models table not found",
+  "AI_MODEL_FIELD_ERROR": "Invalid field in AI models query",
+  "NO_AI_MODELS_FOUND": "No AI models available",
+  "AI_MODEL_OPERATION_FAILED": "AI model operation failed",
+  "PLATFORM_NOT_FOUND": "AI model platform not found",
+  "INVALID_AI_MODEL_DATA": "Invalid AI model data provided",
+  "AI_MODEL_CREATED_SUCCESSFULLY": "AI model created successfully",
+  "AI_MODEL_UPDATED_SUCCESSFULLY": "AI model updated successfully",
+  "AI_MODEL_ALREADY_EXISTS": "AI model with this ID already exists",
+  "AI_MODEL_CREATE_FAILED": "Failed to create AI model",
+  "AI_MODEL_UPDATE_FAILED": "Failed to update AI model",
+  "PLATFORM_CREATED_SUCCESSFULLY": "Platform created successfully",
+  "PLATFORM_CREATE_FAILED": "Failed to create platform",
+  "PLATFORM_UPDATED_SUCCESSFULLY": "Platform updated successfully"
+} 

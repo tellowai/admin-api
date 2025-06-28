@@ -1,0 +1,8 @@
+{
+  "INVALID_REQUEST_DATA": "Invalid request data provided",
+  "VIDEO_MERGE_STARTED": "Video merge request has been submitted successfully",
+  "VIDEO_MERGE_FAILED": "Failed to process video merge request. Please try again.",
+  "VIDEO_MERGE_RATE_LIMIT_EXCEEDED": "You have exceeded the video merge rate limit. Please try again later.",
+  "GENERATION_NOT_FOUND": "Generation not found or you don't have permission to access it",
+  "ERROR_CHECKING_STATUS": "Error checking generation status. Please try again."
+} 

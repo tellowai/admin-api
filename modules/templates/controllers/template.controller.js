@@ -31,6 +31,21 @@ exports.listTemplates = async function(req, res) {
     if (templates.length) {
       const storage = StorageFactory.getProvider();
       
+      // Get video template IDs for batch fetching AE assets
+      const videoTemplateIds = templates
+        .filter(template => template.template_output_type === 'video')
+        .map(template => template.template_id);
+
+      // Batch fetch AE assets for all video templates
+      let aeAssetsMap = {};
+      if (videoTemplateIds.length > 0) {
+        const aeAssetsList = await TemplateModel.getTemplateAeAssetsBatch(videoTemplateIds);
+        aeAssetsMap = aeAssetsList.reduce((map, aeAsset) => {
+          map[aeAsset.template_id] = aeAsset;
+          return map;
+        }, {});
+      }
+      
       await Promise.all(templates.map(async (template) => {
         if (template.cf_r2_key) {
           template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
@@ -39,8 +54,55 @@ exports.listTemplates = async function(req, res) {
         }
         
 
-        // Parse JSON fields if they are strings
-        if (template.faces_needed && typeof template.faces_needed === 'string') {
+        // Parse JSON fields if they are strings and load video clips for video templates
+        if (template.template_output_type === 'video') {
+          // Load video clips for video templates
+          template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+          
+          // Generate R2 URLs for video clip assets
+          if (template.clips && template.clips.length > 0) {
+            template.clips = template.clips.map(clip => {
+              // Generate R2 URL for template image asset
+              if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+                clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+              }
+              
+              // Generate R2 URL for video file asset
+              if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+                clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+              }
+              
+              return clip;
+            });
+          }
+
+          // Add AE assets data for video templates
+          const aeAssets = aeAssetsMap[template.template_id];
+          if (aeAssets) {
+            template.ae_assets = {
+              taae_id: aeAssets.taae_id,
+              color_video_bucket: aeAssets.color_video_bucket,
+              color_video_key: aeAssets.color_video_key,
+              mask_video_bucket: aeAssets.mask_video_bucket,
+              mask_video_key: aeAssets.mask_video_key,
+              bodymovin_json_bucket: aeAssets.bodymovin_json_bucket,
+              bodymovin_json_key: aeAssets.bodymovin_json_key,
+              created_at: aeAssets.created_at,
+              updated_at: aeAssets.updated_at
+            };
+
+            // Generate R2 URLs for AE assets
+            if (aeAssets.color_video_key && aeAssets.color_video_bucket) {
+              template.ae_assets.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.color_video_key}`;
+            }
+            if (aeAssets.mask_video_key && aeAssets.mask_video_bucket) {
+              template.ae_assets.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.mask_video_key}`;
+            }
+            if (aeAssets.bodymovin_json_key && aeAssets.bodymovin_json_bucket) {
+              template.ae_assets.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.bodymovin_json_key}`;
+            }
+          }
+        } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
 
@@ -59,7 +121,7 @@ exports.listTemplates = async function(req, res) {
               value: template.faces_needed
             });
           }
-        } else {
+        } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
           template.faces_needed = template.faces_needed.map(face => {
             if (face.character_face_r2_key) {
               face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
@@ -77,6 +139,40 @@ exports.listTemplates = async function(req, res) {
               value: template.additional_data
             });
           }
+        }
+        
+        if (template.sounds && typeof template.sounds === 'string') {
+          try {
+            template.sounds = JSON.parse(template.sounds);
+          } catch (err) {
+            logger.error('Error parsing sounds:', {
+              error: err.message,
+              value: template.sounds
+            });
+          }
+        }
+        
+        // Generate R2 URLs for sound assets
+        if (template.sounds && Array.isArray(template.sounds)) {
+          template.sounds = await Promise.all(template.sounds.map(async (sound) => {
+            if (sound.asset_key && sound.asset_bucket) {
+              if (sound.asset_bucket === 'public') {
+                // For public bucket, use direct URL
+                sound.r2_url = `${config.os2.r2.public.bucketUrl}/${sound.asset_key}`;
+              } else {
+                // For private bucket, generate presigned URL
+                try {
+                  sound.r2_url = await storage.generatePresignedDownloadUrl(sound.asset_key, { expiresIn: 3600 });
+                } catch (err) {
+                  logger.error('Error generating presigned URL for sound:', {
+                    error: err.message,
+                    asset_key: sound.asset_key
+                  });
+                }
+              }
+            }
+            return sound;
+          }));
         }
       }));
     }
@@ -118,6 +214,21 @@ exports.searchTemplates = async function(req, res) {
     if (templates.length) {
       const storage = StorageFactory.getProvider();
       
+      // Get video template IDs for batch fetching AE assets
+      const videoTemplateIds = templates
+        .filter(template => template.template_output_type === 'video')
+        .map(template => template.template_id);
+
+      // Batch fetch AE assets for all video templates
+      let aeAssetsMap = {};
+      if (videoTemplateIds.length > 0) {
+        const aeAssetsList = await TemplateModel.getTemplateAeAssetsBatch(videoTemplateIds);
+        aeAssetsMap = aeAssetsList.reduce((map, aeAsset) => {
+          map[aeAsset.template_id] = aeAsset;
+          return map;
+        }, {});
+      }
+      
       await Promise.all(templates.map(async (template) => {
         if (template.cf_r2_key) {
           template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
@@ -125,8 +236,55 @@ exports.searchTemplates = async function(req, res) {
           template.r2_url = template.cf_r2_url;
         }
         
-        // Parse JSON fields if they are strings
-        if (template.faces_needed && typeof template.faces_needed === 'string') {
+        // Parse JSON fields if they are strings and load video clips for video templates
+        if (template.template_output_type === 'video') {
+          // Load video clips for video templates
+          template.clips = await TemplateModel.getTemplateVideoClips(template.template_id);
+          
+          // Generate R2 URLs for video clip assets
+          if (template.clips && template.clips.length > 0) {
+            template.clips = template.clips.map(clip => {
+              // Generate R2 URL for template image asset
+              if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+                clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+              }
+              
+              // Generate R2 URL for video file asset
+              if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+                clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+              }
+              
+              return clip;
+            });
+          }
+
+          // Add AE assets data for video templates
+          const aeAssets = aeAssetsMap[template.template_id];
+          if (aeAssets) {
+            template.ae_assets = {
+              taae_id: aeAssets.taae_id,
+              color_video_bucket: aeAssets.color_video_bucket,
+              color_video_key: aeAssets.color_video_key,
+              mask_video_bucket: aeAssets.mask_video_bucket,
+              mask_video_key: aeAssets.mask_video_key,
+              bodymovin_json_bucket: aeAssets.bodymovin_json_bucket,
+              bodymovin_json_key: aeAssets.bodymovin_json_key,
+              created_at: aeAssets.created_at,
+              updated_at: aeAssets.updated_at
+            };
+
+            // Generate R2 URLs for AE assets
+            if (aeAssets.color_video_key && aeAssets.color_video_bucket) {
+              template.ae_assets.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.color_video_key}`;
+            }
+            if (aeAssets.mask_video_key && aeAssets.mask_video_bucket) {
+              template.ae_assets.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.mask_video_key}`;
+            }
+            if (aeAssets.bodymovin_json_key && aeAssets.bodymovin_json_bucket) {
+              template.ae_assets.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${aeAssets.bodymovin_json_key}`;
+            }
+          }
+        } else if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
           } catch (err) {
@@ -135,6 +293,51 @@ exports.searchTemplates = async function(req, res) {
               value: template.faces_needed
             });
           }
+        }
+
+        if (template.additional_data && typeof template.additional_data === 'string') {
+          try {
+            template.additional_data = JSON.parse(template.additional_data);
+          } catch (err) {
+            logger.error('Error parsing additional_data:', {
+              error: err.message,
+              value: template.additional_data
+            });
+          }
+        }
+        
+        if (template.sounds && typeof template.sounds === 'string') {
+          try {
+            template.sounds = JSON.parse(template.sounds);
+          } catch (err) {
+            logger.error('Error parsing sounds:', {
+              error: err.message,
+              value: template.sounds
+            });
+          }
+        }
+        
+        // Generate R2 URLs for sound assets
+        if (template.sounds && Array.isArray(template.sounds)) {
+          template.sounds = await Promise.all(template.sounds.map(async (sound) => {
+            if (sound.asset_key && sound.asset_bucket) {
+              if (sound.asset_bucket === 'public') {
+                // For public bucket, use direct URL
+                sound.r2_url = `${config.os2.r2.public.bucketUrl}/${sound.asset_key}`;
+              } else {
+                // For private bucket, generate presigned URL
+                try {
+                  sound.r2_url = await storage.generatePresignedDownloadUrl(sound.asset_key, { expiresIn: 3600 });
+                } catch (err) {
+                  logger.error('Error generating presigned URL for sound:', {
+                    error: err.message,
+                    asset_key: sound.asset_key
+                  });
+                }
+              }
+            }
+            return sound;
+          }));
         }
       }));
     }
@@ -158,13 +361,17 @@ exports.searchTemplates = async function(req, res) {
  *
  * @apiBody {String} template_name Template name
  * @apiBody {String} template_code Unique template code
+ * @apiBody {String} template_output_type Template output type (image, video, audio)
+ * @apiBody {String} [template_gender] Template gender (male, female, unisex, couple)
  * @apiBody {String} description Template description
- * @apiBody {String} prompt Template prompt
- * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [prompt] Template prompt (required for image templates)
+ * @apiBody {Object} [faces_needed] Required faces configuration (only for image templates)
  * @apiBody {String} [cf_r2_key] Cloudflare R2 key
  * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
  * @apiBody {Number} [credits=1] Credits required
  * @apiBody {Object} [additional_data] Additional template data
+ * @apiBody {Array} [clips] Video clips array (required for video templates)
+ * @apiBody {Array} [sounds] Audio tracks array (for video templates)
  */
 exports.createTemplate = async function(req, res) {
   try {
@@ -172,7 +379,35 @@ exports.createTemplate = async function(req, res) {
     // Generate UUID for template_id
     templateData.template_id = uuidv4();
 
-    await TemplateModel.createTemplate(templateData);
+    // Generate faces_needed from clips data for video templates
+    if (templateData.template_output_type === 'video' && templateData.clips && templateData.clips.length > 0) {
+      templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+    }
+
+    // Extract AE asset data for video templates
+    let aeAssetData = null;
+    if (templateData.template_output_type === 'video') {
+      const aeFields = ['color_video_bucket', 'color_video_key', 'mask_video_bucket', 'mask_video_key', 'bodymovin_json_bucket', 'bodymovin_json_key'];
+      aeAssetData = {};
+      let hasAeData = false;
+      
+      aeFields.forEach(field => {
+        if (templateData[field] !== undefined) {
+          aeAssetData[field] = templateData[field];
+          delete templateData[field]; // Remove from main template data
+          hasAeData = true;
+        }
+      });
+      
+      if (hasAeData) {
+        aeAssetData.template_id = templateData.template_id;
+        aeAssetData.taae_id = uuidv4();
+      } else {
+        aeAssetData = null;
+      }
+    }
+
+    await TemplateModel.createTemplate(templateData, aeAssetData);
     
     // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
@@ -200,29 +435,164 @@ exports.createTemplate = async function(req, res) {
 };
 
 /**
- * @api {put} /templates/:templateId Update template
+ * Generate faces_needed array from clips data
+ * @param {Array} clips - Array of clip objects
+ * @returns {Array} Array of unique faces needed
+ */
+function generateFacesNeededFromClips(clips) {
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    return [];
+  }
+
+  const facesMap = new Map();
+  
+  clips.forEach((clip, clipIndex) => {
+    if (clip.video_type === 'ai' && clip.characters && Array.isArray(clip.characters) && clip.characters.length > 0) {
+      clip.characters.forEach((character, charIndex) => {
+        if (character.character && 
+            character.character.character_name && 
+            character.character.character_gender && 
+            typeof character.character.character_name === 'string' &&
+            typeof character.character.character_gender === 'string') {
+          
+          const name = character.character.character_name.trim();
+          const gender = character.character.character_gender.toLowerCase().trim();
+          
+          // Skip if empty after trimming
+          if (!name || !gender) {
+            logger.warn('Skipping character with empty name or gender:', {
+              clipIndex,
+              charIndex,
+              name,
+              gender
+            });
+            return;
+          }
+          
+          const key = `${gender}_${name}`;
+          
+          if (!facesMap.has(key)) {
+            facesMap.set(key, {
+              character_name: name,
+              character_gender: gender
+            });
+          }
+        } else {
+          logger.warn('Skipping invalid character data:', {
+            clipIndex,
+            charIndex,
+            character: character.character
+          });
+        }
+      });
+    }
+  });
+  
+  // Convert Map to Array and sort by gender and name for consistency
+  const facesArray = Array.from(facesMap.values());
+  facesArray.sort((a, b) => {
+    if (a.character_gender !== b.character_gender) {
+      return a.character_gender.localeCompare(b.character_gender);
+    }
+    return a.character_name.localeCompare(b.character_name);
+  });
+  
+  logger.info('Generated faces_needed:', {
+    totalClips: clips.length,
+    aiClips: clips.filter(c => c.video_type === 'ai').length,
+    uniqueFaces: facesArray.length,
+    faces: facesArray
+  });
+  
+  return facesArray;
+}
+
+/**
+ * @api {patch} /templates/:templateId Update template
  * @apiVersion 1.0.0
  * @apiName UpdateTemplate
  * @apiGroup Templates
  * @apiPermission JWT
  *
  * @apiParam {String} templateId Template ID
- * @apiBody {String} template_name Template name
- * @apiBody {String} template_code Unique template code
- * @apiBody {String} description Template description
- * @apiBody {String} prompt Template prompt
- * @apiBody {Object} [faces_needed] Required faces configuration
+ * @apiBody {String} [template_name] Template name
+ * @apiBody {String} [template_code] Unique template code
+ * @apiBody {String} [template_output_type] Template output type (image, video, audio)
+ * @apiBody {String} [template_gender] Template gender (male, female, unisex, couple)
+ * @apiBody {String} [description] Template description
+ * @apiBody {String} [prompt] Template prompt
+ * @apiBody {Object} [faces_needed] Required faces configuration (only for image templates)
  * @apiBody {String} [cf_r2_key] Cloudflare R2 key
  * @apiBody {String} [cf_r2_url] Cloudflare R2 URL
  * @apiBody {Number} [credits] Credits required
  * @apiBody {Object} [additional_data] Additional template data
+ * @apiBody {Array} [clips] Video clips array (for video templates)
+ * @apiBody {Array} [sounds] Audio tracks array (for video templates)
  */
 exports.updateTemplate = async function(req, res) {
   try {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
     
-    const updated = await TemplateModel.updateTemplate(templateId, templateData);
+    // Check if template exists and get current template info
+    const existingTemplate = await TemplateModel.getTemplateById(templateId);
+    if (!existingTemplate) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    // Determine if this is a video template with clips
+    const isVideoTemplate = (templateData.template_output_type === 'video') || 
+                           (existingTemplate.template_output_type === 'video' && !templateData.template_output_type);
+    const hasClips = templateData.clips && templateData.clips.length > 0;
+
+    // Handle faces_needed for video templates
+    if (isVideoTemplate) {
+      if (hasClips) {
+        // Generate faces_needed from clips data when clips are provided
+        templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      } else if (templateData.clips !== undefined) {
+        // If clips array is explicitly provided but empty, clear faces_needed
+        templateData.faces_needed = [];
+      }
+      // If clips is undefined, don't modify faces_needed (partial update)
+    } else if (templateData.template_output_type && templateData.template_output_type !== 'video') {
+      // If changing from video to non-video template, clear faces_needed
+      templateData.faces_needed = null;
+    }
+
+    // Extract AE asset data for video templates
+    let aeAssetData = null;
+    if (isVideoTemplate) {
+      const aeFields = ['color_video_bucket', 'color_video_key', 'mask_video_bucket', 'mask_video_key', 'bodymovin_json_bucket', 'bodymovin_json_key'];
+      aeAssetData = {};
+      let hasAeData = false;
+      
+      aeFields.forEach(field => {
+        if (templateData[field] !== undefined) {
+          aeAssetData[field] = templateData[field];
+          delete templateData[field]; // Remove from main template data
+          hasAeData = true;
+        }
+      });
+      
+      if (hasAeData) {
+        aeAssetData.template_id = templateId;
+        aeAssetData.taae_id = uuidv4();
+      } else {
+        aeAssetData = null;
+      }
+    }
+
+    let updated;
+    if (isVideoTemplate && (hasClips || aeAssetData)) {
+      // Use transaction for video template updates with clips or AE assets
+      updated = await TemplateModel.updateTemplateWithClips(templateId, templateData, aeAssetData);
+    } else {
+      // Use regular update for non-video templates or video templates without clips/AE assets
+      updated = await TemplateModel.updateTemplate(templateId, templateData);
+    }
     
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
