@@ -25,7 +25,7 @@ exports.handleAiModelListErrors = function(error, res) {
   return res.status(error.httpStatusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
     message: error.message || i18next.t('ai_model:AI_MODEL_LIST_FAILED')
   });
-};
+}; 
 
 exports.handleAiModelCreateErrors = function(error, res) {
   if (error.code === 'ER_DUP_ENTRY') {
