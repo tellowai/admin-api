@@ -81,8 +81,36 @@ exports.validateCreatePlatform = async function(req, res, next) {
     const schema = Joi.object({
       platform_name: Joi.string().required().min(1).max(100),
       platform_code: Joi.string().required().min(1).max(50),
-      description: Joi.string().optional().allow('').max(65535)
+      description: Joi.string().optional().allow('').max(65535),
+      platform_logo_key: Joi.string().optional().allow(null, '').max(512),
+      platform_logo_bucket: Joi.string().optional().allow(null, '').max(255)
     });
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message
+      });
+    }
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('ai_model:INVALID_AI_MODEL_DATA')
+    });
+  }
+};
+
+exports.validateUpdatePlatform = async function(req, res, next) {
+  try {
+    const schema = Joi.object({
+      platform_name: Joi.string().min(1).max(100),
+      description: Joi.string().optional().allow('', null).max(65535),
+      platform_logo_key: Joi.string().optional().allow(null, '').max(512),
+      platform_logo_bucket: Joi.string().optional().allow(null, '').max(255)
+    }).min(1);
 
     const { error, value } = schema.validate(req.body);
 

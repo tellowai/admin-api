@@ -64,6 +64,8 @@ exports.getPlatformsByIds = async function(platformIds) {
       platform_name,
       platform_code,
       description,
+      platform_logo_key,
+      platform_logo_bucket,
       created_at,
       updated_at
     FROM ai_model_provider_platforms
@@ -104,6 +106,8 @@ exports.getPlatformById = async function(platformId) {
       platform_name,
       platform_code,
       description,
+      platform_logo_key,
+      platform_logo_bucket,
       created_at,
       updated_at
     FROM ai_model_provider_platforms
@@ -216,6 +220,8 @@ exports.listAllPlatforms = async function() {
       platform_name,
       platform_code,
       description,
+      platform_logo_key,
+      platform_logo_bucket,
       created_at,
       updated_at
     FROM ai_model_provider_platforms
@@ -223,4 +229,20 @@ exports.listAllPlatforms = async function() {
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(query, []);
+};
+
+exports.updatePlatform = async function(platformId, updateData) {
+  const setClause = Object.entries(updateData)
+    .map(([key]) => `${key} = ?`)
+    .join(', ');
+
+  const values = [...Object.values(updateData), platformId];
+
+  const query = `
+    UPDATE ai_model_provider_platforms 
+    SET ${setClause}
+    WHERE amp_platform_id = ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, values);
 }; 

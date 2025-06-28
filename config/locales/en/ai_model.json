@@ -13,5 +13,6 @@
   "AI_MODEL_CREATE_FAILED": "Failed to create AI model",
   "AI_MODEL_UPDATE_FAILED": "Failed to update AI model",
   "PLATFORM_CREATED_SUCCESSFULLY": "Platform created successfully",
-  "PLATFORM_CREATE_FAILED": "Failed to create platform"
+  "PLATFORM_CREATE_FAILED": "Failed to create platform",
+  "PLATFORM_UPDATED_SUCCESSFULLY": "Platform updated successfully"
 } 

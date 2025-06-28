@@ -16,7 +16,7 @@ exports.runQueryInMaster = function(query, data) {
                 }
                 reject(finalErrObj);
             } else {
-                const a = connection.query(query, data, function(err, rows) {
+                connection.query(query, data, function(err, rows) {
                     connection.release();
                     if (err) {
                         console.log(err,'err')
@@ -27,7 +27,6 @@ exports.runQueryInMaster = function(query, data) {
                         resolve(rows);
                     }
                 });
-                console.log(a.sql)
             }
         });
     });

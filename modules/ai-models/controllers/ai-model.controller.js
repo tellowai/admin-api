@@ -4,6 +4,8 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const AiModelModel = require('../models/ai-model.model');
 const AiModelErrorHandler = require('../middlewares/ai-model.error.handler');
 const logger = require('../../../config/lib/logger');
+const StorageFactory = require('../../os2/providers/storage.factory');
+const config = require('../../../config/config');
 
 /**
  * @api {get} /ai-models List all AI models
@@ -50,6 +52,25 @@ exports.listAiModels = async function(req, res) {
       acc[platform.amp_platform_id] = platform;
       return acc;
     }, {});
+
+    // Generate presigned URLs for platform logos
+    const storage = StorageFactory.getProvider();
+    await Promise.all(platforms.map(async (platform) => {
+      if (platform.platform_logo_key) {
+        if (platform.platform_logo_bucket === 'public') {
+          platform.platform_logo_url = `${config.os2.r2.public.bucketUrl}/${platform.platform_logo_key}`;
+        } else {
+          try {
+            platform.platform_logo_url = await storage.generatePresignedDownloadUrl(platform.platform_logo_key);
+          } catch (err) {
+            logger.error('Error generating presigned URL for platform logo:', {
+              error: err.message,
+              asset_key: platform.platform_logo_key
+            });
+          }
+        }
+      }
+    }));
 
     // Combine model data with platform details
     const modelsWithPlatforms = aiModels.map(model => ({
@@ -203,6 +224,23 @@ exports.getAiModel = async function(req, res) {
     // Get platform details
     const [platform] = await AiModelModel.getPlatformById(aiModel.amp_platform_id);
 
+    // Generate presigned URL for the platform logo
+    if (platform && platform.platform_logo_key) {
+      const storage = StorageFactory.getProvider();
+      if (platform.platform_logo_bucket === 'public') {
+        platform.platform_logo_url = `${config.os2.r2.public.bucketUrl}/${platform.platform_logo_key}`;
+      } else {
+        try {
+          platform.platform_logo_url = await storage.generatePresignedDownloadUrl(platform.platform_logo_key);
+        } catch (err) {
+          logger.error('Error generating presigned URL for platform logo:', {
+            error: err.message,
+            asset_key: platform.platform_logo_key
+          });
+        }
+      }
+    }
+
     // Parse JSON fields
     const modelWithPlatform = {
       ...aiModel,
@@ -262,12 +300,74 @@ exports.listPlatforms = async function(req, res) {
   try {
     const platforms = await AiModelModel.listAllPlatforms();
 
+    // Get storage provider for presigned URLs
+    if (platforms.length) {
+      const storage = StorageFactory.getProvider();
+      
+      // Generate presigned URLs for thumbnails
+      await Promise.all(platforms.map(async (platform) => {
+        if (platform.platform_logo_key) {
+          if (platform.platform_logo_bucket === 'public') {
+            platform.platform_logo_url = `${config.os2.r2.public.bucketUrl}/${platform.platform_logo_key}`;
+          } else {
+            try {
+              platform.platform_logo_url = await storage.generatePresignedDownloadUrl(platform.platform_logo_key);
+            } catch (err) {
+              logger.error('Error generating presigned URL for platform logo:', {
+                error: err.message,
+                asset_key: platform.platform_logo_key
+              });
+            }
+          }
+        }
+      }));
+    }
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: platforms
     });
 
   } catch (error) {
     logger.error('Error listing platforms:', { error: error.message, stack: error.stack });
+    AiModelErrorHandler.handleAiModelErrors(error, res);
+  }
+};
+
+/**
+ * @api {patch} /ai-models/platforms/:platformId Update an AI model platform
+ * @apiVersion 1.0.0
+ * @apiName UpdatePlatform
+ * @apiGroup AiModels
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} platformId The unique ID of the platform
+ * @apiBody {String} [platform_name] Name of the platform
+ * @apiBody {String} [description] Description of the platform
+ * @apiBody {String} [platform_logo_key] The R2 key for the platform logo
+ * @apiBody {String} [platform_logo_bucket] The R2 bucket for the platform logo
+ */
+exports.updatePlatform = async function(req, res) {
+  try {
+    const platformId = req.params.platformId;
+    const updateData = req.validatedBody;
+
+    // Check if platform exists
+    const [platform] = await AiModelModel.getPlatformById(platformId);
+    if (!platform) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('ai_model:PLATFORM_NOT_FOUND')
+      });
+    }
+
+    await AiModelModel.updatePlatform(platformId, updateData);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      platform_id: platformId,
+      message: req.t('ai_model:PLATFORM_UPDATED_SUCCESSFULLY')
+    });
+
+  } catch (error) {
+    logger.error('Error updating platform:', { error: error.message, stack: error.stack });
     AiModelErrorHandler.handleAiModelErrors(error, res);
   }
 }; 

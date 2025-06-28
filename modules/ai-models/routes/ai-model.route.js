@@ -57,4 +57,13 @@ module.exports = function(app) {
     AiModelValidator.validateCreatePlatform,
     AiModelCtrl.createPlatform
   );
+
+  // Update platform by ID
+  app.route(
+    versionConfig.routePrefix + '/ai-model-platforms/:platformId'
+  ).patch(
+    AuthMiddleware.isAdminUser,
+    AiModelValidator.validateUpdatePlatform,
+    AiModelCtrl.updatePlatform
+  );
 }; 
