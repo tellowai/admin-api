@@ -1,10 +1,15 @@
 {
   "AI_MODEL_LIST_FAILED": "AI मॉडल प्राप्त करने में विफल",
   "AI_MODEL_NOT_FOUND": "AI मॉडल नहीं मिला",
-  "AI_MODEL_TABLE_NOT_FOUND": "AI मॉडल टेबल नहीं मिली",
+  "AI_MODEL_TABLE_NOT_FOUND": "AI मॉडल तालिका नहीं मिली",
   "AI_MODEL_FIELD_ERROR": "AI मॉडल क्वेरी में अमान्य फील्ड",
   "NO_AI_MODELS_FOUND": "कोई AI मॉडल उपलब्ध नहीं",
   "AI_MODEL_OPERATION_FAILED": "AI मॉडल ऑपरेशन विफल",
   "PLATFORM_NOT_FOUND": "AI मॉडल प्लेटफॉर्म नहीं मिला",
-  "INVALID_AI_MODEL_DATA": "अमान्य AI मॉडल डेटा प्रदान किया गया"
+  "INVALID_AI_MODEL_DATA": "अमान्य AI मॉडल डेटा प्रदान किया गया",
+  "AI_MODEL_CREATED_SUCCESSFULLY": "AI मॉडल सफलतापूर्वक बनाया गया",
+  "AI_MODEL_UPDATED_SUCCESSFULLY": "AI मॉडल सफलतापूर्वक अपडेट किया गया",
+  "AI_MODEL_ALREADY_EXISTS": "इस ID के साथ AI मॉडल पहले से मौजूद है",
+  "AI_MODEL_CREATE_FAILED": "AI मॉडल बनाने में विफल",
+  "AI_MODEL_UPDATE_FAILED": "AI मॉडल अपडेट करने में विफल"
 } 

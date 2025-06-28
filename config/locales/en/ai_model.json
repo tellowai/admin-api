@@ -6,5 +6,12 @@
   "NO_AI_MODELS_FOUND": "No AI models available",
   "AI_MODEL_OPERATION_FAILED": "AI model operation failed",
   "PLATFORM_NOT_FOUND": "AI model platform not found",
-  "INVALID_AI_MODEL_DATA": "Invalid AI model data provided"
+  "INVALID_AI_MODEL_DATA": "Invalid AI model data provided",
+  "AI_MODEL_CREATED_SUCCESSFULLY": "AI model created successfully",
+  "AI_MODEL_UPDATED_SUCCESSFULLY": "AI model updated successfully",
+  "AI_MODEL_ALREADY_EXISTS": "AI model with this ID already exists",
+  "AI_MODEL_CREATE_FAILED": "Failed to create AI model",
+  "AI_MODEL_UPDATE_FAILED": "Failed to update AI model",
+  "PLATFORM_CREATED_SUCCESSFULLY": "Platform created successfully",
+  "PLATFORM_CREATE_FAILED": "Failed to create platform"
 } 
