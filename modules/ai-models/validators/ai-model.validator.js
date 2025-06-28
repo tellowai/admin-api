@@ -110,7 +110,7 @@ exports.validateUpdatePlatform = async function(req, res, next) {
       description: Joi.string().optional().allow('', null).max(65535),
       platform_logo_key: Joi.string().optional().allow(null, '').max(512),
       platform_logo_bucket: Joi.string().optional().allow(null, '').max(255)
-    }).min(1);
+    }).min(1).options({ stripUnknown: true });
 
     const { error, value } = schema.validate(req.body);
 
