@@ -444,7 +444,8 @@ function generateFacesNeededFromClips(clips) {
     return [];
   }
 
-  const genderSet = new Set();
+  const facesMap = new Map();
+  let characterCounter = 1;
   
   // Process characters based on template type
   clips.forEach((clip, clipIndex) => {
@@ -454,39 +455,43 @@ function generateFacesNeededFromClips(clips) {
             character.character.character_name && 
             character.character.character_gender) {
           
-          const name = character.character.character_name.trim();
           const gender = character.character.character_gender.toLowerCase().trim();
           
-          // Skip if name or gender is empty after trimming
-          // Or if gender is not male/female
-          if (!name || !gender || !['male', 'female'].includes(gender)) {
-            logger.warn('Skipping character with invalid name or gender:', {
+          // Skip if gender is invalid
+          if (!gender || !['male', 'female'].includes(gender)) {
+            logger.warn('Skipping character with invalid gender:', {
               clipIndex,
               charIndex,
-              name,
               gender,
-              reason: !name ? 'empty name' : !gender ? 'empty gender' : 'invalid gender'
+              reason: !gender ? 'empty gender' : 'invalid gender'
             });
             return;
           }
 
-          genderSet.add(gender);
+          // Create a unique key based on gender
+          const key = gender;
+          
+          // Add to map if not already present
+          if (!facesMap.has(key)) {
+            facesMap.set(key, {
+              character_name: `Character ${characterCounter}`,
+              character_gender: gender
+            });
+            characterCounter++;
+          }
         }
       });
     }
   });
   
-  // Convert Set to Array and sort by gender
-  const facesArray = Array.from(genderSet).map(gender => ({
-    character_gender: gender
-  }));
-  
+  // Convert Map to Array and sort by gender
+  const facesArray = Array.from(facesMap.values());
   facesArray.sort((a, b) => a.character_gender.localeCompare(b.character_gender));
   
   logger.info('Generated faces_needed:', {
     totalClips: clips.length,
     aiClips: clips.filter(c => c.video_type === 'ai').length,
-    uniqueGenders: facesArray.length,
+    uniqueFaces: facesArray.length,
     faces: facesArray,
     maleCount: facesArray.filter(f => f.character_gender === 'male').length,
     femaleCount: facesArray.filter(f => f.character_gender === 'female').length
