@@ -6,6 +6,8 @@ const AiModelErrorHandler = require('../middlewares/ai-model.error.handler');
 const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
+const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const { TOPICS } = require('../../core/constants/kafka.events.config');
 
 /**
  * @api {get} /ai-models List all AI models
@@ -143,6 +145,20 @@ exports.createAiModel = async function(req, res) {
 
     await AiModelModel.createAiModel(modelData);
 
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'AI_MODELS',
+          action_name: 'CREATE_AI_MODEL', 
+          entity_id: modelData.model_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       model_id: modelData.model_id,
       message: req.t('ai_model:AI_MODEL_CREATED_SUCCESSFULLY')
@@ -177,6 +193,7 @@ exports.updateAiModel = async function(req, res) {
   try {
     const modelId = req.params.modelId;
     const updateData = req.validatedBody;
+    const adminId = req.user.userId;
 
     // Check if model exists
     const modelExists = await AiModelModel.checkModelExists(modelId);
@@ -188,6 +205,20 @@ exports.updateAiModel = async function(req, res) {
 
     // Update model
     await AiModelModel.updateAiModel(modelId, updateData);
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'AI_MODELS',
+          action_name: 'UPDATE_AI_MODEL', 
+          entity_id: modelId
+        }
+      }],
+      'create_admin_activity_log'
+    );
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY')
@@ -275,8 +306,23 @@ exports.getAiModel = async function(req, res) {
 exports.createPlatform = async function(req, res) {
   try {
     const platformData = req.validatedBody;
+    const adminId = req.user.userId;
 
     await AiModelModel.createPlatform(platformData);
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'AI_MODEL_PLATFORMS',
+          action_name: 'CREATE_PLATFORM', 
+          entity_id: platformData.platform_code
+        }
+      }],
+      'create_admin_activity_log'
+    );
 
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       platform_code: platformData.platform_code,
@@ -350,6 +396,7 @@ exports.updatePlatform = async function(req, res) {
   try {
     const platformId = req.params.platformId;
     const updateData = req.validatedBody;
+    const adminId = req.user.userId;
 
     // Check if platform exists
     const [platform] = await AiModelModel.getPlatformById(platformId);
@@ -360,6 +407,20 @@ exports.updatePlatform = async function(req, res) {
     }
 
     await AiModelModel.updatePlatform(platformId, updateData);
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'AI_MODEL_PLATFORMS',
+          action_name: 'UPDATE_PLATFORM', 
+          entity_id: platformId.toString()
+        }
+      }],
+      'create_admin_activity_log'
+    );
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       platform_id: platformId,
