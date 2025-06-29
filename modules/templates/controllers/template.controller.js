@@ -445,89 +445,52 @@ function generateFacesNeededFromClips(clips) {
   }
 
   const facesMap = new Map();
-  let hasMale = false;
-  let hasFemale = false;
-  let hasCouple = false;
   
-  // First pass: Identify gender combinations
-  clips.forEach((clip, clipIndex) => {
-    if (clip.video_type === 'ai' && clip.characters && Array.isArray(clip.characters)) {
-      const clipGenders = new Set();
-      
-      clip.characters.forEach(char => {
-        if (char.character?.character_gender) {
-          const gender = char.character.character_gender.toLowerCase().trim();
-          if (gender === 'male' || gender === 'female') {
-            clipGenders.add(gender);
-          } else {
-            logger.warn('Invalid character gender found:', {
-              clipIndex,
-              gender,
-              validGenders: ['male', 'female']
-            });
-          }
-        }
-      });
-
-      // Check if this clip has both male and female
-      if (clipGenders.has('male') && clipGenders.has('female')) {
-        hasCouple = true;
-      } else {
-        if (clipGenders.has('male')) hasMale = true;
-        if (clipGenders.has('female')) hasFemale = true;
-      }
-    }
-  });
-
-  // If we have both individual male and female clips, or a couple clip, it's a couple-based template
-  const isCoupleBased = (hasMale && hasFemale) || hasCouple;
-  
-  // Create a map to track unique characters by name
-  const charactersByName = new Map();
-  
-  // Second pass: Process characters while preserving their original gender
+  // Process characters based on template type
   clips.forEach((clip, clipIndex) => {
     if (clip.video_type === 'ai' && clip.characters && Array.isArray(clip.characters)) {
       clip.characters.forEach((character, charIndex) => {
         if (character.character && 
+            character.character.character_id &&
             character.character.character_name && 
             character.character.character_gender) {
           
+          const id = character.character.character_id;
           const name = character.character.character_name.trim();
           const gender = character.character.character_gender.toLowerCase().trim();
           
-          // Skip if name is empty or gender is not male/female
-          if (!name || !['male', 'female'].includes(gender)) {
-            logger.warn('Skipping character with empty name or invalid gender:', {
+          // Skip if required fields are empty or gender is invalid
+          if (!id || !name || !gender || !['male', 'female'].includes(gender)) {
+            logger.warn('Skipping character with invalid data:', {
               clipIndex,
               charIndex,
+              id,
               name,
               gender,
-              validGenders: ['male', 'female']
+              reason: !id ? 'empty id' : !name ? 'empty name' : !gender ? 'empty gender' : 'invalid gender'
             });
             return;
           }
 
-          // If we've seen this character name before, verify gender matches
-          if (charactersByName.has(name)) {
-            const existingGender = charactersByName.get(name);
-            if (existingGender !== gender) {
-              logger.warn('Character gender mismatch:', {
-                clipIndex,
-                charIndex,
-                name,
-                existingGender,
-                newGender: gender
-              });
-              return;
-            }
-          } else {
-            // First time seeing this character name
-            charactersByName.set(name, gender);
-            facesMap.set(name, {
+          // Use character_id as the unique key
+          if (!facesMap.has(id)) {
+            facesMap.set(id, {
               character_name: name,
               character_gender: gender
             });
+          } else {
+            // If we find the same character ID with different gender, log a warning
+            const existing = facesMap.get(id);
+            if (existing.character_gender !== gender) {
+              logger.warn('Character gender mismatch:', {
+                character_id: id,
+                character_name: name,
+                existing_gender: existing.character_gender,
+                new_gender: gender,
+                clipIndex,
+                charIndex
+              });
+            }
           }
         } else {
           logger.warn('Skipping invalid character data:', {
@@ -554,11 +517,8 @@ function generateFacesNeededFromClips(clips) {
     aiClips: clips.filter(c => c.video_type === 'ai').length,
     uniqueFaces: facesArray.length,
     faces: facesArray,
-    isCoupleBased,
-    hasMale,
-    hasFemale,
-    hasCouple,
-    uniqueCharacterNames: Array.from(charactersByName.keys())
+    maleCount: facesArray.filter(f => f.character_gender === 'male').length,
+    femaleCount: facesArray.filter(f => f.character_gender === 'female').length
   });
   
   return facesArray;
