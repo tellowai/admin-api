@@ -34,6 +34,14 @@ const customInputFieldSchema = Joi.object({
   }).required()
 });
 
+// Custom text input field schema
+const customTextInputFieldSchema = Joi.object({
+  layer_name: Joi.string().required(),
+  user_input_field_name: Joi.string().required(),
+  input_field_type: Joi.string().valid('text', 'long_text', 'date').required(),
+  default_text: Joi.string().allow('', null).optional()
+});
+
 // Video clip schema for create operations
 const videoClipSchema = Joi.object({
   clip_index: Joi.number().integer().min(1).required(),
@@ -178,10 +186,10 @@ const createTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(9).required(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
-  description: Joi.string().allow(null),
-  prompt: Joi.string().when('template_output_type', {
+  description: Joi.string().allow(null, ''),
+  prompt: Joi.string().allow('').when('template_output_type', {
     is: 'image',
-    then: Joi.required(),
+    then: Joi.optional(),
     otherwise: Joi.optional()
   }),
   faces_needed: Joi.array().items(Joi.object().keys({
@@ -246,6 +254,11 @@ const createTemplateSchema = Joi.object().keys({
     is: 'video',
     then: Joi.string().max(512).optional(),
     otherwise: Joi.forbidden()
+  }),
+  custom_text_input_fields: Joi.when('template_output_type', {
+    is: 'video',
+    then: Joi.array().items(customTextInputFieldSchema).optional(),
+    otherwise: Joi.forbidden()
   })
 });
 
@@ -254,8 +267,8 @@ const updateTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(255).optional(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
-  description: Joi.string().allow(null).optional(),
-  prompt: Joi.string().optional(),
+  description: Joi.string().allow(null, '').optional(),
+  prompt: Joi.string().allow('').optional(),
   faces_needed: Joi.array().items(Joi.object().keys({
     character_name: Joi.string().optional(),
     character_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
@@ -281,7 +294,8 @@ const updateTemplateSchema = Joi.object().keys({
   mask_video_bucket: Joi.string().max(255).optional(),
   mask_video_key: Joi.string().max(512).optional(),
   bodymovin_json_bucket: Joi.string().max(255).optional(),
-  bodymovin_json_key: Joi.string().max(512).optional()
+  bodymovin_json_key: Joi.string().max(512).optional(),
+  custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).optional()
 });
 
 exports.createTemplateSchema = createTemplateSchema;

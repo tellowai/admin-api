@@ -87,6 +87,7 @@ exports.listTemplates = async function(req, res) {
               mask_video_key: aeAssets.mask_video_key,
               bodymovin_json_bucket: aeAssets.bodymovin_json_bucket,
               bodymovin_json_key: aeAssets.bodymovin_json_key,
+              custom_text_input_fields: aeAssets.custom_text_input_fields,
               created_at: aeAssets.created_at,
               updated_at: aeAssets.updated_at
             };
@@ -269,6 +270,7 @@ exports.searchTemplates = async function(req, res) {
               mask_video_key: aeAssets.mask_video_key,
               bodymovin_json_bucket: aeAssets.bodymovin_json_bucket,
               bodymovin_json_key: aeAssets.bodymovin_json_key,
+              custom_text_input_fields: aeAssets.custom_text_input_fields,
               created_at: aeAssets.created_at,
               updated_at: aeAssets.updated_at
             };
@@ -387,13 +389,25 @@ exports.createTemplate = async function(req, res) {
     // Extract AE asset data for video templates
     let aeAssetData = null;
     if (templateData.template_output_type === 'video') {
-      const aeFields = ['color_video_bucket', 'color_video_key', 'mask_video_bucket', 'mask_video_key', 'bodymovin_json_bucket', 'bodymovin_json_key'];
+      const aeFields = [
+        'color_video_bucket', 
+        'color_video_key', 
+        'mask_video_bucket', 
+        'mask_video_key', 
+        'bodymovin_json_bucket', 
+        'bodymovin_json_key',
+        'custom_text_input_fields'
+      ];
       aeAssetData = {};
       let hasAeData = false;
       
       aeFields.forEach(field => {
         if (templateData[field] !== undefined) {
-          aeAssetData[field] = templateData[field];
+          if (field === 'custom_text_input_fields') {
+            aeAssetData[field] = JSON.stringify(templateData[field]);
+          } else {
+            aeAssetData[field] = templateData[field];
+          }
           delete templateData[field]; // Remove from main template data
           hasAeData = true;
         }
@@ -558,13 +572,25 @@ exports.updateTemplate = async function(req, res) {
     // Extract AE asset data for video templates
     let aeAssetData = null;
     if (isVideoTemplate) {
-      const aeFields = ['color_video_bucket', 'color_video_key', 'mask_video_bucket', 'mask_video_key', 'bodymovin_json_bucket', 'bodymovin_json_key'];
+      const aeFields = [
+        'color_video_bucket', 
+        'color_video_key', 
+        'mask_video_bucket', 
+        'mask_video_key', 
+        'bodymovin_json_bucket', 
+        'bodymovin_json_key',
+        'custom_text_input_fields'
+      ];
       aeAssetData = {};
       let hasAeData = false;
       
       aeFields.forEach(field => {
         if (templateData[field] !== undefined) {
-          aeAssetData[field] = templateData[field];
+          if (field === 'custom_text_input_fields') {
+            aeAssetData[field] = JSON.stringify(templateData[field]);
+          } else {
+            aeAssetData[field] = templateData[field];
+          }
           delete templateData[field]; // Remove from main template data
           hasAeData = true;
         }

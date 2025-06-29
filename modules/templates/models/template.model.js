@@ -495,6 +495,7 @@ exports.getTemplateAeAssets = async function(templateId) {
       mask_video_key,
       bodymovin_json_bucket,
       bodymovin_json_key,
+      custom_text_input_fields,
       created_at,
       updated_at
     FROM template_ae_assets
@@ -503,6 +504,16 @@ exports.getTemplateAeAssets = async function(templateId) {
   `;
 
   const [aeAssets] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  
+  // Parse JSON fields
+  if (aeAssets && aeAssets.custom_text_input_fields && typeof aeAssets.custom_text_input_fields === 'string') {
+    try {
+      aeAssets.custom_text_input_fields = JSON.parse(aeAssets.custom_text_input_fields);
+    } catch (e) {
+      aeAssets.custom_text_input_fields = null;
+    }
+  }
+  
   return aeAssets;
 };
 
@@ -525,6 +536,7 @@ exports.getTemplateAeAssetsBatch = async function(templateIds) {
       mask_video_key,
       bodymovin_json_bucket,
       bodymovin_json_key,
+      custom_text_input_fields,
       created_at,
       updated_at
     FROM template_ae_assets
@@ -532,7 +544,19 @@ exports.getTemplateAeAssetsBatch = async function(templateIds) {
     AND deleted_at IS NULL
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+  const aeAssets = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+  
+  // Parse JSON fields for each asset
+  return aeAssets.map(asset => {
+    if (asset.custom_text_input_fields && typeof asset.custom_text_input_fields === 'string') {
+      try {
+        asset.custom_text_input_fields = JSON.parse(asset.custom_text_input_fields);
+      } catch (e) {
+        asset.custom_text_input_fields = null;
+      }
+    }
+    return asset;
+  });
 };
 
 /**
