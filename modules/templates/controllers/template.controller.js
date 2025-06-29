@@ -444,78 +444,49 @@ function generateFacesNeededFromClips(clips) {
     return [];
   }
 
-  const facesMap = new Map();
+  const genderSet = new Set();
   
   // Process characters based on template type
   clips.forEach((clip, clipIndex) => {
     if (clip.video_type === 'ai' && clip.characters && Array.isArray(clip.characters)) {
       clip.characters.forEach((character, charIndex) => {
         if (character.character && 
-            character.character.character_id &&
             character.character.character_name && 
             character.character.character_gender) {
           
-          const id = character.character.character_id;
           const name = character.character.character_name.trim();
           const gender = character.character.character_gender.toLowerCase().trim();
           
-          // Skip if required fields are empty or gender is invalid
-          if (!id || !name || !gender || !['male', 'female'].includes(gender)) {
-            logger.warn('Skipping character with invalid data:', {
+          // Skip if name or gender is empty after trimming
+          // Or if gender is not male/female
+          if (!name || !gender || !['male', 'female'].includes(gender)) {
+            logger.warn('Skipping character with invalid name or gender:', {
               clipIndex,
               charIndex,
-              id,
               name,
               gender,
-              reason: !id ? 'empty id' : !name ? 'empty name' : !gender ? 'empty gender' : 'invalid gender'
+              reason: !name ? 'empty name' : !gender ? 'empty gender' : 'invalid gender'
             });
             return;
           }
 
-          // Use character_id as the unique key
-          if (!facesMap.has(id)) {
-            facesMap.set(id, {
-              character_name: name,
-              character_gender: gender
-            });
-          } else {
-            // If we find the same character ID with different gender, log a warning
-            const existing = facesMap.get(id);
-            if (existing.character_gender !== gender) {
-              logger.warn('Character gender mismatch:', {
-                character_id: id,
-                character_name: name,
-                existing_gender: existing.character_gender,
-                new_gender: gender,
-                clipIndex,
-                charIndex
-              });
-            }
-          }
-        } else {
-          logger.warn('Skipping invalid character data:', {
-            clipIndex,
-            charIndex,
-            character: character.character
-          });
+          genderSet.add(gender);
         }
       });
     }
   });
   
-  // Convert Map to Array and sort by gender and name
-  const facesArray = Array.from(facesMap.values());
-  facesArray.sort((a, b) => {
-    if (a.character_gender !== b.character_gender) {
-      return a.character_gender.localeCompare(b.character_gender);
-    }
-    return a.character_name.localeCompare(b.character_name);
-  });
+  // Convert Set to Array and sort by gender
+  const facesArray = Array.from(genderSet).map(gender => ({
+    character_gender: gender
+  }));
+  
+  facesArray.sort((a, b) => a.character_gender.localeCompare(b.character_gender));
   
   logger.info('Generated faces_needed:', {
     totalClips: clips.length,
     aiClips: clips.filter(c => c.video_type === 'ai').length,
-    uniqueFaces: facesArray.length,
+    uniqueGenders: facesArray.length,
     faces: facesArray,
     maleCount: facesArray.filter(f => f.character_gender === 'male').length,
     femaleCount: facesArray.filter(f => f.character_gender === 'female').length
