@@ -2,6 +2,7 @@
 
 const Joi = require('@hapi/joi');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const AiModelModel = require('../models/ai-model.model');
 
 exports.validateCreateAiModel = async function(req, res, next) {
   try {
@@ -46,6 +47,7 @@ exports.validateUpdateAiModel = async function(req, res, next) {
       model_name: Joi.string().min(1).max(100),
       description: Joi.string().allow('').max(65535),
       platform_model_id: Joi.string().min(1).max(100),
+      amp_platform_id: Joi.number().integer(),
       input_types: Joi.array().items(Joi.string()),
       output_types: Joi.array().items(Joi.string()),
       supported_video_qualities: Joi.array().items(Joi.string()).allow(null).when('output_types', {
@@ -65,6 +67,16 @@ exports.validateUpdateAiModel = async function(req, res, next) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
         message: error.details[0].message
       });
+    }
+
+    // If amp_platform_id is provided, verify it exists
+    if (value.amp_platform_id) {
+      const platformExists = await AiModelModel.checkPlatformExists(value.amp_platform_id);
+      if (!platformExists) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: req.t('ai_model:PLATFORM_NOT_FOUND')
+        });
+      }
     }
 
     req.validatedBody = value;
