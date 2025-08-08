@@ -282,6 +282,14 @@ exports.createTemplate = async function(req, res) {
     // Generate faces_needed from clips data for all template types
     if (templateData.clips && templateData.clips.length > 0) {
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      // Auto-derive template_gender if not provided
+      if (!templateData.template_gender) {
+        if (templateData.faces_needed && templateData.faces_needed.length === 2) {
+          templateData.template_gender = 'couple';
+        } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
+          templateData.template_gender = templateData.faces_needed[0].character_gender;
+        }
+      }
     }
 
     // Extract clips data for transaction
@@ -325,63 +333,74 @@ function generateFacesNeededFromClips(clips) {
     return [];
   }
 
-  const facesMap = new Map();
-  let characterCounter = 1;
-  
-  // Process workflows to extract character information
-  clips.forEach((clip, clipIndex) => {
-    if (clip.workflow && Array.isArray(clip.workflow)) {
-      clip.workflow.forEach((workflowStep, stepIndex) => {
-        // Look for character-related workflow steps
-        if (workflowStep.workflow_code && workflowStep.workflow_code.includes('character')) {
-          // Extract character data from workflow step
-          if (workflowStep.data && Array.isArray(workflowStep.data)) {
-            const genderData = workflowStep.data.find(item => item.type === 'gender');
-            if (genderData && genderData.value) {
-              const gender = genderData.value.toLowerCase().trim();
-              
-              // Skip if gender is invalid
-              if (!gender || !['male', 'female'].includes(gender)) {
-                logger.warn('Skipping character with invalid gender:', {
-                  clipIndex,
-                  stepIndex,
-                  gender,
-                  reason: !gender ? 'empty gender' : 'invalid gender'
-                });
-                return;
-              }
+  // Collect genders from any workflow step data items with type 'character_gender' (or legacy 'gender')
+  const gendersSet = new Set();
 
-              // Create a unique key based on gender
-              const key = gender;
-              
-              // Add to map if not already present
-              if (!facesMap.has(key)) {
-                facesMap.set(key, {
-                  character_name: `Character ${characterCounter}`,
-                  character_gender: gender
-                });
-                characterCounter++;
-              }
-            }
+  clips.forEach((clip, clipIndex) => {
+    if (!clip || !Array.isArray(clip.workflow)) return;
+
+    clip.workflow.forEach((workflowStep, stepIndex) => {
+      if (!workflowStep || !Array.isArray(workflowStep.data)) return;
+
+      for (const item of workflowStep.data) {
+        if (!item || !item.type) continue;
+
+        const itemType = String(item.type).toLowerCase().trim();
+        if (itemType === 'character_gender' || itemType === 'gender') {
+          const value = (item.value ?? '').toString().toLowerCase().trim();
+
+          if (!value) {
+            logger.warn('Skipping empty character gender value', { clipIndex, stepIndex });
+            continue;
+          }
+
+          // Normalize and validate
+          if (value === 'male' || value === 'female') {
+            gendersSet.add(value);
+          } else if (value === 'unisex') {
+            gendersSet.add('unisex');
+          } else if (value === 'couple') {
+            // Interpret 'couple' as requiring both male and female faces
+            gendersSet.add('male');
+            gendersSet.add('female');
+          } else {
+            logger.warn('Skipping unsupported character gender', { clipIndex, stepIndex, value });
           }
         }
-      });
+      }
+    });
+  });
+
+  // Decide faces needed: either one face or two faces, and gender male/female/unisex
+  let facesNeeded = [];
+
+  if (gendersSet.size === 0) {
+    facesNeeded = [];
+  } else if (gendersSet.has('unisex')) {
+    facesNeeded = [{ character_name: 'Character 1', character_gender: 'unisex' }];
+  } else {
+    const genders = Array.from(gendersSet).filter(g => g === 'male' || g === 'female');
+
+    if (genders.length === 0) {
+      facesNeeded = [];
+    } else if (genders.length === 1) {
+      facesNeeded = [{ character_name: 'Character 1', character_gender: genders[0] }];
+    } else {
+      // Both male and female present → two faces
+      facesNeeded = [
+        { character_name: 'Character 1', character_gender: 'female' },
+        { character_name: 'Character 2', character_gender: 'male' }
+      ];
     }
-  });
-  
-  // Convert Map to Array and sort by gender
-  const facesArray = Array.from(facesMap.values());
-  facesArray.sort((a, b) => a.character_gender.localeCompare(b.character_gender));
-  
-  logger.info('Generated faces_needed:', {
+  }
+
+  logger.info('Generated faces_needed from clips', {
     totalClips: clips.length,
-    uniqueFaces: facesArray.length,
-    faces: facesArray,
-    maleCount: facesArray.filter(f => f.character_gender === 'male').length,
-    femaleCount: facesArray.filter(f => f.character_gender === 'female').length
+    genders: Array.from(gendersSet),
+    facesNeeded
   });
-  
-  return facesArray;
+
+  return facesNeeded;
 }
 
 /**
@@ -432,6 +451,16 @@ exports.updateTemplate = async function(req, res) {
     if (hasClips) {
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+
+      console.log(templateData.faces_needed,'templateData.faces_needed')
+      // Auto-derive template_gender if not explicitly provided in update
+      if (templateData.template_gender === undefined) {
+        if (templateData.faces_needed && templateData.faces_needed.length === 2) {
+          templateData.template_gender = 'couple';
+        } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
+          templateData.template_gender = templateData.faces_needed[0].character_gender;
+        }
+      }
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
