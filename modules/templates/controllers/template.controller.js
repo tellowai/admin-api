@@ -371,26 +371,27 @@ function generateFacesNeededFromClips(clips) {
     });
   });
 
-  // Decide faces needed: either one face or two faces, and gender male/female/unisex
-  let facesNeeded = [];
+  // Decide faces needed based on distinct character slots required across the template
+  const requireMale = gendersSet.has('male') || gendersSet.has('couple');
+  const requireFemale = gendersSet.has('female') || gendersSet.has('couple');
+  const requireUnisex = gendersSet.has('unisex');
 
-  if (gendersSet.size === 0) {
-    facesNeeded = [];
-  } else if (gendersSet.has('unisex')) {
-    facesNeeded = [{ character_name: 'Character 1', character_gender: 'unisex' }];
-  } else {
-    const genders = Array.from(gendersSet).filter(g => g === 'male' || g === 'female');
+  const facesNeeded = [];
 
-    if (genders.length === 0) {
-      facesNeeded = [];
-    } else if (genders.length === 1) {
-      facesNeeded = [{ character_name: 'Character 1', character_gender: genders[0] }];
+  // Keep a stable order: female, male, unisex
+  if (requireFemale) {
+    facesNeeded.push({ character_name: 'Character 1', character_gender: 'female' });
+  }
+  if (requireMale) {
+    facesNeeded.push({ character_name: `Character ${facesNeeded.length + 1}`, character_gender: 'male' });
+  }
+  if (requireUnisex) {
+    // If neither male nor female is specifically required, a single unisex character is sufficient
+    if (!requireMale && !requireFemale) {
+      facesNeeded.push({ character_name: 'Character 1', character_gender: 'unisex' });
     } else {
-      // Both male and female present → two faces
-      facesNeeded = [
-        { character_name: 'Character 1', character_gender: 'female' },
-        { character_name: 'Character 2', character_gender: 'male' }
-      ];
+      // Otherwise, add an additional flexible slot
+      facesNeeded.push({ character_name: `Character ${facesNeeded.length + 1}`, character_gender: 'unisex' });
     }
   }
 
