@@ -59,6 +59,15 @@ exports.listTemplates = async function(req, res) {
           });
         }
 
+        // Fallback compute of image uploads required if not present or invalid
+        if (
+          template.image_uploads_required === undefined ||
+          template.image_uploads_required === null ||
+          Number.isNaN(Number(template.image_uploads_required))
+        ) {
+          template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
+        }
+
         // Generate R2 URLs for template assets
         if (template.color_video_key && template.color_video_bucket) {
           template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
@@ -188,6 +197,15 @@ exports.searchTemplates = async function(req, res) {
           });
         }
 
+        // Fallback compute of image uploads required if not present or invalid
+        if (
+          template.image_uploads_required === undefined ||
+          template.image_uploads_required === null ||
+          Number.isNaN(Number(template.image_uploads_required))
+        ) {
+          template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
+        }
+
         // Generate R2 URLs for template assets
         if (template.color_video_key && template.color_video_bucket) {
           template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
@@ -282,6 +300,8 @@ exports.createTemplate = async function(req, res) {
     // Generate faces_needed from clips data for all template types
     if (templateData.clips && templateData.clips.length > 0) {
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      // Compute number of user image uploads required from workflow payload
+      templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
       // Auto-derive template_gender if not provided
       if (!templateData.template_gender) {
         if (templateData.faces_needed && templateData.faces_needed.length === 2) {
@@ -405,6 +425,35 @@ function generateFacesNeededFromClips(clips) {
 }
 
 /**
+ * Calculate how many user image uploads are required based on workflow steps
+ * Counts occurrences of a step asking the user to upload an image
+ * Recognizes by workflow_code 'ask_user_to_upload_image' or workflow_id 'user-upload-image'
+ * @param {Array} clips
+ * @returns {number}
+ */
+function calculateImageUploadsRequiredFromClips(clips) {
+  if (!Array.isArray(clips)) return 0;
+
+  let uploads = 0;
+  for (const clip of clips) {
+    if (!clip || !Array.isArray(clip.workflow)) continue;
+    for (const step of clip.workflow) {
+      const workflowCode = (step && step.workflow_code ? String(step.workflow_code) : '').toLowerCase().trim();
+      const workflowId = (step && step.workflow_id ? String(step.workflow_id) : '').toLowerCase().trim();
+
+      const isAskUploadByCode = workflowCode === 'ask_user_to_upload_image' || workflowCode === 'ask-user-to-upload-image' || workflowCode === 'ask_user_upload_image';
+      const isAskUploadById = workflowId === 'user-upload-image' || workflowId === 'user_upload_image';
+
+      if (isAskUploadByCode || isAskUploadById) {
+        uploads += 1;
+      }
+    }
+  }
+
+  return uploads;
+}
+
+/**
  * @api {patch} /templates/:templateId Update template
  * @apiVersion 1.0.0
  * @apiName UpdateTemplate
@@ -452,6 +501,8 @@ exports.updateTemplate = async function(req, res) {
     if (hasClips) {
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      // Recompute uploads required when clips are provided
+      templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
 
       console.log(templateData.faces_needed,'templateData.faces_needed')
       // Auto-derive template_gender if not explicitly provided in update
@@ -465,6 +516,8 @@ exports.updateTemplate = async function(req, res) {
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
+      // and zero out uploads required
+      templateData.image_uploads_required = 0;
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
