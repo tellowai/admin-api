@@ -415,13 +415,23 @@ function generateFacesNeededFromClips(clips) {
     }
   }
 
+  // Attach stable unique ids for each character slot
+  const facesWithIds = facesNeeded.map((face, index) => {
+    const id = uuidv4();
+    return {
+      ...face,
+      template_character_id: id,
+      character_id: id
+    };
+  });
+
   logger.info('Generated faces_needed from clips', {
     totalClips: clips.length,
     genders: Array.from(gendersSet),
-    facesNeeded
+    facesNeeded: facesWithIds
   });
 
-  return facesNeeded;
+  return facesWithIds;
 }
 
 /**
