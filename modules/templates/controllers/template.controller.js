@@ -298,17 +298,56 @@ exports.createTemplate = async function(req, res) {
     // Generate UUID for template_id
     templateData.template_id = uuidv4();
 
-    // Generate faces_needed from clips data for all template types
-    if (templateData.clips && templateData.clips.length > 0) {
-      templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
-      // Compute number of user image uploads required from workflow payload
-      templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
-      // Auto-derive template_gender if not provided
-      if (!templateData.template_gender) {
-        if (templateData.faces_needed && templateData.faces_needed.length === 2) {
-          templateData.template_gender = 'couple';
-        } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
-          templateData.template_gender = templateData.faces_needed[0].character_gender;
+    const resolvedClipsAssetsType = (templateData.template_clips_assets_type || '').toLowerCase();
+
+    if (resolvedClipsAssetsType === 'non-ai') {
+      // Force non-ai templates to have no clips and derive counts from Bodymovin JSON
+      templateData.clips = [];
+      templateData.faces_needed = [];
+
+      try {
+        const key = templateData.bodymovin_json_key;
+        const bucket = templateData.bodymovin_json_bucket;
+
+        if (key && bucket) {
+          const storage = StorageFactory.getProvider();
+          let downloadUrl;
+          if (/^https?:\/\//i.test(key)) {
+            downloadUrl = key;
+          } else {
+            const isPublic = bucket === 'public' || bucket === storage.publicBucket || bucket === (config.os2?.r2?.public?.bucket);
+            downloadUrl = isPublic ? `${config.os2.r2.public.bucketUrl}/${key}` : await storage.generatePresignedDownloadUrl(key);
+          }
+
+          const response = await fetch(downloadUrl);
+          if (response.ok) {
+            const bodymovinJson = await response.json();
+            const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
+            templateData.image_uploads_required = imageCount;
+            templateData.video_uploads_required = videoCount;
+          } else {
+            templateData.image_uploads_required = 0;
+            templateData.video_uploads_required = 0;
+          }
+        } else {
+          templateData.image_uploads_required = 0;
+          templateData.video_uploads_required = 0;
+        }
+      } catch (_err) {
+        templateData.image_uploads_required = 0;
+        templateData.video_uploads_required = 0;
+      }
+    } else {
+      // AI templates: derive from clips
+      if (templateData.clips && templateData.clips.length > 0) {
+        templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+        templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
+        if (!templateData.template_gender) {
+          if (templateData.faces_needed && templateData.faces_needed.length === 2) {
+            templateData.template_gender = 'couple';
+          } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
+            templateData.template_gender = templateData.faces_needed[0].character_gender;
+          }
         }
       }
     }

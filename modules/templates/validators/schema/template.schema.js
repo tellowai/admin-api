@@ -61,8 +61,14 @@ const createTemplateSchema = Joi.object().keys({
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null),
   credits: Joi.number().integer().min(1).default(1),
   additional_data: Joi.object().allow(null),
-  // Clips for both image and video templates
-  clips: Joi.array().items(clipSchema).required().min(1)
+  // Clips are required for 'ai' templates and must be empty for 'non-ai'
+  clips: Joi.array()
+    .items(clipSchema)
+    .when('template_clips_assets_type', {
+      is: 'ai',
+      then: Joi.required().min(1),
+      otherwise: Joi.optional().max(0)
+    })
 });
 
 const updateTemplateSchema = Joi.object().keys({
