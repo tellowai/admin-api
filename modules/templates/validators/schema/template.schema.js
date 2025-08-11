@@ -66,8 +66,8 @@ const createTemplateSchema = Joi.object().keys({
     .items(clipSchema)
     .when('template_clips_assets_type', {
       is: 'ai',
-      then: Joi.required().min(1),
-      otherwise: Joi.optional().max(0)
+      then: Joi.array().items(clipSchema).min(1).required(),
+      otherwise: Joi.array().items(clipSchema).max(0).optional()
     })
 });
 
