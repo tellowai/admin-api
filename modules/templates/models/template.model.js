@@ -352,12 +352,14 @@ exports.deleteTemplateAiClipsInTransaction = async function(connection, template
     const tacIdList = tacIds.map(row => row.tac_id);
     const placeholders = tacIdList.map(() => '?').join(',');
     
-    const deleteWorkflowsQuery = `
-      DELETE FROM clip_workflow
+    const softDeleteWorkflowsQuery = `
+      UPDATE clip_workflow
+      SET deleted_at = NOW()
       WHERE tac_id IN (${placeholders})
+      AND deleted_at IS NULL
     `;
     
-    await connection.query(deleteWorkflowsQuery, tacIdList);
+    await connection.query(softDeleteWorkflowsQuery, tacIdList);
   }
   
   // Then mark clips as deleted
@@ -369,6 +371,46 @@ exports.deleteTemplateAiClipsInTransaction = async function(connection, template
   `;
 
   await connection.query(deleteQuery, [templateId]);
+};
+
+/**
+ * Delete AI clips for a template (non-transactional helper)
+ */
+exports.deleteTemplateAiClips = async function(templateId) {
+  // First get all tac_ids for this template
+  const getTacIdsQuery = `
+    SELECT tac_id
+    FROM template_ai_clips
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  const tacRows = await mysqlQueryRunner.runQueryInMaster(getTacIdsQuery, [templateId]);
+
+  // Delete workflows for all clips
+  if (tacRows && tacRows.length > 0) {
+    const tacIdList = tacRows.map(row => row.tac_id);
+    const placeholders = tacIdList.map(() => '?').join(',');
+
+    const softDeleteWorkflowsQuery = `
+      UPDATE clip_workflow
+      SET deleted_at = NOW()
+      WHERE tac_id IN (${placeholders})
+      AND deleted_at IS NULL
+    `;
+
+    await mysqlQueryRunner.runQueryInMaster(softDeleteWorkflowsQuery, tacIdList);
+  }
+
+  // Then mark clips as deleted
+  const deleteQuery = `
+    UPDATE template_ai_clips
+    SET deleted_at = NOW()
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  await mysqlQueryRunner.runQueryInMaster(deleteQuery, [templateId]);
 };
 
 exports.archiveTemplate = async function(templateId) {
@@ -507,6 +549,7 @@ exports.getClipWorkflow = async function(tacId) {
       updated_at
     FROM clip_workflow
     WHERE tac_id = ?
+    AND deleted_at IS NULL
     ORDER BY cw_id ASC
   `;
 

@@ -10,6 +10,7 @@ const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../../../config/config');
+const fetch = require('node-fetch');
 
 
 /**
@@ -464,6 +465,32 @@ function calculateImageUploadsRequiredFromClips(clips) {
 }
 
 /**
+ * Compute image and video asset counts from a Bodymovin (Lottie) JSON
+ * - Images are typically referenced in `assets` with ids like image_*
+ * - Video layers can be inferred from layers with ty === 9 (Lottie video), if present
+ */
+function computeAssetCountsFromBodymovin(bodymovinJson) {
+  try {
+    const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
+    const layers = Array.isArray(bodymovinJson?.layers) ? bodymovinJson.layers : [];
+
+    // Count images by asset entries that look like images (presence of `p` with common image extension)
+    const imageCount = assets.filter(a => {
+      if (!a || typeof a.id !== 'string' || !a.p) return false;
+      const name = String(a.p).toLowerCase();
+      return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
+    }).length;
+
+    // Lottie spec: video layers are type 9 (rare). If not present, default to 0
+    const videoCount = layers.filter(l => l && Number(l.ty) === 9).length;
+
+    return { imageCount, videoCount };
+  } catch (_e) {
+    return { imageCount: 0, videoCount: 0 };
+  }
+}
+
+/**
  * @api {patch} /templates/:templateId Update template
  * @apiVersion 1.0.0
  * @apiName UpdateTemplate
@@ -505,6 +532,71 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
+    // Resolve final clips assets type for this update
+    const resolvedClipsAssetsType = (templateData.template_clips_assets_type || existingTemplate.template_clips_assets_type || '').toLowerCase();
+    const isNonAi = resolvedClipsAssetsType === 'non-ai';
+    logger.info('UpdateTemplate resolved template_clips_assets_type', { templateId, resolvedClipsAssetsType });
+
+    // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
+    if (isNonAi) {
+      templateData.clips = [];
+      templateData.faces_needed = [];
+
+      // Ensure any previously saved AI clips are deleted
+      try {
+        await TemplateModel.deleteTemplateAiClips(templateId);
+      } catch (cleanupError) {
+        logger.warn('Failed to cleanup AI clips for non-ai template update', { templateId, error: cleanupError.message });
+      }
+
+      // Derive image/video upload counts from Bodymovin JSON if available
+      try {
+        const key = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
+        const bucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
+
+        if (key && bucket) {
+          const storage = StorageFactory.getProvider();
+          let downloadUrl;
+          // If key already looks like a URL, use it as-is
+          if (/^https?:\/\//i.test(key)) {
+            downloadUrl = key;
+          } else {
+            // Treat string literal 'public' as the public bucket selector
+            const isPublic = bucket === 'public' || bucket === storage.publicBucket || bucket === (config.os2?.r2?.public?.bucket);
+            if (isPublic) {
+              downloadUrl = `${config.os2.r2.public.bucketUrl}/${key}`;
+            } else {
+              // Fallback: presign from the default private bucket
+              downloadUrl = await storage.generatePresignedDownloadUrl(key);
+            }
+          }
+
+          logger.info('Fetching Bodymovin JSON for non-ai template', { templateId, bucket, key, downloadUrl });
+          const response = await fetch(downloadUrl);
+          if (response.ok) {
+            const bodymovinJson = await response.json();
+            const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
+            templateData.image_uploads_required = imageCount;
+            templateData.video_uploads_required = videoCount;
+            logger.info('Computed asset counts from Bodymovin', { templateId, imageCount, videoCount });
+          } else {
+            logger.warn('Failed to fetch Bodymovin JSON for non-ai template update', { templateId, key, status: response.status });
+            // Fallback to zero if cannot fetch
+            templateData.image_uploads_required = 0;
+            templateData.video_uploads_required = 0;
+          }
+        } else {
+          // No JSON provided; default to zero
+          templateData.image_uploads_required = 0;
+          templateData.video_uploads_required = 0;
+        }
+      } catch (jsonError) {
+        logger.warn('Error deriving counts from Bodymovin JSON for non-ai template update', { templateId, error: jsonError.message });
+        templateData.image_uploads_required = 0;
+        templateData.video_uploads_required = 0;
+      }
+    }
+
     // Handle faces_needed for all template types
     const hasClips = templateData.clips && templateData.clips.length > 0;
     
@@ -514,7 +606,7 @@ exports.updateTemplate = async function(req, res) {
       // Recompute uploads required when clips are provided
       templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
 
-      console.log(templateData.faces_needed,'templateData.faces_needed')
+      // faces_needed derived from clips; retained for debugging via structured logs if needed
       // Auto-derive template_gender if not explicitly provided in update
       if (templateData.template_gender === undefined) {
         if (templateData.faces_needed && templateData.faces_needed.length === 2) {
@@ -526,11 +618,20 @@ exports.updateTemplate = async function(req, res) {
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
-      // and zero out uploads required
-      templateData.image_uploads_required = 0;
+      // and zero out uploads required unless we are non-ai (counts already derived from JSON)
+      if (!isNonAi) {
+        templateData.image_uploads_required = 0;
+        templateData.video_uploads_required = 0;
+      }
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
+    logger.info('Final uploads required before persist', {
+      templateId,
+      image_uploads_required: templateData.image_uploads_required,
+      video_uploads_required: templateData.video_uploads_required,
+      hasClips
+    });
     let updated;
     if (hasClips) {
       // Use transaction for template updates with clips
