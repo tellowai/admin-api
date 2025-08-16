@@ -26,7 +26,7 @@ const clipSchema = Joi.object({
 const customTextInputFieldSchema = Joi.object({
   layer_name: Joi.string().required(),
   user_input_field_name: Joi.string().required(),
-  input_field_type: Joi.string().valid('text', 'long_text', 'date').required(),
+  input_field_type: Joi.string().valid('text', 'long_text', 'date', 'datetime', 'time').required(),
   default_text: Joi.string().allow('', null).optional()
 });
 
