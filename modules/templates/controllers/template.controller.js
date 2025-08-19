@@ -8,9 +8,28 @@ const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const TEMPLATE_CONSTANTS = require('../constants/template.constants');
 const { v4: uuidv4 } = require('uuid');
 const config = require('../../../config/config');
 const fetch = require('node-fetch');
+const AiModelModel = require('../../ai-models/models/ai-model.model');
+
+// Timeout for fetching Bodymovin JSON (in milliseconds)
+const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
+
+/**
+ * Fetch helper with timeout using AbortController
+ * Aborts the request after timeoutMs and lets caller handle the error
+ */
+async function fetchWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 
 /**
@@ -304,6 +323,8 @@ exports.createTemplate = async function(req, res) {
       // Force non-ai templates to have no clips and derive counts from Bodymovin JSON
       templateData.clips = [];
       templateData.faces_needed = [];
+      // Enforce credits for non-AI templates from constant
+      templateData.credits = TEMPLATE_CONSTANTS.NON_AI_TEMPLATE_CREDITS;
 
       try {
         const key = templateData.bodymovin_json_key;
@@ -319,7 +340,7 @@ exports.createTemplate = async function(req, res) {
             downloadUrl = isPublic ? `${config.os2.r2.public.bucketUrl}/${key}` : await storage.generatePresignedDownloadUrl(key);
           }
 
-          const response = await fetch(downloadUrl);
+          const response = await fetchWithTimeout(downloadUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
           if (response.ok) {
             const bodymovinJson = await response.json();
             const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
@@ -348,6 +369,16 @@ exports.createTemplate = async function(req, res) {
           } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
             templateData.template_gender = templateData.faces_needed[0].character_gender;
           }
+        }
+        // Credits: derive minimum from AI models used
+        const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
+        logger.info('CreditsCalc: create flow derived minimum', { minimumCredits });
+        if (templateData.credits !== undefined) {
+          logger.info('CreditsCalc: validating provided credits (create)', { provided: templateData.credits, minimumCredits });
+          ensureCreditsSatisfyMinimum(templateData.credits, minimumCredits, req.t);
+        } else {
+          templateData.credits = minimumCredits || 1;
+          logger.info('CreditsCalc: assigning credits (create)', { assigned: templateData.credits });
         }
       }
     }
@@ -530,6 +561,153 @@ function computeAssetCountsFromBodymovin(bodymovinJson) {
 }
 
 /**
+ * Extract AI model IDs used across provided clips' workflows
+ */
+function extractAiModelIdsFromClips(clips) {
+  if (!Array.isArray(clips) || clips.length === 0) return [];
+  const modelIds = new Set();
+  for (const clip of clips) {
+    if (!clip || !Array.isArray(clip.workflow)) continue;
+    for (const workflowStep of clip.workflow) {
+      if (!workflowStep || !Array.isArray(workflowStep.data)) continue;
+      for (const dataItem of workflowStep.data) {
+        if (!dataItem || typeof dataItem !== 'object') continue;
+        const itemType = String(dataItem.type || '').toLowerCase();
+        if (itemType === 'ai_model') {
+          const modelId = (dataItem.value ?? '').toString().trim();
+          if (modelId) modelIds.add(modelId);
+        }
+      }
+    }
+  }
+  return Array.from(modelIds);
+}
+
+/**
+ * Calculate a minimum credits value from the AI models used in clips.
+ * v1 rule: 1 credit per unique active model referenced at least once.
+ * This is intentionally simple and can be extended to parse ai_models.costs JSON.
+ */
+async function calculateMinimumCreditsFromClips(clips) {
+  const uniqueModelIds = extractAiModelIdsFromClips(clips);
+  if (uniqueModelIds.length === 0) return 0;
+  logger.info('CreditsCalc: unique model ids extracted', { uniqueModelIds });
+  const aiModels = await AiModelModel.getAiModelsByIds(uniqueModelIds);
+  logger.info('CreditsCalc: loaded ai models', { count: aiModels.length });
+  const activeModels = aiModels.filter(model => (model?.status || '').toLowerCase() !== 'inactive');
+  logger.info('CreditsCalc: active models', { count: activeModels.length, activeModelIds: activeModels.map(m => m.model_id) });
+
+  // Sum minimum USD cost per model based on costs JSON
+  let totalUsd = 0;
+  for (const model of activeModels) {
+    const costs = normalizeCosts(model.costs);
+    const modelUsd = estimateMinimumUsdPerInvocation(costs);
+    logger.info('CreditsCalc: model cost contribution', { modelId: model.model_id, modelUsd, costsPresent: !!costs });
+    totalUsd += modelUsd;
+  }
+
+  // Handle any unknown/missing models not returned from DB (IDs diff)
+  const missingModelIds = uniqueModelIds.filter(id => !aiModels.find(m => m.model_id === id));
+  if (missingModelIds.length > 0) {
+    const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD * missingModelIds.length;
+    logger.warn('CreditsCalc: missing models, applying fallback', { missingModelIds, fallbackUsd });
+    totalUsd += fallbackUsd;
+  }
+
+  // Convert USD to credits; ceil to ensure sufficient credits
+  const credits = Math.ceil(totalUsd / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
+  logger.info('CreditsCalc: total', { totalUsd, usdPerCredit: TEMPLATE_CONSTANTS.USD_PER_CREDIT, credits });
+  return Math.max(1, credits);
+}
+
+function normalizeCosts(costs) {
+  if (!costs) return {};
+  try {
+    return typeof costs === 'string' ? JSON.parse(costs) : costs;
+  } catch (_e) {
+    return {};
+  }
+}
+
+// Heuristic: choose the cheapest available pricing path for a model
+function estimateMinimumUsdPerInvocation(costs) {
+  if (!costs || typeof costs !== 'object') return 0;
+
+  let minUsd = Infinity;
+
+  // Consider input flat costs (e.g., text: 0.02)
+  if (costs.input && typeof costs.input === 'object') {
+    for (const inputType of Object.keys(costs.input)) {
+      const val = costs.input[inputType];
+      // Case A: cost is a flat number
+      if (typeof val === 'number') {
+        minUsd = Math.min(minUsd, val);
+        continue;
+      }
+      // Case B: image input with per_megapixel pricing
+      if (val && typeof val === 'object') {
+        const perMp = Number(val.per_megapixel);
+        if (Number.isFinite(perMp)) {
+          const assumedMp = TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
+          minUsd = Math.min(minUsd, perMp * assumedMp);
+        }
+      }
+    }
+  }
+
+  // Consider output costs: image per_megapixel, video qualities per_segment or per_second
+  if (costs.output && typeof costs.output === 'object') {
+    for (const outputType of Object.keys(costs.output)) {
+      const typeCosts = costs.output[outputType];
+      if (!typeCosts || typeof typeCosts !== 'object') continue;
+      // Image output: per_megapixel
+      if (outputType === 'image' && typeCosts && typeof typeCosts === 'object') {
+        const perMp = Number(typeCosts.per_megapixel);
+        if (Number.isFinite(perMp)) {
+          const assumedMp = TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
+          minUsd = Math.min(minUsd, perMp * assumedMp);
+        }
+      }
+      // Video output: qualities
+      for (const quality of Object.keys(typeCosts)) {
+        const q = typeCosts[quality];
+        if (!q || typeof q !== 'object') continue;
+        const perSegment = q.per_segment && typeof q.per_segment['5s'] === 'number' ? q.per_segment['5s'] : undefined;
+        const perSecond = typeof q.per_second === 'number' ? q.per_second * TEMPLATE_CONSTANTS.DEFAULT_VIDEO_SEGMENT_SECONDS : undefined;
+        const candidate = Math.min(
+          perSegment !== undefined ? perSegment : Infinity,
+          perSecond !== undefined ? perSecond : Infinity
+        );
+        if (Number.isFinite(candidate)) {
+          minUsd = Math.min(minUsd, candidate);
+        }
+      }
+    }
+  }
+
+  if (!Number.isFinite(minUsd)) return 0;
+  return Math.max(0, minUsd);
+}
+
+function ensureCreditsSatisfyMinimum(clientProvidedCredits, minimumCredits, translatorFn) {
+  console.log("===============")
+  console.log(clientProvidedCredits, minimumCredits,'clientProvidedCredits, minimumCredits')
+  console.log("===============")
+  const parsedCredits = Number(clientProvidedCredits);
+  if (!Number.isFinite(parsedCredits) || parsedCredits < minimumCredits) {
+    const message = translatorFn('template:CREDITS_INSUFFICIENT', {
+      minimumCreditsRequired: minimumCredits,
+      providedCredits: Number.isFinite(parsedCredits) ? parsedCredits : 0
+    });
+    const error = new Error(message);
+    error.httpStatusCode = 400;
+    error.code = 'CREDITS_INSUFFICIENT';
+    error.details = { minimumCreditsRequired: minimumCredits, providedCredits: parsedCredits };
+    throw error;
+  }
+}
+
+/**
  * @api {patch} /templates/:templateId Update template
  * @apiVersion 1.0.0
  * @apiName UpdateTemplate
@@ -580,6 +758,8 @@ exports.updateTemplate = async function(req, res) {
     if (isNonAi) {
       templateData.clips = [];
       templateData.faces_needed = [];
+      // Enforce credits for non-AI templates from constant
+      templateData.credits = TEMPLATE_CONSTANTS.NON_AI_TEMPLATE_CREDITS;
 
       // Ensure any previously saved AI clips are deleted
       try {
@@ -611,7 +791,7 @@ exports.updateTemplate = async function(req, res) {
           }
 
           logger.info('Fetching Bodymovin JSON for non-ai template', { templateId, bucket, key, downloadUrl });
-          const response = await fetch(downloadUrl);
+          const response = await fetchWithTimeout(downloadUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
           if (response.ok) {
             const bodymovinJson = await response.json();
             const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
@@ -653,6 +833,17 @@ exports.updateTemplate = async function(req, res) {
         } else if (templateData.faces_needed && templateData.faces_needed.length === 1) {
           templateData.template_gender = templateData.faces_needed[0].character_gender;
         }
+      }
+
+      // Credits: derive minimum from AI models used for updates with clips
+      const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
+      logger.info('CreditsCalc: update flow derived minimum', { minimumCredits });
+      if (templateData.credits !== undefined) {
+        logger.info('CreditsCalc: validating provided credits (update)', { provided: templateData.credits, minimumCredits });
+        ensureCreditsSatisfyMinimum(templateData.credits, minimumCredits, req.t);
+      } else if (existingTemplate && (existingTemplate.credits === undefined || existingTemplate.credits === null)) {
+        templateData.credits = minimumCredits || 1;
+        logger.info('CreditsCalc: assigning credits (update)', { assigned: templateData.credits });
       }
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed

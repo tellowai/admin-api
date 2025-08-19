@@ -8,6 +8,9 @@ process.on('warning', (warning) => {
 });
 
 const config = require("./config/config");
+const dns = require('dns');
+// Prefer IPv4 to avoid environments with broken IPv6 causing ETIMEDOUT on fetch
+try { dns.setDefaultResultOrder('ipv4first'); } catch (_) {}
 const express = require("./config/lib/express");
 const chalk = require("chalk");
 const { initializeKafka } = require("./config/lib/kafka");

@@ -99,6 +99,37 @@ exports.getAiModelById = async function(modelId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [modelId]);
 };
 
+/**
+ * Get multiple AI models by their IDs
+ */
+exports.getAiModelsByIds = async function(modelIds) {
+  if (!Array.isArray(modelIds) || modelIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = modelIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      model_id,
+      amp_platform_id,
+      model_name,
+      description,
+      platform_model_id,
+      input_types,
+      output_types,
+      costs,
+      generation_time_ms,
+      status,
+      created_at,
+      updated_at
+    FROM ai_models
+    WHERE model_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, modelIds);
+};
+
 exports.getPlatformById = async function(platformId) {
   const query = `
     SELECT 
