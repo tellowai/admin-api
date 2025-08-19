@@ -270,4 +270,47 @@ exports.verifyCharacterAccess = async function(characterId, userId) {
   return !!character;
 };
 
+exports.getUsersByEmails = async function(emails) {
+  if (!emails.length) return [];
+  const query = `
+    SELECT user_id, email
+    FROM user
+    WHERE email IN (?)
+    AND deleted_at IS NULL
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [emails]);
+};
+
+exports.getAdminCharactersByIds = async function(characterIds) {
+  if (!characterIds.length) return [];
+  const query = `
+    SELECT 
+      user_character_id,
+      character_name,
+      character_type,
+      character_gender,
+      character_description,
+      trigger_word,
+      thumb_cf_r2_key,
+      thumb_cf_r2_url
+    FROM user_characters
+    WHERE user_character_id IN (?)
+      AND user_id IS NULL AND created_by_admin_id IS NOT NULL
+      AND archived_at IS NULL
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [characterIds]);
+};
+
+exports.bulkCreateUserCharacters = async function(rows) {
+  if (!rows.length) return;
+  const columns = Object.keys(rows[0]);
+  const placeholders = rows.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
+  const values = rows.flatMap(row => columns.map(col => row[col] ?? null));
+  const query = `
+    INSERT INTO user_characters (${columns.join(', ')})
+    VALUES ${placeholders}
+  `;
+  return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
+
 

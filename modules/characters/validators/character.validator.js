@@ -121,3 +121,35 @@ exports.validateUpdateCharacterMobile = async function(req, res, next) {
     });
   }
 }; 
+
+exports.validateAssignCharactersToUsers = async function(req, res, next) {
+  try {
+    const schema = Joi.object({
+      character_ids: Joi.array().items(
+        Joi.string().trim().min(10).max(64)
+      ).min(1).required(),
+      user_emails: Joi.array().items(
+        Joi.string().trim().lowercase().email({ tlds: { allow: false } })
+      ).min(1).required()
+    }).unknown(false);
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message
+      });
+    }
+
+    // De-duplicate inputs to avoid redundant work
+    value.character_ids = Array.from(new Set(value.character_ids));
+    value.user_emails = Array.from(new Set(value.user_emails));
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('character:INVALID_REQUEST_DATA')
+    });
+  }
+};

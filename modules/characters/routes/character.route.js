@@ -37,6 +37,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/characters/users'
+  ).post(
+    AuthMiddleware.isAdminUser,
+    CharacterValidator.validateAssignCharactersToUsers,
+    CharacterCtrl.assignCharactersToUsers
+  );
+
+  app.route(
     versionConfig.routePrefix + '/characters/:characterId'
   ).patch(
     AuthMiddleware.isAdminUser,

@@ -500,3 +500,110 @@ exports.updateCharacterMobile = async function(req, res) {
     CharacterErrorHandler.handleCharacterErrors(error, res);
   }
 }; 
+
+exports.assignCharactersToUsers = async function(req, res) {
+  try {
+    const { character_ids: requestedCharacterIds, user_emails: requestedEmails } = req.validatedBody;
+
+    // 1-3. Resolve users by email, separate missing emails
+    const users = await CharacterModel.getUsersByEmails(requestedEmails);
+    const existingEmailsSet = new Set(users.map(u => u.email.toLowerCase()));
+    const missingEmails = requestedEmails.filter(e => !existingEmailsSet.has(e.toLowerCase()));
+
+    if (!users.length) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        inserted_count: 0,
+        users_count: 0,
+        characters_count: 0,
+        missing_emails: missingEmails
+      });
+    }
+
+    // Validate and fetch admin-created characters only
+    const adminCharacters = await CharacterModel.getAdminCharactersByIds(requestedCharacterIds);
+    if (!adminCharacters.length) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: req.t('character:CHARACTER_NOT_FOUND')
+      });
+    }
+
+    // 4-6. Prepare bulk insert rows (no loops inside query; prepare all rows first)
+    const bulkCharacterRows = [];
+    // Track mapping from source admin character id -> array of new user character ids per user
+    const newCharIdTuples = []; // { src_character_id, new_user_character_id, user_id }
+    for (const user of users) {
+      for (const ch of adminCharacters) {
+        const newCharacterId = createId();
+        bulkCharacterRows.push({
+          user_character_id: newCharacterId,
+          character_name: ch.character_name,
+          character_type: ch.character_type,
+          character_gender: ch.character_gender,
+          character_description: ch.character_description,
+          trigger_word: ch.trigger_word,
+          thumb_cf_r2_key: ch.thumb_cf_r2_key,
+          thumb_cf_r2_url: ch.thumb_cf_r2_url,
+          training_status: 'completed',
+          user_id: user.user_id,
+          created_by_admin_id: null
+        });
+        newCharIdTuples.push({ src_character_id: ch.user_character_id, new_user_character_id: newCharacterId, user_id: user.user_id });
+      }
+    }
+
+    if (!bulkCharacterRows.length) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        inserted_count: 0,
+        users_count: users.length,
+        characters_count: adminCharacters.length,
+        missing_emails: missingEmails
+      });
+    }
+
+    // Fetch admin character media files and clone for each new user character id
+    const adminCharacterIds = adminCharacters.map(c => c.user_character_id);
+    const adminMediaFiles = await CharacterModel.getCharacterMediaFiles(adminCharacterIds);
+    const mediaBySrcCharacter = adminMediaFiles.reduce((acc, m) => {
+      if (!acc[m.user_character_id]) acc[m.user_character_id] = [];
+      acc[m.user_character_id].push(m);
+      return acc;
+    }, {});
+
+    // Build bulk media rows
+    const bulkMediaRows = [];
+    for (const tuple of newCharIdTuples) {
+      const srcMedia = mediaBySrcCharacter[tuple.src_character_id] || [];
+      for (const m of srcMedia) {
+        bulkMediaRows.push({
+          media_id: createId(),
+          user_character_id: tuple.new_user_character_id,
+          user_id: tuple.user_id,
+          created_by_admin_id: null,
+          cf_r2_key: m.cf_r2_key,
+          cf_r2_bucket: m.cf_r2_bucket,
+          cf_r2_url: m.cf_r2_url,
+          tag: m.tag,
+          media_type: m.media_type,
+          is_auto_generated: 0
+        });
+      }
+    }
+
+    await CharacterModel.bulkCreateUserCharacters(bulkCharacterRows);
+    if (bulkMediaRows.length) {
+      await CharacterModel.createMediaFiles(bulkMediaRows);
+    }
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      inserted_count: bulkCharacterRows.length,
+      users_count: users.length,
+      characters_count: adminCharacters.length,
+      missing_emails: missingEmails,
+      message: req.t('character:CHARACTER_CREATED_SUCCESSFULLY')
+    });
+
+  } catch (error) {
+    logger.error('Error assigning characters to users:', { error: error.message, stack: error.stack });
+    CharacterErrorHandler.handleCharacterErrors(error, res);
+  }
+};
