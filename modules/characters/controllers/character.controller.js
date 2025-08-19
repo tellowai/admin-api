@@ -215,6 +215,8 @@ exports.listUserCharacters = async function(req, res) {
         // Generate presigned URL for thumbnail
         if (character.thumb_cf_r2_key) {
           character.thumb_url = await storage.generatePresignedDownloadUrl(character.thumb_cf_r2_key);
+          // Also generate public bucket download URL for thumbnail
+          character.thumb_download_url = await storage.generatePublicBucketPresignedDownloadUrl(character.thumb_cf_r2_key);
         }
         
         // Generate presigned URLs for LoRA files if they exist
@@ -297,6 +299,8 @@ exports.listAllUserCharacters = async function(req, res) {
         // Generate presigned URL for thumbnail
         if (character.thumb_cf_r2_key) {
           character.thumb_url = await storage.generatePresignedDownloadUrl(character.thumb_cf_r2_key);
+          // Also generate public bucket download URL for thumbnail
+          character.thumb_download_url = await storage.generatePublicBucketPresignedDownloadUrl(character.thumb_cf_r2_key);
         }
         
         // Generate presigned URLs for LoRA files if they exist
@@ -306,7 +310,7 @@ exports.listAllUserCharacters = async function(req, res) {
           if (characterMedia.lora_weights) {
             // Use direct URL for public bucket, generate presigned URL for other buckets
             if (characterMedia.lora_weights.cf_r2_bucket === 'public') {
-              characterMedia.lora_weights.download_url = characterMedia.lora_weights.cf_r2_url;
+              characterMedia.lora_weights.download_url = await storage.generatePublicBucketPresignedDownloadUrl(characterMedia.lora_weights.cf_r2_key);
             } else {
               characterMedia.lora_weights.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_weights.cf_r2_key);
             }
@@ -315,7 +319,7 @@ exports.listAllUserCharacters = async function(req, res) {
           if (characterMedia.lora_config) {
             // Use direct URL for public bucket, generate presigned URL for other buckets
             if (characterMedia.lora_config.cf_r2_bucket === 'public') {
-              characterMedia.lora_config.download_url = characterMedia.lora_config.cf_r2_url;
+              characterMedia.lora_config.download_url = await storage.generatePublicBucketPresignedDownloadUrl(characterMedia.lora_config.cf_r2_key);
             } else {
               characterMedia.lora_config.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_config.cf_r2_key);
             }
