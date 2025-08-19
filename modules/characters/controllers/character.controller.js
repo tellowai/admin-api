@@ -594,6 +594,20 @@ exports.assignCharactersToUsers = async function(req, res) {
       await CharacterModel.createMediaFiles(bulkMediaRows);
     }
 
+    // Publish admin activity log
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'CHARACTERS',
+          action_name: 'ASSIGN_CHARACTERS_TO_USERS', 
+          entity_id: adminCharacters[0]?.user_character_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       inserted_count: bulkCharacterRows.length,
       users_count: users.length,
