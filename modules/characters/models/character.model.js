@@ -36,6 +36,27 @@ exports.createMediaFiles = async function(mediaFiles) {
   return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
 
+exports.getCharacterMediaFiles = async function(characterIds) {
+  if (!characterIds.length) return [];
+
+  const query = `
+    SELECT 
+      user_character_id,
+      cf_r2_key,
+      cf_r2_bucket,
+      cf_r2_url,
+      tag,
+      media_type
+    FROM media_files
+    WHERE user_character_id IN (?)
+    AND tag IN ('lora_weights', 'lora_config')
+    AND deleted_at IS NULL
+    ORDER BY user_character_id, tag
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [characterIds]);
+};
+
 exports.listAdminUserCharacters = async function(pagination) {
   const query = `
     SELECT 

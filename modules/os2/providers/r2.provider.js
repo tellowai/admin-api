@@ -83,6 +83,20 @@ class R2StorageProvider extends StorageProvider {
     return url;
   }
 
+  async generatePublicBucketPresignedDownloadUrl(key, options = {}) {
+    const command = new GetObjectCommand({
+      Bucket: this.publicBucket,
+      Key: key
+    });
+
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn || config.os2.download.defaultDownloadExpiresIn,
+      signatureVersion: 'v4'
+    });
+
+    return url;
+  }
+
   async generateEphemeralPresignedDownloadUrl(key, options = {}) {
     const command = new GetObjectCommand({
       Bucket: this.ephemeral.bucket,

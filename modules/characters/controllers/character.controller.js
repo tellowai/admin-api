@@ -189,10 +189,58 @@ exports.listUserCharacters = async function(req, res) {
     if (characters.length) {
       const storage = StorageFactory.getProvider();
       
-      // Generate presigned URLs for thumbnails
+      // Get character IDs to fetch media files
+      const characterIds = characters.map(char => char.user_character_id);
+      
+      // Fetch LoRA weights and config files for all characters
+      const mediaFiles = await CharacterModel.getCharacterMediaFiles(characterIds);
+      
+      // Group media files by character ID
+      const mediaFilesByCharacter = {};
+      mediaFiles.forEach(file => {
+        if (!mediaFilesByCharacter[file.user_character_id]) {
+          mediaFilesByCharacter[file.user_character_id] = {};
+        }
+        mediaFilesByCharacter[file.user_character_id][file.tag] = {
+          cf_r2_key: file.cf_r2_key,
+          cf_r2_bucket: file.cf_r2_bucket,
+          cf_r2_url: file.cf_r2_url,
+          media_type: file.media_type,
+          download_url: null // Will be populated with presigned URL
+        };
+      });
+      
+      // Generate presigned URLs for thumbnails and media files
       await Promise.all(characters.map(async (character) => {
+        // Generate presigned URL for thumbnail
         if (character.thumb_cf_r2_key) {
           character.thumb_url = await storage.generatePresignedDownloadUrl(character.thumb_cf_r2_key);
+        }
+        
+        // Generate presigned URLs for LoRA files if they exist
+        if (mediaFilesByCharacter[character.user_character_id]) {
+          const characterMedia = mediaFilesByCharacter[character.user_character_id];
+          
+          if (characterMedia.lora_weights) {
+            // Use direct URL for public bucket, generate presigned URL for other buckets
+            if (characterMedia.lora_weights.cf_r2_bucket === 'public') {
+              characterMedia.lora_weights.download_url = await storage.generatePublicBucketPresignedDownloadUrl(characterMedia.lora_weights.cf_r2_key);
+            } else {
+              characterMedia.lora_weights.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_weights.cf_r2_key);
+            }
+          }
+          
+          if (characterMedia.lora_config) {
+            // Use direct URL for public bucket, generate presigned URL for other buckets
+            if (characterMedia.lora_config.cf_r2_bucket === 'public') {
+              characterMedia.lora_config.download_url = await storage.generatePublicBucketPresignedDownloadUrl(characterMedia.lora_config.cf_r2_key);
+            } else {
+              characterMedia.lora_config.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_config.cf_r2_key);
+            }
+          }
+          
+          // Add media files to character response
+          character.media_files = characterMedia;
         }
       }));
     }
@@ -223,10 +271,58 @@ exports.listAllUserCharacters = async function(req, res) {
     if (characters.length) {
       const storage = StorageFactory.getProvider();
       
-      // Generate presigned URLs for thumbnails
+      // Get character IDs to fetch media files
+      const characterIds = characters.map(char => char.user_character_id);
+      
+      // Fetch LoRA weights and config files for all characters
+      const mediaFiles = await CharacterModel.getCharacterMediaFiles(characterIds);
+      
+      // Group media files by character ID
+      const mediaFilesByCharacter = {};
+      mediaFiles.forEach(file => {
+        if (!mediaFilesByCharacter[file.user_character_id]) {
+          mediaFilesByCharacter[file.user_character_id] = {};
+        }
+        mediaFilesByCharacter[file.user_character_id][file.tag] = {
+          cf_r2_key: file.cf_r2_key,
+          cf_r2_bucket: file.cf_r2_bucket,
+          cf_r2_url: file.cf_r2_url,
+          media_type: file.media_type,
+          download_url: null // Will be populated with presigned URL
+        };
+      });
+      
+      // Generate presigned URLs for thumbnails and media files
       await Promise.all(characters.map(async (character) => {
+        // Generate presigned URL for thumbnail
         if (character.thumb_cf_r2_key) {
           character.thumb_url = await storage.generatePresignedDownloadUrl(character.thumb_cf_r2_key);
+        }
+        
+        // Generate presigned URLs for LoRA files if they exist
+        if (mediaFilesByCharacter[character.user_character_id]) {
+          const characterMedia = mediaFilesByCharacter[character.user_character_id];
+          
+          if (characterMedia.lora_weights) {
+            // Use direct URL for public bucket, generate presigned URL for other buckets
+            if (characterMedia.lora_weights.cf_r2_bucket === 'public') {
+              characterMedia.lora_weights.download_url = characterMedia.lora_weights.cf_r2_url;
+            } else {
+              characterMedia.lora_weights.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_weights.cf_r2_key);
+            }
+          }
+          
+          if (characterMedia.lora_config) {
+            // Use direct URL for public bucket, generate presigned URL for other buckets
+            if (characterMedia.lora_config.cf_r2_bucket === 'public') {
+              characterMedia.lora_config.download_url = characterMedia.lora_config.cf_r2_url;
+            } else {
+              characterMedia.lora_config.download_url = await storage.generatePresignedDownloadUrl(characterMedia.lora_config.cf_r2_key);
+            }
+          }
+          
+          // Add media files to character response
+          character.media_files = characterMedia;
         }
       }));
     }
