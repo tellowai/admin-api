@@ -372,13 +372,10 @@ exports.createTemplate = async function(req, res) {
         }
         // Credits: derive minimum from AI models used
         const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
-        logger.info('CreditsCalc: create flow derived minimum', { minimumCredits });
         if (templateData.credits !== undefined) {
-          logger.info('CreditsCalc: validating provided credits (create)', { provided: templateData.credits, minimumCredits });
           ensureCreditsSatisfyMinimum(templateData.credits, minimumCredits, req.t);
         } else {
           templateData.credits = minimumCredits || 1;
-          logger.info('CreditsCalc: assigning credits (create)', { assigned: templateData.credits });
         }
       }
     }
@@ -591,18 +588,14 @@ function extractAiModelIdsFromClips(clips) {
 async function calculateMinimumCreditsFromClips(clips) {
   const uniqueModelIds = extractAiModelIdsFromClips(clips);
   if (uniqueModelIds.length === 0) return 0;
-  logger.info('CreditsCalc: unique model ids extracted', { uniqueModelIds });
   const aiModels = await AiModelModel.getAiModelsByIds(uniqueModelIds);
-  logger.info('CreditsCalc: loaded ai models', { count: aiModels.length });
   const activeModels = aiModels.filter(model => (model?.status || '').toLowerCase() !== 'inactive');
-  logger.info('CreditsCalc: active models', { count: activeModels.length, activeModelIds: activeModels.map(m => m.model_id) });
 
   // Sum minimum USD cost per model based on costs JSON
   let totalUsd = 0;
   for (const model of activeModels) {
     const costs = normalizeCosts(model.costs);
     const modelUsd = estimateMinimumUsdPerInvocation(costs);
-    logger.info('CreditsCalc: model cost contribution', { modelId: model.model_id, modelUsd, costsPresent: !!costs });
     totalUsd += modelUsd;
   }
 
@@ -610,13 +603,11 @@ async function calculateMinimumCreditsFromClips(clips) {
   const missingModelIds = uniqueModelIds.filter(id => !aiModels.find(m => m.model_id === id));
   if (missingModelIds.length > 0) {
     const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD * missingModelIds.length;
-    logger.warn('CreditsCalc: missing models, applying fallback', { missingModelIds, fallbackUsd });
     totalUsd += fallbackUsd;
   }
 
   // Convert USD to credits; ceil to ensure sufficient credits
   const credits = Math.ceil(totalUsd / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
-  logger.info('CreditsCalc: total', { totalUsd, usdPerCredit: TEMPLATE_CONSTANTS.USD_PER_CREDIT, credits });
   return Math.max(1, credits);
 }
 
