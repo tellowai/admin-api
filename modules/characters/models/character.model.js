@@ -16,6 +16,26 @@ exports.createUserCharacter = async function(characterData) {
   return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
 
+exports.createMediaFiles = async function(mediaFiles) {
+  if (!mediaFiles.length) return;
+
+  const columns = Object.keys(mediaFiles[0]);
+  const placeholders = mediaFiles.map(() => 
+    `(${columns.map(() => '?').join(', ')})`
+  ).join(', ');
+  
+  const values = mediaFiles.flatMap(file => 
+    Object.values(file).map(val => val === undefined ? null : val)
+  );
+
+  const query = `
+    INSERT INTO media_files (${columns.join(', ')}) 
+    VALUES ${placeholders}
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
+
 exports.listAdminUserCharacters = async function(pagination) {
   const query = `
     SELECT 

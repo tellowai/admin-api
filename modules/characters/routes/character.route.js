@@ -29,6 +29,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/characters/manual'
+  ).post(
+    AuthMiddleware.isAdminUser,
+    CharacterValidator.validateCreateManualCharacter,
+    CharacterCtrl.createManualCharacter
+  );
+
+  app.route(
     versionConfig.routePrefix + '/characters/:characterId'
   ).patch(
     AuthMiddleware.isAdminUser,

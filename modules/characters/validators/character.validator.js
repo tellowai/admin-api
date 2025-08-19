@@ -36,6 +36,42 @@ exports.validateCreateUserCharacter = async function(req, res, next) {
   }
 };
 
+exports.validateCreateManualCharacter = async function(req, res, next) {
+  try {
+    const schema = Joi.object({
+      character_name: Joi.string().required().min(1).max(255).regex(/^[a-zA-Z0-9 ]+$/),
+      character_type: Joi.string().valid('individual', 'couple').required(),
+      character_gender: Joi.string().valid('male', 'female', 'non-binary', 'other', 'couple').required(),
+      character_description: Joi.string().optional().allow(null, '').max(255),
+      trigger_word: Joi.string().required().min(1).max(255).regex(/^[a-zA-Z0-9_]+$/),
+      thumb_cf_r2_bucket: Joi.string().required().max(255),
+      thumb_cf_r2_key: Joi.string().required().max(512),
+      thumb_cf_r2_url: Joi.string().required().max(1000),
+      lora_weights_bucket: Joi.string().required().max(255),
+      lora_weights_key: Joi.string().required().max(512),
+      lora_weights_url: Joi.string().required().max(1000),
+      lora_config_bucket: Joi.string().required().max(255),
+      lora_config_key: Joi.string().required().max(512),
+      lora_config_url: Joi.string().required().max(1000)
+    }).unknown(false);
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message
+      });
+    }
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('character:INVALID_REQUEST_DATA')
+    });
+  }
+};
+
 exports.validateUpdateUserCharacter = async function(req, res, next) {
   try {
     const schema = Joi.object({

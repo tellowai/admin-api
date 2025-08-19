@@ -77,6 +77,99 @@ exports.createUserCharacter = async function(req, res) {
   }
 };
 
+exports.createManualCharacter = async function(req, res) {
+  try {
+    let characterData = req.validatedBody;
+    const adminId = req.user.userId;
+
+    characterData.user_character_id = createId();
+    
+    // Set user_id to NULL and created_by_admin_id to adminId for admin-created characters
+    characterData.user_id = null;
+    characterData.created_by_admin_id = adminId;
+
+    // Ensure trigger_word is lowercase
+    characterData.trigger_word = characterData.trigger_word.toLowerCase();
+
+    // Handle couple type gender
+    if(characterData.character_type && characterData.character_type == 'couple') {
+      characterData.character_gender = 'couple';
+    }
+
+    // Clean characterData to only include fields that exist in user_characters table
+    const cleanCharacterData = {
+      user_character_id: characterData.user_character_id,
+      character_name: characterData.character_name,
+      character_type: characterData.character_type,
+      character_gender: characterData.character_gender,
+      character_description: characterData.character_description,
+      trigger_word: characterData.trigger_word,
+      thumb_cf_r2_key: characterData.thumb_cf_r2_key,
+      thumb_cf_r2_url: characterData.thumb_cf_r2_url,
+      user_id: characterData.user_id,
+      created_by_admin_id: characterData.created_by_admin_id,
+      training_status: 'completed'
+    };
+
+    // Create character in user_characters table (includes thumb_cf_r2_key and thumb_cf_r2_url)
+    await CharacterModel.createUserCharacter(cleanCharacterData);
+
+    // Prepare media files data for insertion (only lora weights and config, not thumbnail)
+    const mediaFiles = [
+      {
+        media_id: createId(),
+        user_character_id: characterData.user_character_id,
+        user_id: null,
+        created_by_admin_id: adminId,
+        cf_r2_key: characterData.lora_weights_key,
+        cf_r2_bucket: characterData.lora_weights_bucket,
+        cf_r2_url: characterData.lora_weights_url,
+        tag: 'lora_weights',
+        media_type: 'safetensors',
+        is_auto_generated: 0
+      },
+      {
+        media_id: createId(),
+        user_character_id: characterData.user_character_id,
+        user_id: null,
+        created_by_admin_id: adminId,
+        cf_r2_key: characterData.lora_config_key,
+        cf_r2_bucket: characterData.lora_config_bucket,
+        cf_r2_url: characterData.lora_config_url,
+        tag: 'lora_config',
+        media_type: 'json',
+        is_auto_generated: 0
+      }
+    ];
+
+    // Insert media files
+    await CharacterModel.createMediaFiles(mediaFiles);
+
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'CHARACTERS',
+          action_name: 'CREATE_MANUAL_CHARACTER', 
+          entity_id: characterData.user_character_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      user_character_id: characterData.user_character_id,
+      message: req.t('character:CHARACTER_CREATED_SUCCESSFULLY')
+    });
+
+  } catch (error) {
+    logger.error('Error creating manual character:', { error: error.message, stack: error.stack });
+    CharacterErrorHandler.handleCharacterErrors(error, res);
+  }
+};
+
 /**
  * @api {get} /characters List all characters
  * @apiVersion 1.0.0
