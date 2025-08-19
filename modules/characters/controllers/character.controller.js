@@ -602,7 +602,15 @@ exports.assignCharactersToUsers = async function(req, res) {
           admin_user_id: req.user.userId,
           entity_type: 'CHARACTERS',
           action_name: 'ASSIGN_CHARACTERS_TO_USERS', 
-          entity_id: adminCharacters[0]?.user_character_id
+          entity_id: adminCharacters[0]?.user_character_id,
+          additional_data: JSON.stringify({
+            character_ids: requestedCharacterIds,
+            user_emails: requestedEmails,
+            missing_emails: missingEmails,
+            users_count: users.length,
+            characters_count: adminCharacters.length,
+            inserted_count: bulkCharacterRows.length
+          })
         }
       }],
       'create_admin_activity_log'
