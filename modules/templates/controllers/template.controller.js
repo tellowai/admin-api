@@ -74,6 +74,21 @@ exports.listTemplates = async function(req, res) {
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
             }
+
+            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
+            if (Array.isArray(clip.workflow)) {
+              clip.workflow = clip.workflow.map(step => {
+                if (!step || !Array.isArray(step.data)) return step;
+                step.data = step.data.map(item => {
+                  const itemType = String(item?.type || '').toLowerCase();
+                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+                  }
+                  return item;
+                });
+                return step;
+              });
+            }
             
             return clip;
           });
@@ -211,6 +226,21 @@ exports.searchTemplates = async function(req, res) {
             // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+            }
+
+            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
+            if (Array.isArray(clip.workflow)) {
+              clip.workflow = clip.workflow.map(step => {
+                if (!step || !Array.isArray(step.data)) return step;
+                step.data = step.data.map(item => {
+                  const itemType = String(item?.type || '').toLowerCase();
+                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+                  }
+                  return item;
+                });
+                return step;
+              });
             }
             
             return clip;
