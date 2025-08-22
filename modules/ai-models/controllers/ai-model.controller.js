@@ -8,6 +8,8 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
+const PaginationCtrl = require('../../core/controllers/pagination.controller');
+const AiModelTagModel = require('../models/ai-model.tag.model');
 
 /**
  * @api {get} /ai-models List all AI models
@@ -24,6 +26,8 @@ const { TOPICS } = require('../../core/constants/kafka.events.config');
  * @apiQuery {String} [input_types] Alternative to input_type (same functionality)
  * @apiQuery {String} [output_type] Filter by output type (e.g., "image", "video", "image,video")
  * @apiQuery {String} [output_types] Alternative to output_type (same functionality)
+ * @apiQuery {Number} [page=1] Page number
+ * @apiQuery {Number} [limit=10] Items per page
  */
 exports.listAiModels = async function(req, res) {
   try {
@@ -36,8 +40,11 @@ exports.listAiModels = async function(req, res) {
       output_types: outputTypeParam ? outputTypeParam.split(',').map(type => type.trim()) : null
     };
 
-    // Get AI models with search filters
-    const aiModels = await AiModelModel.listAllAiModels(searchParams);
+    // Get pagination parameters
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+
+    // Get AI models with search filters and pagination
+    const { models: aiModels } = await AiModelModel.listAllAiModels(searchParams, paginationParams);
     
     if (!aiModels.length) {
       return res.status(HTTP_STATUS_CODES.OK).json({
@@ -83,6 +90,86 @@ exports.listAiModels = async function(req, res) {
       costs: model.costs ? (typeof model.costs === 'string' ? JSON.parse(model.costs) : model.costs) : null
     }));
 
+    // Get tags for all models
+    const AiModelTagModel = require('../models/ai-model.tag.model');
+    
+    try {
+      // First, get all tag associations for all models
+      const allTagAssociations = await Promise.all(
+        modelsWithPlatforms.map(async (model) => {
+          try {
+            const tagAssociations = await AiModelModel.getAiModelTags(model.model_id);
+            return { modelId: model.model_id, tagAssociations };
+          } catch (err) {
+            logger.error('Error fetching tag associations for model:', {
+              error: err.message,
+              model_id: model.model_id
+            });
+            return { modelId: model.model_id, tagAssociations: [] };
+          }
+        })
+      );
+      
+      // Collect all unique tag IDs
+      const allTagIds = [...new Set(
+        allTagAssociations
+          .flatMap(item => item.tagAssociations)
+          .map(tag => tag.amtd_id)
+          .filter(id => id) // Filter out any null/undefined IDs
+      )];
+      
+      logger.info('Tag fetching info:', {
+        total_models: modelsWithPlatforms.length,
+        models_with_tags: allTagAssociations.filter(item => item.tagAssociations.length > 0).length,
+        unique_tag_ids: allTagIds.length,
+        tag_ids: allTagIds
+      });
+      
+      // Fetch all tag definitions in one query
+      let allTagDefinitions = [];
+      if (allTagIds.length > 0) {
+        allTagDefinitions = await AiModelTagModel.getTagDefinitionsByIds(allTagIds);
+        logger.info('Tag definitions fetched:', {
+          requested_count: allTagIds.length,
+          actual_fetched: allTagDefinitions.length
+        });
+      }
+      
+      // Create a lookup map for tag definitions
+      const tagDefinitionsMap = allTagDefinitions.reduce((acc, tag) => {
+        acc[tag.amtd_id] = tag;
+        return acc;
+      }, {});
+      
+      // Stitch tags to models
+      modelsWithPlatforms.forEach((model) => {
+        const modelTagAssociations = allTagAssociations.find(item => item.modelId === model.model_id);
+        if (modelTagAssociations && modelTagAssociations.tagAssociations.length > 0) {
+          model.tags = modelTagAssociations.tagAssociations
+            .map(tag => tagDefinitionsMap[tag.amtd_id])
+            .filter(tag => tag); // Filter out any undefined tags
+          
+          logger.debug('Tags stitched for model:', {
+            model_id: model.model_id,
+            tag_count: model.tags.length,
+            tags: model.tags.map(t => ({ id: t.amtd_id, name: t.tag_name, code: t.tag_code }))
+          });
+        } else {
+          model.tags = [];
+        }
+      });
+      
+    } catch (error) {
+      logger.error('Error fetching or stitching tags for AI models:', {
+        error: error.message,
+        stack: error.stack
+      });
+      // Set empty tags for all models if tag fetching fails
+      modelsWithPlatforms.forEach(model => {
+        model.tags = [];
+      });
+    }
+
     // Explicitly re-sort by created_at descending to guarantee order after manipulations
     modelsWithPlatforms.sort((a, b) => {
       const dateComparison = new Date(b.created_at) - new Date(a.created_at);
@@ -121,11 +208,16 @@ exports.listAiModels = async function(req, res) {
  * @apiBody {Object} [costs] Cost information for the model
  * @apiBody {Number} [generation_time_ms] Average generation time in milliseconds
  * @apiBody {String} [status] Status of the model (active, inactive, disabled)
+ * @apiBody {Number[]} [tags] Array of tag definition IDs to associate with the model
  */
 exports.createAiModel = async function(req, res) {
   try {
     const modelData = req.validatedBody;
     const adminId = req.user.userId;
+    
+    // Extract tags from model data
+    const tags = modelData.tags || [];
+    delete modelData.tags; // Remove tags from model data as it's not a column in ai_models table
 
     // Check if model_id already exists
     const modelExists = await AiModelModel.checkModelIdExists(modelData.model_id);
@@ -143,7 +235,15 @@ exports.createAiModel = async function(req, res) {
       });
     }
 
+    // Create the AI model
     await AiModelModel.createAiModel(modelData);
+
+    // Create tag associations if tags are provided
+    if (tags.length > 0) {
+      for (const tagId of tags) {
+        await AiModelModel.createAiModelTag(modelData.model_id, tagId);
+      }
+    }
 
     // Publish activity log command
     await kafkaCtrl.sendMessage(
@@ -161,7 +261,8 @@ exports.createAiModel = async function(req, res) {
 
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       model_id: modelData.model_id,
-      message: req.t('ai_model:AI_MODEL_CREATED_SUCCESSFULLY')
+      message: req.t('ai_model:AI_MODEL_CREATED_SUCCESSFULLY'),
+      tags_added: tags.length
     });
 
   } catch (error) {
@@ -188,12 +289,31 @@ exports.createAiModel = async function(req, res) {
  * @apiBody {Object} [costs] Cost information for the model
  * @apiBody {Number} [generation_time_ms] Average generation time in milliseconds
  * @apiBody {String} [status] Status of the model (active, inactive, disabled)
+ * @apiBody {Number[]} [tags] Array of tag definition IDs to associate with the model
  */
 exports.updateAiModel = async function(req, res) {
   try {
     const modelId = req.params.modelId;
     const updateData = req.validatedBody;
     const adminId = req.user.userId;
+
+    logger.info('Update AI model request:', {
+      model_id: modelId,
+      update_data: updateData,
+      has_tags: 'tags' in updateData,
+      tags_value: updateData.tags
+    });
+
+    // Extract tags from update data
+    const tags = updateData.tags;
+    delete updateData.tags; // Remove tags from update data as it's not a column in ai_models table
+
+    logger.info('Tags extracted:', {
+      tags: tags,
+      tags_undefined: tags === undefined,
+      tags_null: tags === null,
+      tags_length: Array.isArray(tags) ? tags.length : 'not_array'
+    });
 
     // Check if model exists
     const modelExists = await AiModelModel.checkModelExists(modelId);
@@ -203,8 +323,28 @@ exports.updateAiModel = async function(req, res) {
       });
     }
 
-    // Update model
-    await AiModelModel.updateAiModel(modelId, updateData);
+    // Update model if there are fields to update
+    if (Object.keys(updateData).length > 0) {
+      await AiModelModel.updateAiModel(modelId, updateData);
+    }
+
+    // Update tags if provided
+    let tagUpdateResult = null;
+    if (tags !== undefined) {
+      logger.info('Updating tags for model:', {
+        model_id: modelId,
+        tags: tags
+      });
+      
+      tagUpdateResult = await AiModelModel.updateAiModelTags(modelId, tags);
+      
+      logger.info('Tag update result:', {
+        model_id: modelId,
+        result: tagUpdateResult
+      });
+    } else {
+      logger.info('No tags provided for update, skipping tag update');
+    }
 
     // Publish activity log command
     await kafkaCtrl.sendMessage(
@@ -220,9 +360,22 @@ exports.updateAiModel = async function(req, res) {
       'create_admin_activity_log'
     );
 
-    return res.status(HTTP_STATUS_CODES.OK).json({
+    const response = {
       message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY')
+    };
+
+    // Add tag update information if tags were updated
+    if (tagUpdateResult) {
+      response.tags_added = tagUpdateResult.added.length;
+      response.tags_removed = tagUpdateResult.removed.length;
+    }
+
+    logger.info('Update AI model response:', {
+      model_id: modelId,
+      response: response
     });
+
+    return res.status(HTTP_STATUS_CODES.OK).json(response);
 
   } catch (error) {
     logger.error('Error updating AI model:', { error: error.message, stack: error.stack });
@@ -272,10 +425,37 @@ exports.getAiModel = async function(req, res) {
       }
     }
 
+    // Get tags for this model
+    const tagAssociations = await AiModelModel.getAiModelTags(modelId);
+    let tags = [];
+    
+    if (tagAssociations.length > 0) {
+      try {
+        const tagIds = tagAssociations.map(tag => tag.amtd_id).filter(id => id);
+        if (tagIds.length > 0) {
+          tags = await AiModelTagModel.getTagDefinitionsByIds(tagIds);
+          
+          logger.debug('Tags fetched for model:', {
+            model_id: modelId,
+            tag_count: tags.length,
+            tags: tags.map(t => ({ id: t.amtd_id, name: t.tag_name, code: t.tag_code }))
+          });
+        }
+      } catch (error) {
+        logger.error('Error fetching tag definitions for model:', {
+          error: error.message,
+          model_id: modelId,
+          tag_associations: tagAssociations
+        });
+        tags = [];
+      }
+    }
+
     // Parse JSON fields
     const modelWithPlatform = {
       ...aiModel,
       platform: platform || null,
+      tags: tags,
       input_types: aiModel.input_types ? (typeof aiModel.input_types === 'string' ? JSON.parse(aiModel.input_types) : aiModel.input_types) : null,
       output_types: aiModel.output_types ? (typeof aiModel.output_types === 'string' ? JSON.parse(aiModel.output_types) : aiModel.output_types) : null,
       supported_video_qualities: aiModel.supported_video_qualities ? (typeof aiModel.supported_video_qualities === 'string' ? JSON.parse(aiModel.supported_video_qualities) : aiModel.supported_video_qualities) : null,
@@ -341,17 +521,23 @@ exports.createPlatform = async function(req, res) {
  * @apiName ListPlatforms
  * @apiGroup AiModels
  * @apiPermission JWT
+ * @apiQuery {Number} [page=1] Page number
+ * @apiQuery {Number} [limit=10] Items per page
  */
 exports.listPlatforms = async function(req, res) {
   try {
-    const platforms = await AiModelModel.listAllPlatforms();
+    // Get pagination parameters
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+
+    // Get platforms with pagination
+    const { platforms: platformsData } = await AiModelModel.listAllPlatforms(paginationParams);
 
     // Get storage provider for presigned URLs
-    if (platforms.length) {
+    if (platformsData.length) {
       const storage = StorageFactory.getProvider();
       
       // Generate presigned URLs for thumbnails
-      await Promise.all(platforms.map(async (platform) => {
+      await Promise.all(platformsData.map(async (platform) => {
         if (platform.platform_logo_key) {
           if (platform.platform_logo_bucket === 'public') {
             platform.platform_logo_url = `${config.os2.r2.public.bucketUrl}/${platform.platform_logo_key}`;
@@ -370,7 +556,7 @@ exports.listPlatforms = async function(req, res) {
     }
 
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: platforms
+      data: platformsData
     });
 
   } catch (error) {

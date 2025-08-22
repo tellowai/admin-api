@@ -1,0 +1,14 @@
+{
+  "AI_MODEL_TAG_LIST_FAILED": "AI मॉडल टैग प्राप्त करने में विफल",
+  "AI_MODEL_TAG_NOT_FOUND": "AI मॉडल टैग नहीं मिला",
+  "AI_MODEL_TAG_TABLE_NOT_FOUND": "AI मॉडल टैग टेबल नहीं मिला",
+  "AI_MODEL_TAG_FIELD_ERROR": "AI मॉडल टैग क्वेरी में अमान्य फील्ड",
+  "NO_AI_MODEL_TAGS_FOUND": "कोई AI मॉडल टैग उपलब्ध नहीं",
+  "AI_MODEL_TAG_OPERATION_FAILED": "AI मॉडल टैग ऑपरेशन विफल",
+  "INVALID_TAG_DATA": "अमान्य टैग डेटा प्रदान किया गया",
+  "TAG_CREATED_SUCCESSFULLY": "AI मॉडल टैग सफलतापूर्वक बनाया गया",
+  "TAG_UPDATED_SUCCESSFULLY": "AI मॉडल टैग सफलतापूर्वक अपडेट किया गया",
+  "TAG_CODE_ALREADY_EXISTS": "इस कोड के साथ टैग पहले से मौजूद है",
+  "AI_MODEL_TAG_CREATE_FAILED": "AI मॉडल टैग बनाने में विफल",
+  "AI_MODEL_TAG_UPDATE_FAILED": "AI मॉडल टैग अपडेट करने में विफल"
+}

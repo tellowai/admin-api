@@ -1,0 +1,14 @@
+{
+  "AI_MODEL_TAG_LIST_FAILED": "Failed to fetch AI model tags",
+  "AI_MODEL_TAG_NOT_FOUND": "AI model tag not found",
+  "AI_MODEL_TAG_TABLE_NOT_FOUND": "AI model tags table not found",
+  "AI_MODEL_TAG_FIELD_ERROR": "Invalid field in AI model tags query",
+  "NO_AI_MODEL_TAGS_FOUND": "No AI model tags available",
+  "AI_MODEL_TAG_OPERATION_FAILED": "AI model tag operation failed",
+  "INVALID_TAG_DATA": "Invalid tag data provided",
+  "TAG_CREATED_SUCCESSFULLY": "AI model tag created successfully",
+  "TAG_UPDATED_SUCCESSFULLY": "AI model tag updated successfully",
+  "TAG_CODE_ALREADY_EXISTS": "Tag with this code already exists",
+  "AI_MODEL_TAG_CREATE_FAILED": "Failed to create AI model tag",
+  "AI_MODEL_TAG_UPDATE_FAILED": "Failed to update AI model tag"
+}

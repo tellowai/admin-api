@@ -2,7 +2,7 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
-exports.listAllAiModels = async function(searchParams = {}) {
+exports.listAllAiModels = async function(searchParams = {}, paginationParams = null) {
   let query = `
     SELECT 
       model_id,
@@ -48,9 +48,19 @@ exports.listAllAiModels = async function(searchParams = {}) {
     query += ` AND ${conditions.join(' AND ')}`;
   }
 
-  query += ` ORDER BY created_at DESC`;
+  // Add pagination if provided
+  if (paginationParams) {
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    queryParams.push(paginationParams.limit, paginationParams.offset);
+  } else {
+    query += ` ORDER BY created_at DESC`;
+  }
 
-  return await mysqlQueryRunner.runQueryInSlave(query, queryParams);
+  const models = await mysqlQueryRunner.runQueryInSlave(query, queryParams);
+  
+  return {
+    models
+  };
 };
 
 exports.getPlatformsByIds = async function(platformIds) {
@@ -244,8 +254,8 @@ exports.createPlatform = async function(platformData) {
   return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
 
-exports.listAllPlatforms = async function() {
-  const query = `
+exports.listAllPlatforms = async function(paginationParams = null) {
+  let query = `
     SELECT 
       amp_platform_id,
       platform_name,
@@ -256,10 +266,25 @@ exports.listAllPlatforms = async function() {
       created_at,
       updated_at
     FROM ai_model_provider_platforms
-    ORDER BY created_at DESC
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, []);
+  // Add pagination if provided
+  if (paginationParams) {
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    const queryParams = [paginationParams.limit, paginationParams.offset];
+    const platforms = await mysqlQueryRunner.runQueryInSlave(query, queryParams);
+    
+    return {
+      platforms
+    };
+  } else {
+    query += ` ORDER BY created_at DESC`;
+    const platforms = await mysqlQueryRunner.runQueryInSlave(query, []);
+    
+    return {
+      platforms
+    };
+  }
 };
 
 exports.updatePlatform = async function(platformId, updateData) {
@@ -276,4 +301,82 @@ exports.updatePlatform = async function(platformId, updateData) {
   `;
 
   return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
+
+// Tag management methods
+exports.getAiModelTags = async function(modelId) {
+  const query = `
+    SELECT 
+      amtd_id
+    FROM ai_model_tags
+    WHERE ai_model_id = ?
+    AND deleted_at IS NULL
+    ORDER BY amtd_id ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [modelId]);
+};
+
+exports.createAiModelTag = async function(modelId, tagDefinitionId) {
+  const query = `
+    INSERT INTO ai_model_tags (
+      amtd_id,
+      ai_model_id
+    ) VALUES (?, ?)
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, [tagDefinitionId, modelId]);
+};
+
+exports.deleteAiModelTag = async function(modelId, tagDefinitionId) {
+  const query = `
+    UPDATE ai_model_tags 
+    SET deleted_at = CURRENT_TIMESTAMP
+    WHERE ai_model_id = ?
+    AND amtd_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, [modelId, tagDefinitionId]);
+};
+
+exports.deleteAllAiModelTags = async function(modelId) {
+  const query = `
+    UPDATE ai_model_tags 
+    SET deleted_at = CURRENT_TIMESTAMP
+    WHERE ai_model_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, [modelId]);
+};
+
+exports.updateAiModelTags = async function(modelId, tagIds) {
+  // Get current tags for this model
+  const currentTags = await this.getAiModelTags(modelId);
+  const currentTagIds = currentTags.map(tag => tag.amtd_id);
+  
+  // Convert tagIds to numbers for comparison
+  const newTagIds = tagIds.map(id => parseInt(id));
+  
+  // Find tags to add (new tags that don't exist)
+  const tagsToAdd = newTagIds.filter(tagId => !currentTagIds.includes(tagId));
+  
+  // Find tags to remove (existing tags that are not in new list)
+  const tagsToRemove = currentTagIds.filter(tagId => !newTagIds.includes(tagId));
+  
+  // Add new tags
+  for (const tagId of tagsToAdd) {
+    await this.createAiModelTag(modelId, tagId);
+  }
+  
+  // Remove old tags
+  for (const tagId of tagsToRemove) {
+    await this.deleteAiModelTag(modelId, tagId);
+  }
+  
+  return {
+    added: tagsToAdd,
+    removed: tagsToRemove
+  };
 }; 

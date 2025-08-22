@@ -20,6 +20,7 @@ exports.validateCreateAiModel = async function(req, res, next) {
           'any.required': '\"supported_video_qualities\" is required when output_types contains \"video\"'
         })
       }),
+      tags: Joi.array().items(Joi.number().integer().min(1)).optional(),
       costs: Joi.object().optional(),
       generation_time_ms: Joi.number().integer().min(0).optional(),
       status: Joi.string().valid('active', 'inactive', 'disabled').optional().default('active')
@@ -56,6 +57,7 @@ exports.validateUpdateAiModel = async function(req, res, next) {
           'any.required': '\"supported_video_qualities\" is required when output_types contains \"video\"'
         })
       }),
+      tags: Joi.array().items(Joi.number().integer().min(1)).optional(),
       costs: Joi.object(),
       generation_time_ms: Joi.number().integer().min(0),
       status: Joi.string().valid('active', 'inactive', 'disabled')

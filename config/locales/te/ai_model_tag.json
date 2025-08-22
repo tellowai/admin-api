@@ -1,0 +1,14 @@
+{
+  "AI_MODEL_TAG_LIST_FAILED": "AI మోడల్ ట్యాగ్లను పొందడంలో విఫలం",
+  "AI_MODEL_TAG_NOT_FOUND": "AI మోడల్ ట్యాగ్ కనుగొనబడలేదు",
+  "AI_MODEL_TAG_TABLE_NOT_FOUND": "AI మోడల్ ట్యాగ్ టేబుల్ కనుగొనబడలేదు",
+  "AI_MODEL_TAG_FIELD_ERROR": "AI మోడల్ ట్యాగ్ ప్రశ్నలో చెల్లని ఫీల్డ్",
+  "NO_AI_MODEL_TAGS_FOUND": "AI మోడల్ ట్యాగ్లు అందుబాటులో లేవు",
+  "AI_MODEL_TAG_OPERATION_FAILED": "AI మోడల్ ట్యాగ్ ఆపరేషన్ విఫలం",
+  "INVALID_TAG_DATA": "చెల్లని ట్యాగ్ డేటా అందించబడింది",
+  "TAG_CREATED_SUCCESSFULLY": "AI మోడల్ ట్యాగ్ విజయవంతంగా సృష్టించబడింది",
+  "TAG_UPDATED_SUCCESSFULLY": "AI మోడల్ ట్యాగ్ విజయవంతంగా నవీకరించబడింది",
+  "TAG_CODE_ALREADY_EXISTS": "ఈ కోడ్‌తో ట్యాగ్ ఇప్పటికే ఉంది",
+  "AI_MODEL_TAG_CREATE_FAILED": "AI మోడల్ ట్యాగ్ సృష్టించడంలో విఫలం",
+  "AI_MODEL_TAG_UPDATE_FAILED": "AI మోడల్ ట్యాగ్ నవీకరించడంలో విఫలం"
+}
