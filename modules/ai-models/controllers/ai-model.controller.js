@@ -618,3 +618,202 @@ exports.updatePlatform = async function(req, res) {
     AiModelErrorHandler.handleAiModelErrors(error, res);
   }
 }; 
+
+/**
+ * @api {get} /ai-models/search Search AI models
+ * @apiVersion 1.0.0
+ * @apiName SearchAiModels
+ * @apiGroup AiModels
+ * @apiPermission JWT
+ *
+ * @apiDescription Search AI models by model name, tag name, or tag code
+ *
+ * @apiHeader {String} Authorization JWT token
+ * @apiQuery {String} [model_name] Search by model name (partial match)
+ * @apiQuery {String} [tag_name] Search by tag name (partial match)
+ * @apiQuery {String} [tag_code] Search by tag code (partial match)
+ * @apiQuery {String} [input_type] Filter by input type (e.g., "text", "image", "text,image")
+ * @apiQuery {String} [input_types] Alternative to input_type (same functionality)
+ * @apiQuery {String} [output_type] Filter by output type (e.g., "image", "video", "image,video")
+ * @apiQuery {String} [output_types] Alternative to output_type (same functionality)
+ * @apiQuery {Number} [page=1] Page number
+ * @apiQuery {Number} [limit=10] Items per page
+ */
+exports.searchAiModels = async function(req, res) {
+  try {
+    // Parse search parameters
+    const searchParams = {
+      model_name: req.query.model_name || null,
+      tag_name: req.query.tag_name || null,
+      tag_code: req.query.tag_code || null,
+      input_types: req.query.input_type || req.query.input_types ? 
+        (req.query.input_type || req.query.input_types).split(',').map(type => type.trim()) : null,
+      output_types: req.query.output_type || req.query.output_types ? 
+        (req.query.output_type || req.query.output_types).split(',').map(type => type.trim()) : null
+    };
+
+    // Get pagination parameters
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+
+    let aiModels = [];
+
+    // If searching by tag name or tag code, use tag-based search
+    if (searchParams.tag_name || searchParams.tag_code) {
+      // Search for tag definitions first
+      const tagSearchParams = {
+        tag_name: searchParams.tag_name,
+        tag_code: searchParams.tag_code
+      };
+      
+      const tagDefinitions = await AiModelTagModel.searchTagDefinitions(tagSearchParams);
+      
+      if (tagDefinitions.length > 0) {
+        // Get tag IDs from the search results
+        const tagIds = tagDefinitions.map(tag => tag.amtd_id);
+        
+        // Search for AI models that have these tags
+        const result = await AiModelModel.searchAiModelsByTagIds(tagIds, paginationParams);
+        aiModels = result.models;
+        
+        logger.info('Tag-based search results:', {
+          tag_search_params: tagSearchParams,
+          tags_found: tagDefinitions.length,
+          tag_ids: tagIds,
+          models_found: aiModels.length
+        });
+      }
+    } else {
+      // Direct search in AI models table
+      const result = await AiModelModel.searchAiModels(searchParams, paginationParams);
+      aiModels = result.models;
+      
+      logger.info('Direct search results:', {
+        search_params: searchParams,
+        models_found: aiModels.length
+      });
+    }
+
+    if (!aiModels.length) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: []
+      });
+    }
+
+    // Get platform details for each model
+    const platformIds = [...new Set(aiModels.map(model => model.amp_platform_id))];
+    const platforms = await AiModelModel.getPlatformsByIds(platformIds);
+    
+    // Create platform lookup map
+    const platformMap = platforms.reduce((acc, platform) => {
+      acc[platform.amp_platform_id] = platform;
+      return acc;
+    }, {});
+
+    // Generate presigned URLs for platform logos
+    const storage = StorageFactory.getProvider();
+    await Promise.all(platforms.map(async (platform) => {
+      if (platform.platform_logo_key) {
+        if (platform.platform_logo_bucket === 'public') {
+          platform.platform_logo_url = `${config.os2.r2.public.bucketUrl}/${platform.platform_logo_key}`;
+        } else {
+          try {
+            platform.platform_logo_url = await storage.generatePresignedDownloadUrl(platform.platform_logo_key);
+          } catch (err) {
+            logger.error('Error generating presigned URL for platform logo:', {
+              error: err.message,
+              asset_key: platform.platform_logo_key
+            });
+          }
+        }
+      }
+    }));
+
+    // Combine model data with platform details
+    const modelsWithPlatforms = aiModels.map(model => ({
+      ...model,
+      platform: platformMap[model.amp_platform_id] || null,
+      input_types: model.input_types ? (typeof model.input_types === 'string' ? JSON.parse(model.input_types) : model.input_types) : null,
+      output_types: model.output_types ? (typeof model.output_types === 'string' ? JSON.parse(model.output_types) : model.output_types) : null,
+      costs: model.costs ? (typeof model.costs === 'string' ? JSON.parse(model.costs) : model.costs) : null
+    }));
+
+    // Get tags for all models
+    try {
+      // First, get all tag associations for all models
+      const allTagAssociations = await Promise.all(
+        modelsWithPlatforms.map(async (model) => {
+          try {
+            const tagAssociations = await AiModelModel.getAiModelTags(model.model_id);
+            return { modelId: model.model_id, tagAssociations };
+          } catch (err) {
+            logger.error('Error fetching tag associations for model:', {
+              error: err.message,
+              model_id: model.model_id
+            });
+            return { modelId: model.model_id, tagAssociations: [] };
+          }
+        })
+      );
+      
+      // Collect all unique tag IDs
+      const allTagIds = [...new Set(
+        allTagAssociations
+          .flatMap(item => item.tagAssociations)
+          .map(tag => tag.amtd_id)
+          .filter(id => id)
+      )];
+      
+      // Fetch all tag definitions in one query
+      let allTagDefinitions = [];
+      if (allTagIds.length > 0) {
+        allTagDefinitions = await AiModelTagModel.getTagDefinitionsByIds(allTagIds);
+      }
+      
+      // Create a lookup map for tag definitions
+      const tagDefinitionsMap = allTagDefinitions.reduce((acc, tag) => {
+        acc[tag.amtd_id] = tag;
+        return acc;
+      }, {});
+      
+      // Stitch tags to models
+      modelsWithPlatforms.forEach((model) => {
+        const modelTagAssociations = allTagAssociations.find(item => item.modelId === model.model_id);
+        if (modelTagAssociations && modelTagAssociations.tagAssociations.length > 0) {
+          model.tags = modelTagAssociations.tagAssociations
+            .map(tag => tagDefinitionsMap[tag.amtd_id])
+            .filter(tag => tag);
+        } else {
+          model.tags = [];
+        }
+      });
+      
+    } catch (error) {
+      logger.error('Error fetching or stitching tags for AI models:', {
+        error: error.message,
+        stack: error.stack
+      });
+      // Set empty tags for all models if tag fetching fails
+      modelsWithPlatforms.forEach(model => {
+        model.tags = [];
+      });
+    }
+
+    // Explicitly re-sort by created_at descending to guarantee order after manipulations
+    modelsWithPlatforms.sort((a, b) => {
+      const dateComparison = new Date(b.created_at) - new Date(a.created_at);
+      if (dateComparison !== 0) {
+        return dateComparison;
+      }
+      // Fallback to sorting by model_id alphabetically if timestamps are identical
+      return a.model_id.localeCompare(b.model_id);
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: modelsWithPlatforms
+    });
+
+  } catch (error) {
+    logger.error('Error searching AI models:', { error: error.message, stack: error.stack });
+    AiModelErrorHandler.handleAiModelErrors(error, res);
+  }
+}; 

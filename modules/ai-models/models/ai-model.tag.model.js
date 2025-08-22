@@ -215,3 +215,41 @@ exports.getTagDefinitionsByIds = async function(tagIds) {
 
   return await mysqlQueryRunner.runQueryInSlave(query, tagIds);
 };
+
+exports.searchTagDefinitions = async function(searchParams = {}) {
+  let query = `
+    SELECT 
+      amtd_id,
+      tag_name,
+      tag_code,
+      tag_description,
+      created_at,
+      updated_at
+    FROM ai_model_tag_definitions
+    WHERE deleted_at IS NULL
+  `;
+
+  const queryParams = [];
+  const conditions = [];
+
+  // Search by tag name (case-insensitive)
+  if (searchParams.tag_name) {
+    conditions.push(`LOWER(tag_name) LIKE LOWER(?)`);
+    queryParams.push(`%${searchParams.tag_name}%`);
+  }
+
+  // Search by tag code (case-insensitive)
+  if (searchParams.tag_code) {
+    conditions.push(`LOWER(tag_code) LIKE LOWER(?)`);
+    queryParams.push(`%${searchParams.tag_code}%`);
+  }
+
+  // Add conditions to query
+  if (conditions.length > 0) {
+    query += ` AND ${conditions.join(' OR ')}`;
+  }
+
+  query += ` ORDER BY tag_name ASC`;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, queryParams);
+};

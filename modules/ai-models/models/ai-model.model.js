@@ -317,6 +317,131 @@ exports.getAiModelTags = async function(modelId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [modelId]);
 };
 
+exports.searchAiModels = async function(searchParams = {}, paginationParams = null) {
+  let query = `
+    SELECT 
+      model_id,
+      amp_platform_id,
+      model_name,
+      description,
+      platform_model_id,
+      input_types,
+      output_types,
+      supported_video_qualities,
+      costs,
+      generation_time_ms,
+      status,
+      created_at,
+      updated_at
+    FROM ai_models
+    WHERE archived_at IS NULL
+  `;
+
+  const queryParams = [];
+  const conditions = [];
+
+  // Search by model name (case-insensitive)
+  if (searchParams.model_name) {
+    conditions.push(`LOWER(model_name) LIKE LOWER(?)`);
+    queryParams.push(`%${searchParams.model_name}%`);
+  }
+
+  // Search by input types
+  if (searchParams.input_types && searchParams.input_types.length > 0) {
+    const inputTypeConditions = searchParams.input_types.map(() => `JSON_CONTAINS(input_types, ?)`);
+    conditions.push(`(${inputTypeConditions.join(' OR ')})`);
+    searchParams.input_types.forEach(type => {
+      queryParams.push(JSON.stringify(type));
+    });
+  }
+
+  // Search by output types
+  if (searchParams.output_types && searchParams.output_types.length > 0) {
+    const outputTypeConditions = searchParams.output_types.map(() => `JSON_CONTAINS(output_types, ?)`);
+    conditions.push(`(${outputTypeConditions.join(' OR ')})`);
+    searchParams.output_types.forEach(type => {
+      queryParams.push(JSON.stringify(type));
+    });
+  }
+
+  // Add conditions to query
+  if (conditions.length > 0) {
+    query += ` AND ${conditions.join(' AND ')}`;
+  }
+
+  // Add pagination if provided
+  if (paginationParams) {
+    query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    queryParams.push(paginationParams.limit, paginationParams.offset);
+  } else {
+    query += ` ORDER BY created_at DESC`;
+  }
+
+  const models = await mysqlQueryRunner.runQueryInSlave(query, queryParams);
+  
+  return {
+    models
+  };
+};
+
+exports.searchAiModelsByTagIds = async function(tagIds, paginationParams = null) {
+  if (!tagIds || tagIds.length === 0) {
+    return { models: [] };
+  }
+
+  // First, get all model IDs that have these tags
+  const placeholders = tagIds.map(() => '?').join(',');
+  const modelIdsQuery = `
+    SELECT DISTINCT ai_model_id
+    FROM ai_model_tags
+    WHERE amtd_id IN (${placeholders})
+    AND deleted_at IS NULL
+  `;
+
+  const modelIds = await mysqlQueryRunner.runQueryInSlave(modelIdsQuery, tagIds);
+  
+  if (modelIds.length === 0) {
+    return { models: [] };
+  }
+
+  // Extract model IDs from the result
+  const modelIdValues = modelIds.map(row => row.ai_model_id);
+
+  // Now fetch the actual AI models
+  const modelPlaceholders = modelIdValues.map(() => '?').join(',');
+  let modelsQuery = `
+    SELECT 
+      model_id,
+      amp_platform_id,
+      model_name,
+      description,
+      platform_model_id,
+      input_types,
+      output_types,
+      supported_video_qualities,
+      costs,
+      generation_time_ms,
+      status,
+      created_at,
+      updated_at
+    FROM ai_models
+    WHERE model_id IN (${modelPlaceholders})
+    AND archived_at IS NULL
+  `;
+
+  // Add pagination if provided
+  if (paginationParams) {
+    modelsQuery += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    const queryParams = [...modelIdValues, paginationParams.limit, paginationParams.offset];
+    const models = await mysqlQueryRunner.runQueryInSlave(modelsQuery, queryParams);
+    return { models };
+  } else {
+    modelsQuery += ` ORDER BY created_at DESC`;
+    const models = await mysqlQueryRunner.runQueryInSlave(modelsQuery, modelIdValues);
+    return { models };
+  }
+};
+
 exports.createAiModelTag = async function(modelId, tagDefinitionId) {
   const query = `
     INSERT INTO ai_model_tags (

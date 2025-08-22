@@ -14,6 +14,14 @@ module.exports = function(app) {
     AiModelCtrl.listAiModels
   );
 
+  // Search AI models
+  app.route(
+    versionConfig.routePrefix + '/ai-models/search'
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AiModelCtrl.searchAiModels
+  );
+
   // Create new AI model
   app.route(
     versionConfig.routePrefix + '/ai-models'
