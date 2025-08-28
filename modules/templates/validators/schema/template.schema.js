@@ -59,6 +59,7 @@ const createTemplateSchema = Joi.object().keys({
   bodymovin_json_bucket: Joi.string().max(255).allow(null),
   bodymovin_json_key: Joi.string().max(512).allow(null),
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null),
+  user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
   credits: Joi.number().integer().min(1).default(1),
   additional_data: Joi.object().allow(null),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
@@ -95,6 +96,7 @@ const updateTemplateSchema = Joi.object().keys({
   bodymovin_json_bucket: Joi.string().max(255).allow(null).optional(),
   bodymovin_json_key: Joi.string().max(512).allow(null).optional(),
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null).optional(),
+  user_assets_layer: Joi.string().valid('top', 'bottom').optional(),
   credits: Joi.number().integer().min(1).optional(),
   additional_data: Joi.object().allow(null).optional(),
   clips: Joi.array().items(clipSchema).optional()

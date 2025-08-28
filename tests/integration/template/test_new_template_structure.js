@@ -25,6 +25,7 @@ describe('Template API - New Structure', () => {
         template_gender: "male",
         description: "Test video template with new structure",
         prompt: "",
+        user_assets_layer: "bottom",
         credits: 4,
         thumb_r2_bucket: "public",
         thumb_r2_key: "assets/test-thumb.mp4",
@@ -85,6 +86,7 @@ describe('Template API - New Structure', () => {
         template_gender: "female",
         description: "Test image template with new structure",
         prompt: "A beautiful portrait",
+        user_assets_layer: "top",
         credits: 2,
         thumb_r2_bucket: "public",
         thumb_r2_key: "assets/test-image-thumb.jpg",
@@ -213,6 +215,7 @@ describe('Template API - New Structure', () => {
     it('should update video template with new structure', async () => {
       const updateData = {
         template_name: "Updated Test Video Template",
+        user_assets_layer: "top",
         clips: [
           {
             clip_index: 1,
@@ -255,6 +258,7 @@ describe('Template API - New Structure', () => {
       const updateData = {
         template_name: "Updated Test Image Template",
         template_clips_assets_type: "ai",
+        user_assets_layer: "bottom",
         clips: [
           {
             clip_index: 1,

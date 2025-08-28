@@ -19,6 +19,7 @@ exports.listTemplates = async function(pagination) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      user_assets_layer,
       cf_r2_key,
       cf_r2_url,
       color_video_bucket,
@@ -53,6 +54,7 @@ exports.getTemplatePrompt = async function(templateId) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      user_assets_layer,
       credits,
       additional_data
     FROM templates
@@ -78,6 +80,7 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      user_assets_layer,
       cf_r2_key,
       cf_r2_url,
       color_video_bucket,
@@ -296,6 +299,7 @@ exports.getTemplateById = async function(templateId) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      user_assets_layer,
       cf_r2_key,
       cf_r2_url,
       color_video_bucket,
