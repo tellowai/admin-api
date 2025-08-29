@@ -14,6 +14,13 @@ module.exports = function(app) {
   )
   
   app.route(
+    versionConfig.routePrefix + '/templates/archived'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.listArchivedTemplates
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
@@ -49,5 +56,13 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateBulkArchiveTemplatesData,
     TemplateCtrl.bulkArchiveTemplates
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/unarchive/bulk'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateBulkUnarchiveTemplatesData,
+    TemplateCtrl.bulkUnarchiveTemplates
   );
 }; 

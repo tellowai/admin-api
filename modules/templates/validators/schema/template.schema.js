@@ -106,6 +106,11 @@ const bulkArchiveTemplatesSchema = Joi.object().keys({
   template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required()
 });
 
+const bulkUnarchiveTemplatesSchema = Joi.object().keys({
+  template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
-exports.bulkArchiveTemplatesSchema = bulkArchiveTemplatesSchema; 
+exports.bulkArchiveTemplatesSchema = bulkArchiveTemplatesSchema;
+exports.bulkUnarchiveTemplatesSchema = bulkUnarchiveTemplatesSchema; 

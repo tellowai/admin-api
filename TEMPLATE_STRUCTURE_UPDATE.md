@@ -186,6 +186,9 @@ Added a new bulk archive endpoint for archiving multiple templates at once:
 - `deleteTemplateAiClipsInTransaction()` - Updated to also delete workflows
 - `bulkArchiveTemplates()` - Archives multiple templates in a single operation
 - `validateBulkArchiveTemplatesData()` - Validates bulk archive request payload
+- `listArchivedTemplates()` - Lists archived templates with pagination support
+- `bulkUnarchiveTemplates()` - Unarchives multiple templates in a single operation
+- `validateBulkUnarchiveTemplatesData()` - Validates bulk unarchive request payload
 
 ## Migration Steps
 
@@ -215,6 +218,8 @@ A test file has been created at `tests/integration/template/test_new_template_st
 - Template updates with workflow changes
 - Template archiving
 - Bulk template archiving with validation
+- Bulk template unarchiving with validation
+- Archived templates listing with pagination
 - Validation of `ai`/`non-ai` values
 
 ## Key Changes Summary
@@ -224,7 +229,8 @@ A test file has been created at `tests/integration/template/test_new_template_st
 3. **Simplified Asset Types**: Changed from `ai`/`static` to `ai`/`non-ai` for clarity
 4. **No Conditional Logic**: Removed all conditional checks based on template output type
 5. **Workflow-Based**: All processing is now workflow-based rather than type-based
-6. **Bulk Operations**: Added efficient bulk archive functionality for multiple templates
+6. **Bulk Operations**: Added efficient bulk archive and unarchive functionality for multiple templates
+7. **Archived Templates**: Added comprehensive listing of archived templates with pagination
 
 ## Backward Compatibility
 
@@ -245,4 +251,5 @@ However, all templates now require:
 - The new structure is more modular and easier to extend with new workflow types
 - All database operations use transactions to ensure data consistency
 - Both image and video templates can now have complex processing workflows
-- Bulk archive operations are optimized for performance with large numbers of templates
+- Bulk archive and unarchive operations are optimized for performance with large numbers of templates
+- Archived templates can be listed with full pagination support and asset URLs

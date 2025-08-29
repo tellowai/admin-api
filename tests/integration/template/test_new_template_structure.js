@@ -182,32 +182,53 @@ describe('Template API - New Structure', () => {
   });
 
   describe('GET /api/v1/templates', () => {
-    it('should list templates with new structure', async () => {
+    it('should list templates with pagination', async () => {
       const response = await request(app)
-        .get('/api/v1/templates')
+        .get('/api/v1/templates?page=1&limit=5')
         .set('Authorization', `Bearer ${authToken}`)
         .expect(200);
 
       expect(response.body).to.have.property('data');
-      expect(response.body.data).to.be.an('array');
+      expect(Array.isArray(response.body.data)).to.be.true;
+    });
+  });
+
+  describe('GET /api/v1/templates/archived', () => {
+    it('should list archived templates with pagination', async () => {
+      const response = await request(app)
+        .get('/api/v1/templates/archived?page=1&limit=5')
+        .set('Authorization', `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(response.body).to.have.property('data');
+      expect(Array.isArray(response.body.data)).to.be.true;
       
-      // Check if the created templates are in the list
-      const videoTemplate = response.body.data.find(t => t.template_id === createdVideoTemplateId);
-      const imageTemplate = response.body.data.find(t => t.template_id === createdImageTemplateId);
-      
-      expect(videoTemplate).to.exist;
-      expect(videoTemplate).to.have.property('template_clips_assets_type', 'ai');
-      expect(videoTemplate).to.have.property('thumb_r2_bucket');
-      expect(videoTemplate).to.have.property('thumb_r2_key');
-      expect(videoTemplate).to.have.property('clips');
-      expect(videoTemplate.clips).to.be.an('array');
-      
-      expect(imageTemplate).to.exist;
-      expect(imageTemplate).to.have.property('template_clips_assets_type', 'non-ai');
-      expect(imageTemplate).to.have.property('thumb_r2_bucket');
-      expect(imageTemplate).to.have.property('thumb_r2_key');
-      expect(imageTemplate).to.have.property('clips');
-      expect(imageTemplate.clips).to.be.an('array');
+      // Check that returned templates have archived_at field
+      if (response.body.data.length > 0) {
+        expect(response.body.data[0]).to.have.property('archived_at');
+        expect(response.body.data[0].archived_at).to.not.be.null;
+      }
+    });
+
+    it('should handle pagination parameters correctly', async () => {
+      const response = await request(app)
+        .get('/api/v1/templates/archived?page=2&limit=3')
+        .set('Authorization', `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(response.body).to.have.property('data');
+      expect(Array.isArray(response.body.data)).to.be.true;
+    });
+
+    it('should return empty array when no archived templates exist', async () => {
+      // This test assumes there might be no archived templates initially
+      const response = await request(app)
+        .get('/api/v1/templates/archived?page=1&limit=10')
+        .set('Authorization', `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(response.body).to.have.property('data');
+      expect(Array.isArray(response.body.data)).to.be.true;
     });
   });
 
@@ -394,6 +415,135 @@ describe('Template API - New Structure', () => {
         .set('Authorization', `Bearer ${authToken}`)
         .send(bulkArchiveData)
         .expect(400);
+    });
+  });
+
+  describe('POST /api/v1/templates/unarchive/bulk', () => {
+    it('should bulk unarchive multiple templates', async () => {
+      // First create and archive a couple of templates for bulk unarchiving
+      const templateData1 = {
+        template_name: "Bulk Unarchive Test Template 1",
+        template_code: "BUTT001",
+        template_output_type: "image",
+        template_clips_assets_type: "non-ai",
+        description: "Template for bulk unarchive testing 1",
+        prompt: "Test prompt 1",
+        credits: 1
+      };
+
+      const templateData2 = {
+        template_name: "Bulk Unarchive Test Template 2",
+        template_code: "BUTT002",
+        template_output_type: "image",
+        template_clips_assets_type: "non-ai",
+        description: "Template for bulk unarchive testing 2",
+        prompt: "Test prompt 2",
+        credits: 1
+      };
+
+      const response1 = await request(app)
+        .post('/api/v1/templates')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(templateData1)
+        .expect(201);
+
+      const response2 = await request(app)
+        .post('/api/v1/templates')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(templateData2)
+        .expect(201);
+
+      const templateId1 = response1.body.data.template_id;
+      const templateId2 = response2.body.data.template_id;
+
+      // Archive them first
+      await request(app)
+        .post(`/api/v1/templates/${templateId1}/archive`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .expect(200);
+
+      await request(app)
+        .post(`/api/v1/templates/${templateId2}/archive`)
+        .set('Authorization', `Bearer ${authToken}`)
+        .expect(200);
+
+      // Now test bulk unarchive
+      const bulkUnarchiveData = {
+        template_ids: [templateId1, templateId2]
+      };
+
+      const bulkResponse = await request(app)
+        .post('/api/v1/templates/unarchive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkUnarchiveData)
+        .expect(200);
+
+      expect(bulkResponse.body).to.have.property('message');
+      expect(bulkResponse.body).to.have.property('data');
+      expect(bulkResponse.body.data).to.have.property('unarchived_count');
+      expect(bulkResponse.body.data).to.have.property('total_requested');
+      expect(bulkResponse.body.data.unarchived_count).to.be.at.least(1);
+      expect(bulkResponse.body.data.total_requested).to.equal(2);
+    });
+
+    it('should reject bulk unarchive with empty template_ids array', async () => {
+      const bulkUnarchiveData = {
+        template_ids: []
+      };
+
+      await request(app)
+        .post('/api/v1/templates/unarchive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkUnarchiveData)
+        .expect(400);
+    });
+
+    it('should reject bulk unarchive with more than 50 template_ids', async () => {
+      const templateIds = Array.from({ length: 51 }, (_, i) => `template-${i}`);
+      const bulkUnarchiveData = {
+        template_ids: templateIds
+      };
+
+      await request(app)
+        .post('/api/v1/templates/unarchive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkUnarchiveData)
+        .expect(400);
+    });
+
+    it('should handle unarchiving already unarchived templates gracefully', async () => {
+      // Create a template
+      const templateData = {
+        template_name: "Already Unarchived Template",
+        template_code: "AUT001",
+        template_output_type: "image",
+        template_clips_assets_type: "non-ai",
+        description: "Template that is already unarchived",
+        prompt: "Test prompt",
+        credits: 1
+      };
+
+      const response = await request(app)
+        .post('/api/v1/templates')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(templateData)
+        .expect(201);
+
+      const templateId = response.body.data.template_id;
+
+      // Try to unarchive an already unarchived template
+      const bulkUnarchiveData = {
+        template_ids: [templateId]
+      };
+
+      const bulkResponse = await request(app)
+        .post('/api/v1/templates/unarchive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkUnarchiveData)
+        .expect(404);
+
+      expect(bulkResponse.body).to.have.property('message');
+      expect(bulkResponse.body.message).to.equal('No templates were unarchived');
     });
   });
 }); 

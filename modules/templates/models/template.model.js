@@ -42,7 +42,47 @@ exports.listTemplates = async function(pagination) {
     query, 
     [pagination.limit, pagination.offset]
   );
-}; 
+};
+
+exports.listArchivedTemplates = async function(pagination) {
+  const query = `
+    SELECT 
+      template_id,
+      template_name,
+      template_code,
+      template_gender,
+      template_output_type,
+      template_clips_assets_type,
+      description,
+      prompt,
+      faces_needed,
+      image_uploads_required,
+      video_uploads_required,
+      user_assets_layer,
+      cf_r2_key,
+      cf_r2_url,
+      color_video_bucket,
+      color_video_key,
+      mask_video_bucket,
+      mask_video_key,
+      bodymovin_json_bucket,
+      bodymovin_json_key,
+      custom_text_input_fields,
+      credits,
+      additional_data,
+      created_at,
+      archived_at
+    FROM templates
+    WHERE archived_at IS NOT NULL
+    ORDER BY archived_at DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(
+    query, 
+    [pagination.limit, pagination.offset]
+  );
+};
 
 exports.getTemplatePrompt = async function(templateId) {
   const query = `
@@ -436,6 +476,19 @@ exports.bulkArchiveTemplates = async function(templateIds) {
     SET archived_at = NOW()
     WHERE template_id IN (${placeholders})
     AND archived_at IS NULL
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, templateIds);
+  return result.affectedRows;
+};
+
+exports.bulkUnarchiveTemplates = async function(templateIds) {
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const query = `
+    UPDATE templates 
+    SET archived_at = NULL
+    WHERE template_id IN (${placeholders})
+    AND archived_at IS NOT NULL
   `;
 
   const result = await mysqlQueryRunner.runQueryInMaster(query, templateIds);

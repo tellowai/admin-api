@@ -175,6 +175,151 @@ exports.listTemplates = async function(req, res) {
     logger.error('Error listing templates:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
+};
+
+/**
+ * @api {get} /templates/archived List archived templates
+ * @apiVersion 1.0.0
+ * @apiName ListArchivedTemplates
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiQuery {Number} [page=1] Page number
+ * @apiQuery {Number} [limit=10] Items per page
+ */
+exports.listArchivedTemplates = async function(req, res) {
+  try {
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+    const templates = await TemplateModel.listArchivedTemplates(paginationParams);
+
+    // Generate presigned URLs if templates exist
+    if (templates.length) {
+      const storage = StorageFactory.getProvider();
+      
+      await Promise.all(templates.map(async (template) => {
+        // Generate R2 URL for template thumbnail
+        if (template.cf_r2_key) {
+          template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+        } else {
+          template.r2_url = template.cf_r2_url;
+        }
+        
+        // Load AI clips for all templates
+        template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
+        
+        // Generate R2 URLs for AI clip assets
+        if (template.clips && template.clips.length > 0) {
+          template.clips = template.clips.map(clip => {
+            // Generate R2 URL for template image asset
+            if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+              clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+            }
+            
+            // Generate R2 URL for video file asset
+            if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+              clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+            }
+
+            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
+            if (Array.isArray(clip.workflow)) {
+              clip.workflow = clip.workflow.map(step => {
+                if (!step || !Array.isArray(step.data)) return step;
+                step.data = step.data.map(item => {
+                  const itemType = String(item?.type || '').toLowerCase();
+                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+                  }
+                  return item;
+                });
+                return step;
+              });
+            }
+            
+            return clip;
+          });
+        }
+
+        // Fallback compute of image uploads required if not present or invalid
+        if (
+          template.image_uploads_required === undefined ||
+          template.image_uploads_required === null ||
+          Number.isNaN(Number(template.image_uploads_required))
+        ) {
+          template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
+        }
+
+        // Generate R2 URLs for template assets
+        if (template.color_video_key && template.color_video_bucket) {
+          template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
+        }
+        if (template.mask_video_key && template.mask_video_bucket) {
+          template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
+        }
+        if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
+          template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+        }
+
+        // Parse JSON fields if they are strings
+        if (template.faces_needed && typeof template.faces_needed === 'string') {
+          try {
+            template.faces_needed = JSON.parse(template.faces_needed);
+
+            // Generate R2 URLs for character faces if they exist
+            if (template.faces_needed) {
+              template.faces_needed = template.faces_needed.map(face => {
+                if (face.character_face_r2_key) {
+                  face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+                }
+                return face;
+              });
+            }
+          } catch (err) {
+            logger.error('Error parsing faces_needed:', { 
+              error: err.message,
+              value: template.faces_needed
+            });
+          }
+        } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
+          template.faces_needed = template.faces_needed.map(face => {
+            if (face.character_face_r2_key) {
+              face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+            }
+            return face;
+          });
+        }
+        
+        if (template.additional_data && typeof template.additional_data === 'string') {
+          try {
+            template.additional_data = JSON.parse(template.additional_data);
+          } catch (err) {
+            logger.error('Error parsing additional_data:', {
+              error: err.message, 
+              value: template.additional_data
+            });
+          }
+        }
+        
+        if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
+          try {
+            template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
+          } catch (err) {
+            logger.error('Error parsing custom_text_input_fields:', {
+              error: err.message,
+              value: template.custom_text_input_fields
+            });
+          }
+        }
+      }));
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: templates
+    });
+
+  } catch (error) {
+    logger.error('Error listing archived templates:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
 }; 
 
 /**
@@ -1014,6 +1159,57 @@ exports.bulkArchiveTemplates = async function(req, res) {
 
   } catch (error) {
     logger.error('Error bulk archiving templates:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * @api {post} /templates/unarchive/bulk Bulk unarchive templates
+ * @apiVersion 1.0.0
+ * @apiName BulkUnarchiveTemplates
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {String[]} template_ids Array of template IDs (min: 1, max: 50)
+ */
+exports.bulkUnarchiveTemplates = async function(req, res) {
+  try {
+    const { template_ids } = req.validatedBody;
+    
+    const unarchivedCount = await TemplateModel.bulkUnarchiveTemplates(template_ids);
+    
+    if (unarchivedCount === 0) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:NO_TEMPLATES_UNARCHIVED')
+      });
+    }
+
+    // Publish activity log command for each unarchived template
+    const activityLogCommands = template_ids.map(templateId => ({
+      value: { 
+        admin_user_id: req.user.userId,
+        entity_type: 'TEMPLATES',
+        action_name: 'BULK_UNARCHIVE_TEMPLATE', 
+        entity_id: templateId
+      }
+    }));
+
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      activityLogCommands,
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template:TEMPLATES_BULK_UNARCHIVED'),
+      data: {
+        unarchived_count: unarchivedCount,
+        total_requested: template_ids.length
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error bulk unarchiving templates:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 }; 
