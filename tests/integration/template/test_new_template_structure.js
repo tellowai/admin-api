@@ -313,4 +313,87 @@ describe('Template API - New Structure', () => {
       expect(response.body).to.have.property('message');
     });
   });
+
+  describe('POST /api/v1/templates/archive/bulk', () => {
+    it('should bulk archive multiple templates', async () => {
+      // First create a couple more templates for bulk archiving
+      const templateData1 = {
+        template_name: "Bulk Test Template 1",
+        template_code: "BTT001",
+        template_output_type: "image",
+        template_clips_assets_type: "non-ai",
+        description: "Template for bulk archive testing 1",
+        prompt: "Test prompt 1",
+        credits: 1
+      };
+
+      const templateData2 = {
+        template_name: "Bulk Test Template 2",
+        template_code: "BTT002",
+        template_output_type: "image",
+        template_clips_assets_type: "non-ai",
+        description: "Template for bulk archive testing 2",
+        prompt: "Test prompt 2",
+        credits: 1
+      };
+
+      const response1 = await request(app)
+        .post('/api/v1/templates')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(templateData1)
+        .expect(201);
+
+      const response2 = await request(app)
+        .post('/api/v1/templates')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(templateData2)
+        .expect(201);
+
+      const templateId1 = response1.body.data.template_id;
+      const templateId2 = response2.body.data.template_id;
+
+      // Now test bulk archive
+      const bulkArchiveData = {
+        template_ids: [templateId1, templateId2]
+      };
+
+      const bulkResponse = await request(app)
+        .post('/api/v1/templates/archive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkArchiveData)
+        .expect(200);
+
+      expect(bulkResponse.body).to.have.property('message');
+      expect(bulkResponse.body).to.have.property('data');
+      expect(bulkResponse.body.data).to.have.property('archived_count');
+      expect(bulkResponse.body.data).to.have.property('total_requested');
+      expect(bulkResponse.body.data.archived_count).to.be.at.least(1);
+      expect(bulkResponse.body.data.total_requested).to.equal(2);
+    });
+
+    it('should reject bulk archive with empty template_ids array', async () => {
+      const bulkArchiveData = {
+        template_ids: []
+      };
+
+      await request(app)
+        .post('/api/v1/templates/archive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkArchiveData)
+        .expect(400);
+    });
+
+    it('should reject bulk archive with more than 50 template_ids', async () => {
+      const templateIds = Array.from({ length: 51 }, (_, i) => `template-${i}`);
+      const bulkArchiveData = {
+        template_ids: templateIds
+      };
+
+      await request(app)
+        .post('/api/v1/templates/archive/bulk')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send(bulkArchiveData)
+        .expect(400);
+    });
+  });
 }); 

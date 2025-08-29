@@ -965,4 +965,55 @@ exports.archiveTemplate = async function(req, res) {
     logger.error('Error archiving template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
+};
+
+/**
+ * @api {post} /templates/archive/bulk Bulk archive templates
+ * @apiVersion 1.0.0
+ * @apiName BulkArchiveTemplates
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {String[]} template_ids Array of template IDs (min: 1, max: 50)
+ */
+exports.bulkArchiveTemplates = async function(req, res) {
+  try {
+    const { template_ids } = req.validatedBody;
+    
+    const archivedCount = await TemplateModel.bulkArchiveTemplates(template_ids);
+    
+    if (archivedCount === 0) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:NO_TEMPLATES_ARCHIVED')
+      });
+    }
+
+    // Publish activity log command for each archived template
+    const activityLogCommands = template_ids.map(templateId => ({
+      value: { 
+        admin_user_id: req.user.userId,
+        entity_type: 'TEMPLATES',
+        action_name: 'BULK_ARCHIVE_TEMPLATE', 
+        entity_id: templateId
+      }
+    }));
+
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      activityLogCommands,
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template:TEMPLATES_BULK_ARCHIVED'),
+      data: {
+        archived_count: archivedCount,
+        total_requested: template_ids.length
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error bulk archiving templates:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
 }; 

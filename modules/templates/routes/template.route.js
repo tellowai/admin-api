@@ -42,4 +42,12 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.archiveTemplate
   );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/archive/bulk'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateBulkArchiveTemplatesData,
+    TemplateCtrl.bulkArchiveTemplates
+  );
 }; 

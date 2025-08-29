@@ -7,7 +7,9 @@
   "TEMPLATE_CODE_EXISTS": "Template code already exists",
   "INVALID_TEMPLATE_DATA": "Invalid template data provided",
   "TEMPLATE_CREATION_FAILED": "Failed to create template",
-  "TEMPLATE_UPDATE_FAILED": "Failed to update template"
-  ,
+  "TEMPLATE_UPDATE_FAILED": "Failed to update template",
+  "TEMPLATE_ARCHIVED": "Template archived successfully",
+  "TEMPLATES_BULK_ARCHIVED": "Templates archived successfully",
+  "NO_TEMPLATES_ARCHIVED": "No templates were archived",
   "CREDITS_INSUFFICIENT": "Credits provided are insufficient. Minimum required: {{minimumCreditsRequired}}, provided: {{providedCredits}}"
 } 

@@ -102,5 +102,10 @@ const updateTemplateSchema = Joi.object().keys({
   clips: Joi.array().items(clipSchema).optional()
 });
 
+const bulkArchiveTemplatesSchema = Joi.object().keys({
+  template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
-exports.updateTemplateSchema = updateTemplateSchema; 
+exports.updateTemplateSchema = updateTemplateSchema;
+exports.bulkArchiveTemplatesSchema = bulkArchiveTemplatesSchema; 

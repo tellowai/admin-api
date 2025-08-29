@@ -101,6 +101,41 @@ The template creation/update payload now uses a new structure for clips that wor
 }
 ```
 
+### New Bulk Archive Endpoint
+Added a new bulk archive endpoint for archiving multiple templates at once:
+
+**POST** `/api/v1/templates/archive/bulk`
+
+**Request Body:**
+```json
+{
+  "template_ids": ["template-id-1", "template-id-2", "template-id-3"]
+}
+```
+
+**Validation Rules:**
+- `template_ids` must be an array
+- Minimum 1 template ID required
+- Maximum 50 template IDs allowed
+- Each template ID must be a valid string
+
+**Response:**
+```json
+{
+  "message": "Templates archived successfully",
+  "data": {
+    "archived_count": 3,
+    "total_requested": 3
+  }
+}
+```
+
+**Features:**
+- Bulk database operation for efficiency
+- Activity logging for each archived template
+- Returns count of successfully archived templates
+- Handles cases where some templates may already be archived
+
 ### Field Changes
 - `cf_r2_bucket` → `thumb_r2_bucket`
 - `cf_r2_key` → `thumb_r2_key`
@@ -118,25 +153,39 @@ The template creation/update payload now uses a new structure for clips that wor
    - Updated field names and requirements
    - Removed conditional video type checks
    - Changed `template_clips_assets_type` values to `ai`/`non-ai`
+   - Added `bulkArchiveTemplatesSchema` for bulk archive validation
 
-2. **modules/templates/models/template.model.js**
+2. **modules/templates/validators/template.validator.js**
+   - Added `validateBulkArchiveTemplatesData` function for bulk archive validation
+
+3. **modules/templates/models/template.model.js**
    - Updated database queries to use new field names
    - Added functions to handle clip workflows
    - Updated transaction handling for new structure
    - Added workflow creation and retrieval functions
    - Removed conditional video type logic
+   - Added `bulkArchiveTemplates` function for bulk archiving
 
-3. **modules/templates/controllers/template.controller.js**
+4. **modules/templates/controllers/template.controller.js**
    - Updated field references (cf_r2 → thumb_r2)
    - Modified faces_needed generation logic for new workflow structure
    - Updated API documentation
    - Removed conditional video type checks
    - Clips and AE assets now work for all template types
+   - Added `bulkArchiveTemplates` function for bulk archive operations
+
+5. **modules/templates/routes/template.route.js**
+   - Added new route `/templates/archive/bulk` for bulk archive functionality
+
+6. **config/locales/en/template.json**
+   - Added new locale messages for bulk archive operations
 
 ### New Functions
 - `createClipWorkflowInTransaction()` - Creates workflow entries for clips
 - `getClipWorkflow()` - Retrieves workflow for a specific clip
 - `deleteTemplateAiClipsInTransaction()` - Updated to also delete workflows
+- `bulkArchiveTemplates()` - Archives multiple templates in a single operation
+- `validateBulkArchiveTemplatesData()` - Validates bulk archive request payload
 
 ## Migration Steps
 
@@ -165,6 +214,7 @@ A test file has been created at `tests/integration/template/test_new_template_st
 - Template listing with new fields
 - Template updates with workflow changes
 - Template archiving
+- Bulk template archiving with validation
 - Validation of `ai`/`non-ai` values
 
 ## Key Changes Summary
@@ -174,6 +224,7 @@ A test file has been created at `tests/integration/template/test_new_template_st
 3. **Simplified Asset Types**: Changed from `ai`/`static` to `ai`/`non-ai` for clarity
 4. **No Conditional Logic**: Removed all conditional checks based on template output type
 5. **Workflow-Based**: All processing is now workflow-based rather than type-based
+6. **Bulk Operations**: Added efficient bulk archive functionality for multiple templates
 
 ## Backward Compatibility
 
@@ -193,4 +244,5 @@ However, all templates now require:
 - Workflows are stored as JSON in the `clip_workflow` table for flexibility
 - The new structure is more modular and easier to extend with new workflow types
 - All database operations use transactions to ensure data consistency
-- Both image and video templates can now have complex processing workflows 
+- Both image and video templates can now have complex processing workflows
+- Bulk archive operations are optimized for performance with large numbers of templates

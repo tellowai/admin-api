@@ -427,7 +427,20 @@ exports.archiveTemplate = async function(templateId) {
 
   const result = await mysqlQueryRunner.runQueryInMaster(query, [templateId]);
   return result.affectedRows > 0;
-}; 
+};
+
+exports.bulkArchiveTemplates = async function(templateIds) {
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const query = `
+    UPDATE templates 
+    SET archived_at = NOW()
+    WHERE template_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, templateIds);
+  return result.affectedRows;
+};
 
 /**
  * Create AI clips for a template (transaction-aware version)
