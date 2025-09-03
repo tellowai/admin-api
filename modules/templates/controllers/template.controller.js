@@ -114,6 +114,29 @@ exports.listTemplates = async function(req, res) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
         }
 
+        // Generate presigned download URL for thumb_frame if available
+        if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+          try {
+            const isPublic = template.thumb_frame_bucket === 'public' || 
+                           template.thumb_frame_bucket === storage.publicBucket || 
+                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+            
+            if (isPublic) {
+              template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+            } else {
+              template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
+            }
+          } catch (error) {
+            logger.error('Error generating thumb_frame presigned URL:', { 
+              error: error.message, 
+              template_id: template.template_id,
+              thumb_frame_asset_key: template.thumb_frame_asset_key,
+              thumb_frame_bucket: template.thumb_frame_bucket
+            });
+            template.thumb_frame_url = null;
+          }
+        }
+
         // Parse JSON fields if they are strings
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
@@ -257,6 +280,29 @@ exports.listArchivedTemplates = async function(req, res) {
         }
         if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+        }
+
+        // Generate presigned download URL for thumb_frame if available
+        if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+          try {
+            const isPublic = template.thumb_frame_bucket === 'public' || 
+                           template.thumb_frame_bucket === storage.publicBucket || 
+                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+            
+            if (isPublic) {
+              template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+            } else {
+              template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
+            }
+          } catch (error) {
+            logger.error('Error generating thumb_frame presigned URL:', { 
+              error: error.message, 
+              template_id: template.template_id,
+              thumb_frame_asset_key: template.thumb_frame_asset_key,
+              thumb_frame_bucket: template.thumb_frame_bucket
+            });
+            template.thumb_frame_url = null;
+          }
         }
 
         // Parse JSON fields if they are strings
@@ -410,6 +456,29 @@ exports.searchTemplates = async function(req, res) {
         }
         if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+        }
+
+        // Generate presigned download URL for thumb_frame if available
+        if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+          try {
+            const isPublic = template.thumb_frame_bucket === 'public' || 
+                           template.thumb_frame_bucket === storage.publicBucket || 
+                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+            
+            if (isPublic) {
+              template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+            } else {
+              template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
+            }
+          } catch (error) {
+            logger.error('Error generating thumb_frame presigned URL:', { 
+              error: error.message, 
+              template_id: template.template_id,
+              thumb_frame_asset_key: template.thumb_frame_asset_key,
+              thumb_frame_bucket: template.thumb_frame_bucket
+            });
+            template.thumb_frame_url = null;
+          }
         }
 
         // Parse JSON fields if they are strings
