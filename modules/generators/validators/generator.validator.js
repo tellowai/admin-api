@@ -344,11 +344,11 @@ exports.validateWorkflowQueue = function(req, res, next) {
   });
 
   const workflowDataSchema = Joi.object({
-    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender').required(),
+    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur').required(),
     value: Joi.alternatives().conditional('type', {
       is: 'file_upload',
       then: fileUploadValueSchema,
-      otherwise: Joi.string().required()
+      otherwise: Joi.alternatives().try(Joi.string(), Joi.number()).required()
     }).required()
   });
 
