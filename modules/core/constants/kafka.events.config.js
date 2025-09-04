@@ -21,6 +21,7 @@ const TOPICS = {
   GENERATION_COMMAND_START_MULTI_CHARACTER_INPAINTING: `${env}.generation.command.start_multi_character_inpainting`,
   GENERATION_COMMAND_START_VIDEO_FLOW_COMPOSER: `${env}.generation.command.start_video_flow_composer`,
   VIDEO_EDITING_COMMAND_MERGE_VIDEOS: `${env}.video_editing.command.merge_videos`,
+  GENERATION_COMMAND_START_ADMIN_TEST_WORKFLOW: `${env}.generation.command.start_admin_test_workflow`,
 
   // event type
   AUTH_EVENT_SIGNED_UP: `${env}.auth.event.signed_up`,

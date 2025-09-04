@@ -334,4 +334,66 @@ exports.validateVideoFlowComposer = function(req, res, next) {
 
   req.validatedBody = value;
   next();
+};
+
+exports.validateWorkflowQueue = function(req, res, next) {
+  const fileUploadValueSchema = Joi.object({
+    asset_key: Joi.string().required(),
+    asset_bucket: Joi.string().required(),
+    asset_r2_url: Joi.string().uri().required()
+  });
+
+  const workflowDataSchema = Joi.object({
+    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender').required(),
+    value: Joi.alternatives().conditional('type', {
+      is: 'file_upload',
+      then: fileUploadValueSchema,
+      otherwise: Joi.string().required()
+    }).required()
+  });
+
+  const workflowSchema = Joi.object({
+    workflow_id: Joi.string().required(),
+    workflow_code: Joi.string().required(),
+    order_index: Joi.number().integer().min(0).required(),
+    data: Joi.array().items(workflowDataSchema).required()
+  });
+
+  const clipSchema = Joi.object({
+    clip_index: Joi.number().integer().min(1).required(),
+    asset_type: Joi.string().valid('image', 'video').required(),
+    workflow: Joi.array().items(workflowSchema).min(1).required()
+  });
+
+  const customTextInputFieldSchema = Joi.object({
+    layer_name: Joi.string().required(),
+    default_text: Joi.string().required(),
+    input_field_type: Joi.string().valid('text', 'long_text').required(),
+    user_input_field_name: Joi.string().required(),
+    value: Joi.string().required()
+  });
+
+  const uploadedAssetSchema = Joi.object({
+    asset_key: Joi.string().required(),
+    asset_bucket: Joi.string().required()
+  });
+
+  const schema = Joi.object({
+    clips: Joi.array().items(clipSchema).min(1).required(),
+    custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).optional(),
+    template_id: Joi.string().required(),
+    uploaded_assets: Joi.array().items(uploadedAssetSchema).optional(),
+    user_character_ids: Joi.array().items(Joi.string()).optional()
+  });
+
+  const { error, value } = schema.validate(req.body);
+
+  if (error) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: error.details[0].message
+    });
+  }
+
+  req.validatedBody = value;
+  next();
 }; 

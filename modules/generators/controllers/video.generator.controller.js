@@ -588,3 +588,213 @@ exports.handleVideoFlowComposer = async function(req, res) {
     return GeneratorErrorHandler.handleGeneratorErrors(error, res);
   }
 };
+
+exports.handleWorkflowQueue = async function(req, res) {
+  const generationId = uuidv4();
+  const adminId = req.user.userId;
+  const userId = req.user.userId;
+  const { clips, custom_text_input_fields=[], template_id, uploaded_assets=[], user_character_ids=[] } = req.validatedBody;
+
+  try {
+    // Create summary data for ClickHouse (avoid storing large JSON)
+    const summaryData = {
+      generation_type: 'workflow_queue',
+      template_id,
+      user_character_ids,
+      total_workflows: clips.reduce((total, clip) => total + clip.workflow.length, 0),
+      custom_text_input_fields_count: custom_text_input_fields ? custom_text_input_fields.length : 0,
+      uploaded_assets_count: uploaded_assets ? uploaded_assets.length : 0,
+      clip_summary: clips.map(clip => ({
+        clip_index: clip.clip_index,
+        asset_type: clip.asset_type,
+        workflow_count: clip.workflow.length,
+        workflow_codes: clip.workflow.map(w => w.workflow_code)
+      }))
+    };
+
+    // Insert initial resource generation record in ClickHouse
+    await VideoGeneratorModel.insertResourceGeneration([{
+      resource_generation_id: generationId,
+      user_character_ids: user_character_ids.join(','),
+      user_id: userId,
+      template_id,
+      type: 'generation',
+      media_type: 'video',
+      additional_data: JSON.stringify(summaryData)
+    }]);
+
+    // Insert SUBMITTED event in ClickHouse (store actual data only)
+    await VideoGeneratorModel.insertResourceGenerationEvent([{
+      resource_generation_event_id: uuidv4(),
+      resource_generation_id: generationId,
+      event_type: 'SUBMITTED',
+      additional_data: JSON.stringify({
+        user_id: userId,
+        template_id,
+        user_character_ids,
+        clips_data: clips,
+        custom_text_input_fields,
+        uploaded_assets,
+        request_timestamp: new Date().toISOString()
+      })
+    }]);
+
+    // Send to Kafka for processing
+    // await kafkaCtrl.sendMessage(
+    //   TOPICS.GENERATION_COMMAND_START_ADMIN_TEST_WORKFLOW, // Reusing existing topic for workflow processing
+    //   [{
+    //     value: {
+    //       generation_id: generationId,
+    //       generation_type: 'workflow_queue',
+    //       user_character_ids,
+    //       clips,
+    //       custom_text_input_fields,
+    //       template_id,
+    //       uploaded_assets,
+    //       user_id: userId
+    //     }
+    //   }],
+    //   'start_admin_test_workflow'
+    // );
+
+    // Log admin activity
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: adminId,
+          entity_type: 'STUDIO_TOOLS',
+          action_name: 'ADMIN_TEST_WORKFLOW', 
+          entity_id: generationId,
+          additional_data: JSON.stringify({
+            template_id,
+            total_clips: clips.length,
+            total_workflows: summaryData.total_workflows,
+            user_character_ids_count: user_character_ids.length,
+            custom_text_input_fields_count: summaryData.custom_text_input_fields_count,
+            uploaded_assets_count: summaryData.uploaded_assets_count
+          })
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        generation_id: '691c6c68-a402-477b-b40c-95c900218607',
+        status: 'SUBMITTED',
+        total_clips: clips.length,
+        total_workflows: summaryData.total_workflows
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error submitting workflow queue request:', { error: error.message, stack: error.stack });
+    return GeneratorErrorHandler.handleGeneratorErrors(error, res);
+  }
+};
+
+exports.getWorkflowGenerationStatus = async function(req, res) {
+  const { generationId } = req.params;
+  const userId = req.user.userId;
+
+  try {
+    // First verify ownership
+    const hasAccess = await VideoGeneratorModel.verifyGenerationOwnership(generationId, userId);
+    if (!hasAccess) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('generator:GENERATION_NOT_FOUND')
+      });
+    }
+
+    // Get all events for this generation
+    const generationEvents = await VideoGeneratorModel.getAllGenerationEvents(generationId);
+    if (!generationEvents || generationEvents.length === 0) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('generator:GENERATION_NOT_FOUND')
+      });
+    }
+
+    // Get storage provider for presigned URLs
+    const storage = StorageFactory.getProvider();
+
+    // Helper function to populate URLs for assets
+    const populateAssetUrls = async (obj) => {
+      if (typeof obj !== 'object' || obj === null) return obj;
+      
+      if (Array.isArray(obj)) {
+        return Promise.all(obj.map(item => populateAssetUrls(item)));
+      }
+
+      const result = { ...obj };
+      
+      // Check if this object has asset_key and asset_bucket
+      if (result.asset_key && result.asset_bucket && !result.url && !result.r2_url) {
+        try {
+          let presignedUrl;
+          if (result.asset_bucket.includes('ephemeral')) {
+            presignedUrl = await storage.generateEphemeralPresignedDownloadUrl(result.asset_key, { expiresIn: 900 });
+          } else if(result.asset_bucket.includes('public')) {
+            presignedUrl = await storage.generatePublicBucketPresignedDownloadUrl(result.asset_key, { expiresIn: 900 });
+          } else {
+            presignedUrl = await storage.generatePresignedDownloadUrl(result.asset_key, { expiresIn: 900 });
+          }
+          result.url = presignedUrl;
+        } catch (err) {
+          logger.error('Error generating presigned URL:', { 
+            error: err.message, 
+            asset_key: result.asset_key, 
+            asset_bucket: result.asset_bucket 
+          });
+        }
+      }
+
+      // Recursively process nested objects
+      for (const key in result) {
+        if (typeof result[key] === 'object' && result[key] !== null) {
+          result[key] = await populateAssetUrls(result[key]);
+        }
+      }
+
+      return result;
+    };
+
+    // Process each event and add presigned URLs for assets
+    const processedEvents = await Promise.all(
+      generationEvents
+        .filter(event => ['COMPLETED', 'POST_PROCESSING'].includes(event.event_type))
+        .map(async (event) => {
+          try {
+            // Parse additional_data
+            let additionalData = JSON.parse(event.additional_data);
+            
+            // Populate URLs for all assets in the data
+            additionalData = await populateAssetUrls(additionalData);
+            
+            return {
+              ...event,
+              additional_data: additionalData
+            };
+          } catch (err) {
+            logger.error('Error parsing additional_data for event:', { 
+              error: err.message, 
+              event_id: event.resource_generation_event_id,
+              value: event.additional_data 
+            });
+            return {
+              ...event,
+              additional_data: {}
+            };
+          }
+        })
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: processedEvents
+    });
+
+  } catch (error) {
+    logger.error('Error checking workflow generation status:', { error: error.message, stack: error.stack });
+    return GeneratorErrorHandler.handleGeneratorErrors(error, res);
+  }
+};

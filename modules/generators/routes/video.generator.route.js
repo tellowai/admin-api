@@ -16,12 +16,28 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/video-generations/workflows/:generationId/status'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    VideoGenerator.getWorkflowGenerationStatus
+  );
+
+  app.route(
     versionConfig.routePrefix + '/video-generations/video-flow-composer/queue'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
     GeneratorRateLimiterMiddleware.isVideoFlowComposerRateLimited,
     GeneratorValidator.validateVideoFlowComposer,
     VideoGenerator.handleVideoFlowComposer
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/video-generations/workflows/queue'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    GeneratorRateLimiterMiddleware.isVideoFlowComposerRateLimited,
+    GeneratorValidator.validateWorkflowQueue,
+    VideoGenerator.handleWorkflowQueue
   );
 
 }; 
