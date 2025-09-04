@@ -593,7 +593,7 @@ exports.handleWorkflowQueue = async function(req, res) {
   const generationId = uuidv4();
   const adminId = req.user.userId;
   const userId = req.user.userId;
-  const { clips, custom_text_input_fields=[], template_id, uploaded_assets=[], user_character_ids=[] } = req.validatedBody;
+  const { clips, template_id, uploaded_assets=[], user_character_ids=[] } = req.validatedBody;
 
   try {
     // Create summary data for ClickHouse (avoid storing large JSON)
@@ -602,7 +602,6 @@ exports.handleWorkflowQueue = async function(req, res) {
       template_id,
       user_character_ids,
       total_workflows: clips.reduce((total, clip) => total + clip.workflow.length, 0),
-      custom_text_input_fields_count: custom_text_input_fields ? custom_text_input_fields.length : 0,
       uploaded_assets_count: uploaded_assets ? uploaded_assets.length : 0,
       clip_summary: clips.map(clip => ({
         clip_index: clip.clip_index,
@@ -633,7 +632,6 @@ exports.handleWorkflowQueue = async function(req, res) {
         template_id,
         user_character_ids,
         clips_data: clips,
-        custom_text_input_fields,
         uploaded_assets,
         request_timestamp: new Date().toISOString()
       })
@@ -648,7 +646,6 @@ exports.handleWorkflowQueue = async function(req, res) {
     //       generation_type: 'workflow_queue',
     //       user_character_ids,
     //       clips,
-    //       custom_text_input_fields,
     //       template_id,
     //       uploaded_assets,
     //       user_id: userId
@@ -671,7 +668,6 @@ exports.handleWorkflowQueue = async function(req, res) {
             total_clips: clips.length,
             total_workflows: summaryData.total_workflows,
             user_character_ids_count: user_character_ids.length,
-            custom_text_input_fields_count: summaryData.custom_text_input_fields_count,
             uploaded_assets_count: summaryData.uploaded_assets_count
           })
         }

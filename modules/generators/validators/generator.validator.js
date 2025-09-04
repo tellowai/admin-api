@@ -365,14 +365,6 @@ exports.validateWorkflowQueue = function(req, res, next) {
     workflow: Joi.array().items(workflowSchema).min(1).required()
   });
 
-  const customTextInputFieldSchema = Joi.object({
-    layer_name: Joi.string().required(),
-    default_text: Joi.string().required(),
-    input_field_type: Joi.string().valid('text', 'long_text').required(),
-    user_input_field_name: Joi.string().required(),
-    value: Joi.string().required()
-  });
-
   const uploadedAssetSchema = Joi.object({
     asset_key: Joi.string().required(),
     asset_bucket: Joi.string().required()
@@ -380,7 +372,6 @@ exports.validateWorkflowQueue = function(req, res, next) {
 
   const schema = Joi.object({
     clips: Joi.array().items(clipSchema).min(1).required(),
-    custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).optional(),
     template_id: Joi.string().required(),
     uploaded_assets: Joi.array().items(uploadedAssetSchema).optional(),
     user_character_ids: Joi.array().items(Joi.string()).optional()
