@@ -1308,11 +1308,27 @@ exports.copyTemplate = async function(req, res) {
     // Generate new template ID
     const newTemplateId = uuidv4();
     
+    // Generate unique template code: copy first 4 letters from original + 2 random numbers
+    const generateTemplateCode = (originalCode) => {
+      const numbers = '0123456789';
+      let newCode = '';
+      
+      // Copy first 4 characters from original template code
+      newCode = originalCode.substring(0, 4);
+      
+      // Generate 2 random numbers
+      for (let i = 0; i < 2; i++) {
+        newCode += numbers.charAt(Math.floor(Math.random() * numbers.length));
+      }
+      
+      return newCode;
+    };
+
     // Prepare new template data
     const newTemplateData = {
       template_id: newTemplateId,
       template_name: `${originalTemplate.template_name} copy`,
-      template_code: `${originalTemplate.template_code}_copy_${Date.now()}`, // Make unique
+      template_code: generateTemplateCode(originalTemplate.template_code),
       template_gender: originalTemplate.template_gender,
       template_output_type: originalTemplate.template_output_type,
       template_clips_assets_type: originalTemplate.template_clips_assets_type,
