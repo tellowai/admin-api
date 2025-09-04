@@ -343,11 +343,24 @@ exports.validateWorkflowQueue = function(req, res, next) {
     asset_r2_url: Joi.string().uri().required()
   });
 
+  const existingClipSelectionValueSchema = Joi.object({
+    clip_index: Joi.number().integer().min(0).required(),
+    data_type: Joi.string().valid('output', 'input').required()
+  });
+
   const workflowDataSchema = Joi.object({
-    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur').required(),
+    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur', 'existing_clip_selection').required(),
     value: Joi.alternatives().conditional('type', {
-      is: 'file_upload',
-      then: fileUploadValueSchema,
+      switch: [
+        {
+          is: 'file_upload',
+          then: fileUploadValueSchema
+        },
+        {
+          is: 'existing_clip_selection',
+          then: existingClipSelectionValueSchema
+        }
+      ],
       otherwise: Joi.alternatives().try(Joi.string(), Joi.number()).required()
     }).required()
   });
@@ -370,12 +383,16 @@ exports.validateWorkflowQueue = function(req, res, next) {
     asset_bucket: Joi.string().required()
   });
 
-  const schema = Joi.object({
+  // Support both array format (new) and object format (legacy)
+  const arraySchema = Joi.array().items(clipSchema).min(1).required();
+  const objectSchema = Joi.object({
     clips: Joi.array().items(clipSchema).min(1).required(),
     template_id: Joi.string().required(),
     uploaded_assets: Joi.array().items(uploadedAssetSchema).optional(),
     user_character_ids: Joi.array().items(Joi.string()).optional()
   });
+
+  const schema = Joi.alternatives().try(arraySchema, objectSchema);
 
   const { error, value } = schema.validate(req.body);
 
