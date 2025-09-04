@@ -1281,4 +1281,94 @@ exports.bulkUnarchiveTemplates = async function(req, res) {
     logger.error('Error bulk unarchiving templates:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
+};
+
+/**
+ * @api {post} /templates/:templateId/copy Copy template
+ * @apiVersion 1.0.0
+ * @apiName CopyTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiParam {String} templateId Template ID to copy
+ */
+exports.copyTemplate = async function(req, res) {
+  try {
+    const { templateId } = req.params;
+    
+    // Get the original template with all its data
+    const originalTemplate = await TemplateModel.getTemplateByIdWithAssets(templateId);
+    
+    if (!originalTemplate) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    // Generate new template ID
+    const newTemplateId = uuidv4();
+    
+    // Prepare new template data
+    const newTemplateData = {
+      template_id: newTemplateId,
+      template_name: `${originalTemplate.template_name} copy`,
+      template_code: `${originalTemplate.template_code}_copy_${Date.now()}`, // Make unique
+      template_gender: originalTemplate.template_gender,
+      template_output_type: originalTemplate.template_output_type,
+      template_clips_assets_type: originalTemplate.template_clips_assets_type,
+      description: originalTemplate.description,
+      prompt: originalTemplate.prompt,
+      faces_needed: originalTemplate.faces_needed,
+      cf_r2_key: originalTemplate.cf_r2_key,
+      cf_r2_url: originalTemplate.cf_r2_url,
+      cf_r2_bucket: originalTemplate.cf_r2_bucket,
+      color_video_bucket: originalTemplate.color_video_bucket,
+      color_video_key: originalTemplate.color_video_key,
+      mask_video_bucket: originalTemplate.mask_video_bucket,
+      mask_video_key: originalTemplate.mask_video_key,
+      bodymovin_json_bucket: originalTemplate.bodymovin_json_bucket,
+      bodymovin_json_key: originalTemplate.bodymovin_json_key,
+      custom_text_input_fields: originalTemplate.custom_text_input_fields,
+      credits: originalTemplate.credits,
+      image_uploads_required: originalTemplate.image_uploads_required,
+      video_uploads_required: originalTemplate.video_uploads_required,
+      additional_data: originalTemplate.additional_data,
+      user_assets_layer: originalTemplate.user_assets_layer,
+      thumb_frame_asset_key: originalTemplate.thumb_frame_asset_key,
+      thumb_frame_bucket: originalTemplate.thumb_frame_bucket
+    };
+
+    // Prepare clips data for copying
+    const clipsToCopy = originalTemplate.clips || [];
+    
+    // Create the new template with all related data
+    await TemplateModel.createTemplate(newTemplateData, clipsToCopy);
+    
+    // Publish activity log command
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: { 
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'COPY_TEMPLATE', 
+          entity_id: newTemplateId,
+          original_entity_id: templateId
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      message: req.t('template:TEMPLATE_COPIED'),
+      data: { 
+        template_id: newTemplateId,
+        original_template_id: templateId
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error copying template:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
 }; 

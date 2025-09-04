@@ -65,4 +65,11 @@ module.exports = function(app) {
     TemplateValidator.validateBulkUnarchiveTemplatesData,
     TemplateCtrl.bulkUnarchiveTemplates
   );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/copy'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.copyTemplate
+  );
 }; 

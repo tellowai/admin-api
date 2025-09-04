@@ -15,5 +15,6 @@
   "NO_TEMPLATES_UNARCHIVED": "No templates were unarchived",
   "ARCHIVED_TEMPLATES_LISTED": "Archived templates listed successfully",
   "NO_ARCHIVED_TEMPLATES": "No archived templates found",
-  "CREDITS_INSUFFICIENT": "Credits provided are insufficient. Minimum required: {{minimumCreditsRequired}}, provided: {{providedCredits}}"
+  "CREDITS_INSUFFICIENT": "Credits provided are insufficient. Minimum required: {{minimumCreditsRequired}}, provided: {{providedCredits}}",
+  "TEMPLATE_COPIED": "Template copied successfully"
 } 
