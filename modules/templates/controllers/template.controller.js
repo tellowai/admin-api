@@ -561,11 +561,22 @@ exports.createTemplate = async function(req, res) {
     // Generate UUID for template_id
     templateData.template_id = uuidv4();
 
-    // Auto-detect AI vs Non-AI based on actual clips content
-    const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
-    const resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
+    // Determine template type: respect user input if provided, otherwise auto-detect
+    let resolvedClipsAssetsType;
     
-    // Override user's template_clips_assets_type with auto-detected value
+    if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'ai') {
+      // User explicitly specified AI - respect it
+      resolvedClipsAssetsType = 'ai';
+    } else if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'non-ai') {
+      // User explicitly specified Non-AI - respect it
+      resolvedClipsAssetsType = 'non-ai';
+    } else {
+      // No template type specified - auto-detect based on clips content
+      const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
+      resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
+    }
+    
+    // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
     if (resolvedClipsAssetsType === 'non-ai') {
@@ -1008,7 +1019,7 @@ async function calculateMinimumCreditsFromClips(clips) {
     
     if (model.status !== 'active') {
       const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD;
-      totalUsd += fallbackUsd;
+    totalUsd += fallbackUsd;
       occurrenceBreakdown.push({
         ...occurrence,
         modelFound: true,
@@ -1279,15 +1290,27 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
-    // Auto-detect AI vs Non-AI based on actual clips content
-    const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
-    const resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
+    // Determine template type: respect user input if provided, otherwise auto-detect
+    let resolvedClipsAssetsType;
+    
+    if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'ai') {
+      // User explicitly specified AI - respect it
+      resolvedClipsAssetsType = 'ai';
+    } else if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'non-ai') {
+      // User explicitly specified Non-AI - respect it
+      resolvedClipsAssetsType = 'non-ai';
+    } else {
+      // No template type specified - auto-detect based on clips content
+      const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
+      resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
+    }
+    
     const isNonAi = resolvedClipsAssetsType === 'non-ai';
     
-    // Override user's template_clips_assets_type with auto-detected value
+    // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
     
-    logger.info('UpdateTemplate auto-detected template_clips_assets_type', { templateId, resolvedClipsAssetsType, hasAiModels });
+    logger.info('UpdateTemplate resolved template_clips_assets_type', { templateId, resolvedClipsAssetsType, userProvided: templateData.template_clips_assets_type });
 
     // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
     if (isNonAi) {
@@ -1412,14 +1435,11 @@ exports.updateTemplate = async function(req, res) {
         });
       }
     } else {
-      // No clips provided in update - check existing clips and auto-detect AI vs Non-AI
+      // No clips provided in update - use resolved template type
       if (existingTemplate) {
-        // Get existing clips from database to check for AI models
-        const existingClips = await TemplateModel.getTemplateAiClips(templateId);
-        const hasExistingAiModels = hasAiModelsInClips(existingClips || []);
-        
-        if (hasExistingAiModels) {
-          // Existing clips have AI models - treat as AI template
+        if (resolvedClipsAssetsType === 'ai') {
+          // User specified AI or auto-detected as AI - get existing clips and calculate credits
+          const existingClips = await TemplateModel.getTemplateAiClips(templateId);
           const minimumCredits = await calculateMinimumCreditsFromClips(existingClips || []);
           
           if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
@@ -1435,10 +1455,9 @@ exports.updateTemplate = async function(req, res) {
             });
           }
         } else {
-          // Existing clips have no AI models - treat as Non-AI template
-          templateData.template_clips_assets_type = 'non-ai';
+          // User specified Non-AI or auto-detected as Non-AI
           templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, []);
-          logger.info('CreditsCalc: treated as Non-AI based on existing clips (update)', { 
+          logger.info('CreditsCalc: treated as Non-AI (update)', { 
             provided: templateData.credits, 
             assigned: templateData.credits
           });
