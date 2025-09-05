@@ -561,14 +561,19 @@ exports.createTemplate = async function(req, res) {
     // Generate UUID for template_id
     templateData.template_id = uuidv4();
 
-    const resolvedClipsAssetsType = (templateData.template_clips_assets_type || '').toLowerCase();
+    // Auto-detect AI vs Non-AI based on actual clips content
+    const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
+    const resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
+    
+    // Override user's template_clips_assets_type with auto-detected value
+    templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
     if (resolvedClipsAssetsType === 'non-ai') {
       // Force non-ai templates to have no clips and derive counts from Bodymovin JSON
       templateData.clips = [];
       templateData.faces_needed = [];
-      // Enforce credits for non-AI templates from constant
-      templateData.credits = TEMPLATE_CONSTANTS.NON_AI_TEMPLATE_CREDITS;
+      // Calculate credits for non-AI templates based on output type and clips
+      templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type, templateData.clips);
 
       try {
         const key = templateData.bodymovin_json_key;
@@ -607,6 +612,8 @@ exports.createTemplate = async function(req, res) {
       if (templateData.clips && templateData.clips.length > 0) {
         templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
         templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
+        templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
+        
         if (!templateData.template_gender) {
           if (templateData.faces_needed && templateData.faces_needed.length === 2) {
             templateData.template_gender = 'couple';
@@ -614,11 +621,14 @@ exports.createTemplate = async function(req, res) {
             templateData.template_gender = templateData.faces_needed[0].character_gender;
           }
         }
+        
         // Credits: derive minimum from AI models used
         const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
-        if (templateData.credits !== undefined) {
-          ensureCreditsSatisfyMinimum(templateData.credits, minimumCredits, req.t);
+        if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+          // User provided sufficient credits, use them
+          // templateData.credits remains as provided
         } else {
+          // User provided insufficient credits or no credits, assign minimum
           templateData.credits = minimumCredits || 1;
         }
       }
@@ -754,17 +764,62 @@ function generateFacesNeededFromClips(clips) {
  * @returns {number}
  */
 function calculateImageUploadsRequiredFromClips(clips) {
-  if (!Array.isArray(clips)) return 0;
+  if (!Array.isArray(clips)) {
+    return 0;
+  }
 
   let uploads = 0;
-  for (const clip of clips) {
-    if (!clip || !Array.isArray(clip.workflow)) continue;
-    for (const step of clip.workflow) {
+  
+  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
+    const clip = clips[clipIndex];
+    if (!clip || !Array.isArray(clip.workflow)) {
+      continue;
+    }
+    
+    for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
+      const step = clip.workflow[stepIndex];
       const workflowCode = (step && step.workflow_code ? String(step.workflow_code) : '').toLowerCase().trim();
       const workflowId = (step && step.workflow_id ? String(step.workflow_id) : '').toLowerCase().trim();
 
       const isAskUploadByCode = workflowCode === 'ask_user_to_upload_image' || workflowCode === 'ask-user-to-upload-image' || workflowCode === 'ask_user_upload_image';
       const isAskUploadById = workflowId === 'user-upload-image' || workflowId === 'user_upload_image';
+
+      if (isAskUploadByCode || isAskUploadById) {
+        uploads += 1;
+      }
+    }
+  }
+
+  return uploads;
+}
+
+/**
+ * Calculate how many user video uploads are required based on workflow steps
+ * Counts occurrences of a step asking the user to upload a video
+ * Recognizes by workflow_code 'ask_user_to_upload_video' or workflow_id 'user-upload-video'
+ * @param {Array} clips
+ * @returns {number}
+ */
+function calculateVideoUploadsRequiredFromClips(clips) {
+  if (!Array.isArray(clips)) {
+    return 0;
+  }
+
+  let uploads = 0;
+  
+  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
+    const clip = clips[clipIndex];
+    if (!clip || !Array.isArray(clip.workflow)) {
+      continue;
+    }
+    
+    for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
+      const step = clip.workflow[stepIndex];
+      const workflowCode = (step && step.workflow_code ? String(step.workflow_code) : '').toLowerCase().trim();
+      const workflowId = (step && step.workflow_id ? String(step.workflow_id) : '').toLowerCase().trim();
+
+      const isAskUploadByCode = workflowCode === 'ask_user_to_upload_video' || workflowCode === 'ask-user-to-upload-video' || workflowCode === 'ask_user_upload_video';
+      const isAskUploadById = workflowId === 'user-upload-video' || workflowId === 'user_upload_video';
 
       if (isAskUploadByCode || isAskUploadById) {
         uploads += 1;
@@ -802,57 +857,297 @@ function computeAssetCountsFromBodymovin(bodymovinJson) {
 }
 
 /**
- * Extract AI model IDs used across provided clips' workflows
+ * Extract all AI model occurrences from clips for cost calculation
+ * Returns array of model occurrences with context (clip, step, quality, duration)
+ * @param {Array} clips
+ * @returns {Array<Object>}
+ */
+function extractAiModelOccurrencesFromClips(clips) {
+  const modelOccurrences = [];
+  
+  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
+    const clip = clips[clipIndex];
+    if (!clip || !Array.isArray(clip.workflow)) continue;
+    
+    for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
+      const step = clip.workflow[stepIndex];
+      if (!step || !Array.isArray(step.data)) continue;
+      
+      let modelId = null;
+      let videoQuality = null;
+      let videoDuration = null;
+      let prompt = null;
+      
+      // Extract model ID and context from step data
+      for (const item of step.data) {
+        if (item && item.type === 'ai_model' && item.value) {
+          modelId = item.value;
+        } else if (item && item.type === 'video_quality' && item.value) {
+          videoQuality = item.value;
+        } else if (item && item.type === 'video_duration' && item.value) {
+          videoDuration = item.value;
+        } else if (item && item.type === 'prompt' && item.value) {
+          prompt = item.value;
+        }
+      }
+      
+      if (modelId) {
+        modelOccurrences.push({
+          modelId,
+          clipIndex,
+          stepIndex,
+          videoQuality,
+          videoDuration,
+          prompt: prompt ? prompt.substring(0, 100) + '...' : null, // Truncate for logging
+          workflowCode: step.workflow_code,
+          workflowId: step.workflow_id
+        });
+      }
+    }
+  }
+  
+  return modelOccurrences;
+}
+
+/**
+ * Extract unique AI model IDs from clips for database lookup
+ * @param {Array} clips
+ * @returns {Array<string>}
  */
 function extractAiModelIdsFromClips(clips) {
-  if (!Array.isArray(clips) || clips.length === 0) return [];
-  const modelIds = new Set();
+  const occurrences = extractAiModelOccurrencesFromClips(clips);
+  const uniqueIds = [...new Set(occurrences.map(occ => occ.modelId))];
+  return uniqueIds;
+}
+
+/**
+ * Check if clips contain any AI models
+ * @param {Array} clips - Template clips array
+ * @returns {boolean} - True if clips contain AI models
+ */
+function hasAiModelsInClips(clips) {
+  if (!clips || clips.length === 0) {
+    return false;
+  }
+  
   for (const clip of clips) {
-    if (!clip || !Array.isArray(clip.workflow)) continue;
-    for (const workflowStep of clip.workflow) {
-      if (!workflowStep || !Array.isArray(workflowStep.data)) continue;
-      for (const dataItem of workflowStep.data) {
-        if (!dataItem || typeof dataItem !== 'object') continue;
-        const itemType = String(dataItem.type || '').toLowerCase();
-        if (itemType === 'ai_model') {
-          const modelId = (dataItem.value ?? '').toString().trim();
-          if (modelId) modelIds.add(modelId);
+    if (clip.workflow && Array.isArray(clip.workflow)) {
+      for (const step of clip.workflow) {
+        if (step.model_id) {
+          return true;
         }
       }
     }
   }
-  return Array.from(modelIds);
+  
+  return false;
 }
 
 /**
- * Calculate a minimum credits value from the AI models used in clips.
- * v1 rule: 1 credit per unique active model referenced at least once.
- * This is intentionally simple and can be extended to parse ai_models.costs JSON.
+ * Calculate credits for non-AI templates based on output type and clips
+ * @param {string} outputType - Template output type (image, video, audio)
+ * @param {Array} clips - Template clips array
+ * @returns {number} - Credits required
+ */
+function calculateNonAiTemplateCredits(outputType, clips) {
+  const baseCredits = outputType === 'video' ? TEMPLATE_CONSTANTS.NON_AI_VIDEO_BASE_CREDITS : TEMPLATE_CONSTANTS.NON_AI_IMAGE_BASE_CREDITS;
+  
+  // For videos, add 0.003 USD per clip
+  if (outputType === 'video' && clips && clips.length > 0) {
+    // Add 0.003 USD per clip (0.15 credits per clip at $0.02 per credit)
+    const additionalCredits = Math.ceil((clips.length * 0.003) / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
+    return baseCredits + additionalCredits;
+  }
+  
+  return baseCredits;
+}
+
+/**
+ * Calculate credits based on actual model usage occurrences and their costs
+ * Each model usage is calculated individually with proper quality/duration pricing
  */
 async function calculateMinimumCreditsFromClips(clips) {
-  const uniqueModelIds = extractAiModelIdsFromClips(clips);
-  if (uniqueModelIds.length === 0) return 0;
-  const aiModels = await AiModelModel.getAiModelsByIds(uniqueModelIds);
-  const activeModels = aiModels.filter(model => (model?.status || '').toLowerCase() !== 'inactive');
-
-  // Sum minimum USD cost per model based on costs JSON
-  let totalUsd = 0;
-  for (const model of activeModels) {
-    const costs = normalizeCosts(model.costs);
-    const modelUsd = estimateMinimumUsdPerInvocation(costs);
-    totalUsd += modelUsd;
+  const modelOccurrences = extractAiModelOccurrencesFromClips(clips);
+  
+  if (modelOccurrences.length === 0) {
+    return 0;
+  }
+  
+  // Get unique model IDs for database lookup
+  const uniqueModelIds = [...new Set(modelOccurrences.map(occ => occ.modelId))];
+  
+  const aiModels = await AiModelModel.getAiModelsByPlatformModelIds(uniqueModelIds);
+  
+  // Create a map for quick model lookup using platform_model_id
+  const modelMap = new Map();
+  for (const model of aiModels) {
+    // Map by platform_model_id since that's what's used in clips
+    modelMap.set(model.platform_model_id, model);
+    // Also map by model_id for backward compatibility
+    modelMap.set(model.model_id, model);
   }
 
-  // Handle any unknown/missing models not returned from DB (IDs diff)
-  const missingModelIds = uniqueModelIds.filter(id => !aiModels.find(m => m.model_id === id));
-  if (missingModelIds.length > 0) {
-    const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD * missingModelIds.length;
-    totalUsd += fallbackUsd;
+  let totalUsd = 0;
+  const occurrenceBreakdown = [];
+  
+  // Calculate cost for each model occurrence
+  for (const occurrence of modelOccurrences) {
+    const model = modelMap.get(occurrence.modelId);
+    
+    if (!model) {
+      const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD;
+      totalUsd += fallbackUsd;
+      occurrenceBreakdown.push({
+        ...occurrence,
+        modelFound: false,
+        costUsd: fallbackUsd,
+        reason: 'Model not found in database'
+      });
+      continue;
+    }
+    
+    if (model.status !== 'active') {
+      const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD;
+      totalUsd += fallbackUsd;
+      occurrenceBreakdown.push({
+        ...occurrence,
+        modelFound: true,
+        modelStatus: model.status,
+        costUsd: fallbackUsd,
+        reason: 'Model inactive'
+      });
+      continue;
+    }
+    
+    const costs = normalizeCosts(model.costs);
+    const occurrenceCost = calculateOccurrenceCost(occurrence, costs, model);
+    
+    totalUsd += occurrenceCost;
+    occurrenceBreakdown.push({
+      ...occurrence,
+      modelFound: true,
+      modelStatus: model.status,
+      costUsd: occurrenceCost,
+      costs: costs,
+      reason: 'Calculated from model costs'
+    });
   }
 
   // Convert USD to credits; ceil to ensure sufficient credits
   const credits = Math.ceil(totalUsd / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
-  return Math.max(1, credits);
+  const finalCredits = Math.max(1, credits);
+  
+  console.log('\n--- CREDITS CALCULATION SUMMARY ---');
+  console.log('Total USD cost:', totalUsd);
+  console.log('USD per credit:', TEMPLATE_CONSTANTS.USD_PER_CREDIT);
+  console.log('Calculated credits (before min):', credits);
+  console.log('Final credits (min 1):', finalCredits);
+  console.log('Occurrence breakdown:', occurrenceBreakdown);
+  console.log('=== END CREDITS ANALYSIS ===\n');
+
+  return finalCredits;
+}
+
+/**
+ * Calculate the cost for a specific model occurrence based on its context
+ * @param {Object} occurrence - The model occurrence with quality, duration, etc.
+ * @param {Object} costs - The normalized costs from the model
+ * @param {Object} model - The full model object from database
+ * @returns {number} - Cost in USD
+ */
+function calculateOccurrenceCost(occurrence, costs, model) {
+  let totalCost = 0;
+  
+  // Handle input costs (text, image)
+  if (costs.input) {
+    // Text input cost
+    if (costs.input.text && occurrence.workflowCode !== 'static-image') {
+      totalCost += costs.input.text;
+    }
+    
+    // Image input cost (per megapixel)
+    if (costs.input.image && costs.input.image.per_megapixel) {
+      const imageCost = costs.input.image.per_megapixel * TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
+      totalCost += imageCost;
+    }
+  }
+  
+  // Handle output costs
+  if (costs.output) {
+    // Image output cost
+    if (costs.output.image && costs.output.image.per_megapixel) {
+      const imageCost = costs.output.image.per_megapixel * TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
+      totalCost += imageCost;
+    }
+    
+    // Video output cost
+    if (costs.output.video) {
+      const videoCost = calculateVideoOutputCost(occurrence, costs.output.video);
+      totalCost += videoCost;
+    }
+    
+    // Audio output cost
+    if (costs.output.audio && costs.output.audio.price && costs.output.audio.seconds) {
+      const audioCost = costs.output.audio.price;
+      totalCost += audioCost;
+    }
+  }
+  
+  return totalCost;
+}
+
+/**
+ * Calculate video output cost based on quality and duration
+ * @param {Object} occurrence - The model occurrence
+ * @param {Object} videoCosts - The video costs from the model
+ * @returns {number} - Cost in USD
+ */
+function calculateVideoOutputCost(occurrence, videoCosts) {
+  const quality = occurrence.videoQuality || '720p'; // Default quality
+  const duration = occurrence.videoDuration || '5s'; // Default duration
+  
+  if (!videoCosts[quality]) {
+    const availableQualities = Object.keys(videoCosts);
+    if (availableQualities.length === 0) return 0;
+    const fallbackQuality = availableQualities[0];
+    return calculateVideoCostForQuality(duration, videoCosts[fallbackQuality]);
+  }
+  
+  return calculateVideoCostForQuality(duration, videoCosts[quality]);
+}
+
+/**
+ * Calculate video cost for a specific quality and duration
+ * @param {string} duration - Video duration (e.g., "5s")
+ * @param {Object} qualityCosts - The costs for this quality
+ * @returns {number} - Cost in USD
+ */
+function calculateVideoCostForQuality(duration, qualityCosts) {
+  // Parse duration (e.g., "5s" -> 5)
+  const durationSeconds = parseInt(duration.replace('s', '')) || 5;
+  
+  // Try per_segment pricing first (most common)
+  if (qualityCosts.per_segment) {
+    const segmentKey = duration; // e.g., "5s"
+    if (qualityCosts.per_segment[segmentKey]) {
+      const cost = qualityCosts.per_segment[segmentKey];
+      return cost;
+    }
+    
+    // Try 5s segment as fallback
+    if (qualityCosts.per_segment['5s']) {
+      const cost = qualityCosts.per_segment['5s'];
+      return cost;
+    }
+  }
+  
+  // Try per_second pricing
+  if (qualityCosts.per_second) {
+    const cost = qualityCosts.per_second * durationSeconds;
+    return cost;
+  }
+  
+  return 0;
 }
 
 function normalizeCosts(costs) {
@@ -984,17 +1279,22 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
-    // Resolve final clips assets type for this update
-    const resolvedClipsAssetsType = (templateData.template_clips_assets_type || existingTemplate.template_clips_assets_type || '').toLowerCase();
+    // Auto-detect AI vs Non-AI based on actual clips content
+    const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
+    const resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
     const isNonAi = resolvedClipsAssetsType === 'non-ai';
-    logger.info('UpdateTemplate resolved template_clips_assets_type', { templateId, resolvedClipsAssetsType });
+    
+    // Override user's template_clips_assets_type with auto-detected value
+    templateData.template_clips_assets_type = resolvedClipsAssetsType;
+    
+    logger.info('UpdateTemplate auto-detected template_clips_assets_type', { templateId, resolvedClipsAssetsType, hasAiModels });
 
     // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
     if (isNonAi) {
       templateData.clips = [];
       templateData.faces_needed = [];
-      // Enforce credits for non-AI templates from constant
-      templateData.credits = TEMPLATE_CONSTANTS.NON_AI_TEMPLATE_CREDITS;
+      // Calculate credits for non-AI templates based on output type and clips
+      templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, templateData.clips);
 
       // Ensure any previously saved AI clips are deleted
       try {
@@ -1057,8 +1357,10 @@ exports.updateTemplate = async function(req, res) {
     if (hasClips) {
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
+      
       // Recompute uploads required when clips are provided
       templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
+      templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
 
       // faces_needed derived from clips; retained for debugging via structured logs if needed
       // Auto-derive template_gender if not explicitly provided in update
@@ -1070,15 +1372,21 @@ exports.updateTemplate = async function(req, res) {
         }
       }
 
-      // Credits: derive minimum from AI models used for updates with clips
+      // Credits: always calculate minimum from AI models used for updates with clips
       const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
       logger.info('CreditsCalc: update flow derived minimum', { minimumCredits });
-      if (templateData.credits !== undefined) {
-        logger.info('CreditsCalc: validating provided credits (update)', { provided: templateData.credits, minimumCredits });
-        ensureCreditsSatisfyMinimum(templateData.credits, minimumCredits, req.t);
-      } else if (existingTemplate && (existingTemplate.credits === undefined || existingTemplate.credits === null)) {
+      
+      if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+        // User provided sufficient credits, use them
+        logger.info('CreditsCalc: using provided credits (update)', { provided: templateData.credits, minimumCredits });
+      } else {
+        // User provided insufficient credits or no credits, always assign calculated minimum
         templateData.credits = minimumCredits || 1;
-        logger.info('CreditsCalc: assigning credits (update)', { assigned: templateData.credits });
+        logger.info('CreditsCalc: assigned calculated minimum credits (update)', { 
+          provided: templateData.credits, 
+          assigned: templateData.credits,
+          minimumCredits 
+        });
       }
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed
@@ -1087,6 +1395,54 @@ exports.updateTemplate = async function(req, res) {
       if (!isNonAi) {
         templateData.image_uploads_required = 0;
         templateData.video_uploads_required = 0;
+      }
+      
+      // Always calculate credits even for empty clips (will be 0 or 1)
+      const minimumCredits = await calculateMinimumCreditsFromClips([]);
+      if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+        // User provided sufficient credits, use them
+        logger.info('CreditsCalc: using provided credits for empty clips (update)', { provided: templateData.credits, minimumCredits });
+      } else {
+        // User provided insufficient credits or no credits, assign calculated minimum
+        templateData.credits = minimumCredits || 1;
+        logger.info('CreditsCalc: assigned calculated minimum credits for empty clips (update)', { 
+          provided: templateData.credits, 
+          assigned: templateData.credits,
+          minimumCredits 
+        });
+      }
+    } else {
+      // No clips provided in update - check existing clips and auto-detect AI vs Non-AI
+      if (existingTemplate) {
+        // Get existing clips from database to check for AI models
+        const existingClips = await TemplateModel.getTemplateAiClips(templateId);
+        const hasExistingAiModels = hasAiModelsInClips(existingClips || []);
+        
+        if (hasExistingAiModels) {
+          // Existing clips have AI models - treat as AI template
+          const minimumCredits = await calculateMinimumCreditsFromClips(existingClips || []);
+          
+          if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+            // User provided sufficient credits, use them
+            logger.info('CreditsCalc: using provided credits for existing AI clips (update)', { provided: templateData.credits, minimumCredits });
+          } else {
+            // User provided insufficient credits or no credits, assign calculated minimum
+            templateData.credits = minimumCredits || 1;
+            logger.info('CreditsCalc: assigned calculated minimum credits for existing AI clips (update)', { 
+              provided: templateData.credits, 
+              assigned: templateData.credits,
+              minimumCredits 
+            });
+          }
+        } else {
+          // Existing clips have no AI models - treat as Non-AI template
+          templateData.template_clips_assets_type = 'non-ai';
+          templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, []);
+          logger.info('CreditsCalc: treated as Non-AI based on existing clips (update)', { 
+            provided: templateData.credits, 
+            assigned: templateData.credits
+          });
+        }
       }
     }
     // If clips is undefined, don't modify faces_needed (partial update)

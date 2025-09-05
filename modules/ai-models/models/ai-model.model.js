@@ -140,6 +140,37 @@ exports.getAiModelsByIds = async function(modelIds) {
   return await mysqlQueryRunner.runQueryInSlave(query, modelIds);
 };
 
+/**
+ * Get multiple AI models by their platform model IDs
+ */
+exports.getAiModelsByPlatformModelIds = async function(platformModelIds) {
+  if (!Array.isArray(platformModelIds) || platformModelIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = platformModelIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      model_id,
+      amp_platform_id,
+      model_name,
+      description,
+      platform_model_id,
+      input_types,
+      output_types,
+      costs,
+      generation_time_ms,
+      status,
+      created_at,
+      updated_at
+    FROM ai_models
+    WHERE platform_model_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, platformModelIds);
+};
+
 exports.getPlatformById = async function(platformId) {
   const query = `
     SELECT 
