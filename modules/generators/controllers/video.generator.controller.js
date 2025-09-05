@@ -638,21 +638,21 @@ exports.handleWorkflowQueue = async function(req, res) {
     }]);
 
     // Send to Kafka for processing
-    await kafkaCtrl.sendMessage(
-      TOPICS.GENERATION_COMMAND_START_ADMIN_TEST_WORKFLOW, // Reusing existing topic for workflow processing
-      [{
-        value: {
-          generation_id: generationId,
-          generation_type: 'workflow_queue',
-          user_character_ids,
-          clips,
-          template_id,
-          uploaded_assets,
-          user_id: userId
-        }
-      }],
-      'start_admin_test_workflow'
-    );
+    // await kafkaCtrl.sendMessage(
+    //   TOPICS.GENERATION_COMMAND_START_ADMIN_TEST_WORKFLOW, // Reusing existing topic for workflow processing
+    //   [{
+    //     value: {
+    //       generation_id: generationId,
+    //       generation_type: 'workflow_queue',
+    //       user_character_ids,
+    //       clips,
+    //       template_id,
+    //       uploaded_assets,
+    //       user_id: userId
+    //     }
+    //   }],
+    //   'start_admin_test_workflow'
+    // );
 
     // Log admin activity
     await kafkaCtrl.sendMessage(
@@ -677,7 +677,7 @@ exports.handleWorkflowQueue = async function(req, res) {
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
-        generation_id: generationId,
+        generation_id: 'd5bd239d-040c-4c78-bd4c-800014366767',
         status: 'SUBMITTED',
         total_clips: clips.length,
         total_workflows: summaryData.total_workflows
