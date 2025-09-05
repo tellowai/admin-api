@@ -12,7 +12,7 @@ exports.listAllTemplateTagDefinitions = async function() {
       created_at,
       updated_at
     FROM template_tag_definitions
-    WHERE deleted_at IS NULL
+    WHERE archived_at IS NULL
     ORDER BY created_at DESC
   `;
 
@@ -30,7 +30,7 @@ exports.getTemplateTagDefinitionById = async function(tagId) {
       updated_at
     FROM template_tag_definitions
     WHERE ttd_id = ?
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
   `;
 
   const result = await mysqlQueryRunner.runQueryInSlave(query, [tagId]);
@@ -48,7 +48,7 @@ exports.getTemplateTagDefinitionByCode = async function(tagCode) {
       updated_at
     FROM template_tag_definitions
     WHERE tag_code = ?
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
   `;
 
   const result = await mysqlQueryRunner.runQueryInSlave(query, [tagCode]);
@@ -92,7 +92,7 @@ exports.getTagDefinitionsByCodes = async function(tagCodes) {
       updated_at
     FROM template_tag_definitions
     WHERE tag_code IN (${placeholders})
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
     ORDER BY tag_name ASC
   `;
 
@@ -115,7 +115,7 @@ exports.getTagDefinitionsByIds = async function(tagIds) {
       updated_at
     FROM template_tag_definitions
     WHERE ttd_id IN (${placeholders})
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
     ORDER BY tag_name ASC
   `;
 
@@ -164,7 +164,7 @@ exports.checkTagDefinitionExists = async function(tagId) {
     SELECT ttd_id 
     FROM template_tag_definitions 
     WHERE ttd_id = ?
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
   `;
 
   const result = await mysqlQueryRunner.runQueryInSlave(query, [tagId]);

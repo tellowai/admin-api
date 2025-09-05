@@ -100,7 +100,7 @@ exports.getTemplatesByTag = async function(tagCode, pagination = null) {
     SELECT ttd_id
     FROM template_tag_definitions
     WHERE tag_code = ?
-    AND deleted_at IS NULL
+    AND archived_at IS NULL
   `;
   
   const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefinitionQuery, [tagCode]);
