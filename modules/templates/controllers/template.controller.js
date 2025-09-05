@@ -2,6 +2,8 @@
 
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const TemplateModel = require('../models/template.model');
+const TemplateTagDefinitionModel = require('../models/template.tag.definition.model');
+const TemplateTagsModel = require('../models/template.tags.model');
 const TemplateErrorHandler = require('../middlewares/template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
@@ -28,6 +30,261 @@ async function fetchWithTimeout(url, timeoutMs) {
     return await fetch(url, { signal: controller.signal });
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+/**
+ * Fetch Bodymovin JSON and extract width and height
+ * @param {string} bodymovinUrl - URL to the Bodymovin JSON file
+ * @returns {Object} - Object containing width and height, or null if failed
+ */
+async function fetchBodymovinDimensions(bodymovinUrl) {
+  try {
+    const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
+    if (!response.ok) {
+      logger.warn('Failed to fetch Bodymovin JSON', { url: bodymovinUrl, status: response.status });
+      return null;
+    }
+    
+    const bodymovinJson = await response.json();
+    const width = bodymovinJson.w;
+    const height = bodymovinJson.h;
+    
+    if (!width || !height) {
+      logger.warn('Bodymovin JSON missing width or height', { url: bodymovinUrl, width, height });
+      return null;
+    }
+    
+    return { width, height };
+  } catch (error) {
+    logger.error('Error fetching Bodymovin JSON dimensions', { url: bodymovinUrl, error: error.message });
+    return null;
+  }
+}
+
+/**
+ * Calculate aspect ratio and determine orientation from width and height
+ * @param {number} width - Width of the video
+ * @param {number} height - Height of the video
+ * @returns {Object} - Object containing aspect ratio and orientation
+ */
+function calculateAspectRatioAndOrientation(width, height) {
+  if (!width || !height || width <= 0 || height <= 0) {
+    return { aspectRatio: null, orientation: null };
+  }
+  
+  const ratio = width / height;
+  
+  // Determine aspect ratio
+  let aspectRatio;
+  if (Math.abs(ratio - 1) < 0.01) {
+    aspectRatio = '1:1';
+  } else if (Math.abs(ratio - 0.75) < 0.01) {
+    aspectRatio = '3:4';
+  } else if (Math.abs(ratio - 1.33) < 0.01) {
+    aspectRatio = '4:3';
+  } else if (Math.abs(ratio - 0.5625) < 0.01) {
+    aspectRatio = '9:16';
+  } else if (Math.abs(ratio - 1.78) < 0.01) {
+    aspectRatio = '16:9';
+  } else {
+    // For other ratios, find the closest match
+    const ratios = [
+      { value: 1, name: '1:1' },
+      { value: 0.75, name: '3:4' },
+      { value: 1.33, name: '4:3' },
+      { value: 0.5625, name: '9:16' },
+      { value: 1.78, name: '16:9' }
+    ];
+    
+    const closest = ratios.reduce((prev, curr) => 
+      Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev
+    );
+    aspectRatio = closest.name;
+  }
+  
+  // Determine orientation
+  let orientation;
+  if (aspectRatio === '1:1') {
+    orientation = 'square';
+  } else if (width > height) {
+    orientation = 'horizontal';
+  } else {
+    orientation = 'vertical';
+  }
+  
+  return { aspectRatio, orientation };
+}
+
+/**
+ * Extract asset types from template clips
+ * @param {Array} clips - Array of template clips
+ * @returns {Array} - Array of unique asset types
+ */
+function extractAssetTypesFromClips(clips) {
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    return [];
+  }
+  
+  const assetTypes = new Set();
+  
+  clips.forEach(clip => {
+    if (clip && clip.asset_type) {
+      assetTypes.add(clip.asset_type);
+    }
+  });
+  
+  return Array.from(assetTypes);
+}
+
+/**
+ * Generate tags array for template
+ * @param {Object} templateData - Template data object
+ * @returns {Array} - Array of tags
+ */
+async function generateTemplateTags(templateData) {
+  const tags = [];
+  
+  try {
+    // Add template_clips_assets_type (ai or non-ai)
+    if (templateData.template_clips_assets_type) {
+      tags.push(templateData.template_clips_assets_type);
+    }
+    
+    // Add template output type tag
+    if (templateData.template_output_type) {
+      tags.push(templateData.template_output_type);
+    }
+    
+    // Get Bodymovin JSON URL
+    let bodymovinUrl = null;
+    if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
+      const storage = StorageFactory.getProvider();
+      const isPublic = templateData.bodymovin_json_bucket === 'public' || 
+                     templateData.bodymovin_json_bucket === storage.publicBucket || 
+                     templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
+      
+      if (isPublic) {
+        bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${templateData.bodymovin_json_key}`;
+      } else {
+        bodymovinUrl = await storage.generatePresignedDownloadUrl(templateData.bodymovin_json_key);
+      }
+    }
+    
+    // Fetch dimensions and calculate aspect ratio
+    if (bodymovinUrl) {
+      const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
+      if (dimensions) {
+        const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
+        
+        if (aspectRatio) {
+          tags.push(aspectRatio);
+        }
+        if (orientation) {
+          tags.push(orientation);
+        }
+      }
+    }
+    
+    // Extract asset types from clips
+    const assetTypes = extractAssetTypesFromClips(templateData.clips);
+    assetTypes.forEach(assetType => {
+      tags.push(assetType);
+    });
+    
+  } catch (error) {
+    logger.error('Error generating template tags', { error: error.message, templateId: templateData.template_id });
+  }
+  
+  return tags;
+}
+
+/**
+ * Store template tags in database
+ * @param {string} templateId - Template ID
+ * @param {Array} tags - Array of tag codes
+ * @returns {Array} - Array of stored tag definitions
+ */
+async function storeTemplateTags(templateId, tags) {
+  try {
+    if (!tags || tags.length === 0) {
+      return [];
+    }
+
+    // Get or create tag definitions for the provided tag codes
+    const tagDefinitions = await TemplateTagDefinitionModel.getOrCreateTagDefinitions(tags);
+    
+    // Extract tag definition IDs
+    const tagDefinitionIds = tagDefinitions.map(tag => tag.ttd_id);
+    
+    // Assign tags to template
+    const assignedTags = await TemplateTagsModel.assignTagsToTemplate(templateId, tagDefinitionIds);
+    
+    logger.info('Stored template tags', { 
+      templateId, 
+      tagCodes: tags, 
+      assignedCount: assignedTags.length 
+    });
+    
+    return assignedTags;
+  } catch (error) {
+    logger.error('Error storing template tags', { 
+      error: error.message, 
+      templateId, 
+      tags 
+    });
+    return [];
+  }
+}
+
+/**
+ * Get template tags with full tag definition details
+ * @param {string} templateId - Template ID
+ * @returns {Array} - Array of tags with full details
+ */
+async function getTemplateTagsWithDetails(templateId) {
+  try {
+    // Get template tags (just the relationships)
+    const templateTags = await TemplateTagsModel.getTemplateTags(templateId);
+    
+    if (templateTags.length === 0) {
+      return [];
+    }
+    
+    // Get tag definition IDs
+    const tagDefinitionIds = templateTags.map(tt => tt.ttd_id);
+    
+    // Get tag definitions
+    const tagDefinitions = await TemplateTagDefinitionModel.getTagDefinitionsByIds(tagDefinitionIds);
+    
+    // Create a map for quick lookup
+    const tagDefinitionMap = new Map();
+    tagDefinitions.forEach(td => {
+      tagDefinitionMap.set(td.ttd_id, td);
+    });
+    
+    // Stitch the data together
+    const tagsWithDetails = templateTags.map(tt => {
+      const tagDefinition = tagDefinitionMap.get(tt.ttd_id);
+      return {
+        tt_id: tt.tt_id,
+        template_id: tt.template_id,
+        ttd_id: tt.ttd_id,
+        tag_name: tagDefinition ? tagDefinition.tag_name : null,
+        tag_code: tagDefinition ? tagDefinition.tag_code : null,
+        tag_description: tagDefinition ? tagDefinition.tag_description : null,
+        created_at: tt.created_at,
+        updated_at: tt.updated_at
+      };
+    });
+    
+    return tagsWithDetails;
+  } catch (error) {
+    logger.error('Error getting template tags with details', { 
+      error: error.message, 
+      templateId 
+    });
+    return [];
   }
 }
 
@@ -187,6 +444,9 @@ exports.listTemplates = async function(req, res) {
             });
           }
         }
+
+        // Load template tags
+        template.tags = await getTemplateTagsWithDetails(template.template_id);
       }));
     }
 
@@ -355,6 +615,9 @@ exports.listArchivedTemplates = async function(req, res) {
             });
           }
         }
+
+        // Load template tags
+        template.tags = await getTemplateTagsWithDetails(template.template_id);
       }));
     }
 
@@ -514,6 +777,9 @@ exports.searchTemplates = async function(req, res) {
             });
           }
         }
+
+        // Load template tags
+        template.tags = await getTemplateTagsWithDetails(template.template_id);
       }));
     }
 
@@ -650,6 +916,13 @@ exports.createTemplate = async function(req, res) {
     delete templateData.clips;
 
     await TemplateModel.createTemplate(templateData, clips);
+    
+    // Generate and store tags for the template
+    const tags = await generateTemplateTags(templateData);
+    console.log('Generated tags array for template:', tags);
+    
+    // Store tags in database
+    await storeTemplateTags(templateData.template_id, tags);
     
     // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
@@ -1487,6 +1760,13 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
+    // Generate and store tags for the template
+    const tags = await generateTemplateTags(templateData);
+    console.log('Generated tags array for template update:', tags);
+    
+    // Store tags in database
+    await storeTemplateTags(templateId, tags);
+    
     // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
@@ -1734,6 +2014,10 @@ exports.copyTemplate = async function(req, res) {
     
     // Create the new template with all related data
     await TemplateModel.createTemplate(newTemplateData, clipsToCopy);
+    
+    // Generate and store tags for the copied template
+    const tags = await generateTemplateTags(newTemplateData);
+    await storeTemplateTags(newTemplateId, tags);
     
     // Publish activity log command
     await kafkaCtrl.sendMessage(
