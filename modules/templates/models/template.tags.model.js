@@ -95,18 +95,18 @@ exports.addTagToTemplate = async function(templateId, tagDefinitionId) {
 };
 
 /**
- * Convert ratio format for tag_code searches (3:4 -> 3_4)
+ * Convert special characters to underscores for tag_code searches
  * @param {string} code - Tag code to convert
- * @returns {string} - Converted code
+ * @returns {string} - Converted code with colons and hyphens replaced by underscores
  */
-function convertRatioForTagCode(code) {
-  // Convert ratios like 3:4, 4:3, 16:9, 9:16 to 3_4, 4_3, 16_9, 9_16
-  return code.replace(/:/g, '_');
+function convertSpecialCharsToUnderscore(code) {
+  // Convert colons and hyphens to underscores: 3:4 -> 3_4, non-ai -> non_ai
+  return code.replace(/[:]/g, '_').replace(/-/g, '_');
 }
 
 exports.getTemplatesByTag = async function(tagCode, pagination = null) {
-  // Convert tag code to lowercase and handle ratios
-  const convertedTagCode = convertRatioForTagCode(tagCode.toLowerCase());
+  // Convert tag code to lowercase and handle special characters
+  const convertedTagCode = convertSpecialCharsToUnderscore(tagCode.toLowerCase());
   
   // First get the tag definition ID
   const tagDefinitionQuery = `

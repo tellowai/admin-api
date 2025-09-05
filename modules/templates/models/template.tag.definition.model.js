@@ -123,13 +123,13 @@ exports.getTagDefinitionsByIds = async function(tagIds) {
 };
 
 /**
- * Convert ratio format for tag_code searches (3:4 -> 3_4)
+ * Convert special characters to underscores for tag_code searches
  * @param {string} code - Tag code to convert
- * @returns {string} - Converted code
+ * @returns {string} - Converted code with colons and hyphens replaced by underscores
  */
-function convertRatioForTagCode(code) {
-  // Convert ratios like 3:4, 4:3, 16:9, 9:16 to 3_4, 4_3, 16_9, 9_16
-  return code.replace(/:/g, '_');
+function convertSpecialCharsToUnderscore(code) {
+  // Convert colons and hyphens to underscores: 3:4 -> 3_4, non-ai -> non_ai
+  return code.replace(/[:]/g, '_').replace(/-/g, '_');
 }
 
 exports.getTagDefinitionsByCodes = async function(tagCodes) {
@@ -137,10 +137,10 @@ exports.getTagDefinitionsByCodes = async function(tagCodes) {
     return [];
   }
 
-  // Convert all codes to lowercase and handle ratios for tag_code searches
+  // Convert all codes to lowercase and handle special characters for tag_code searches
   const convertedCodes = tagCodes.map(code => {
     const lowerCode = code.toLowerCase();
-    return convertRatioForTagCode(lowerCode);
+    return convertSpecialCharsToUnderscore(lowerCode);
   });
   
   const placeholders = convertedCodes.map(() => '?').join(',');
