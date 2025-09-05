@@ -122,41 +122,43 @@ exports.getTagDefinitionsByIds = async function(tagIds) {
   return await mysqlQueryRunner.runQueryInSlave(query, tagIds);
 };
 
-exports.getOrCreateTagDefinitions = async function(tagCodes) {
+/**
+ * Convert ratio format for tag_code searches (3:4 -> 3_4)
+ * @param {string} code - Tag code to convert
+ * @returns {string} - Converted code
+ */
+function convertRatioForTagCode(code) {
+  // Convert ratios like 3:4, 4:3, 16:9, 9:16 to 3_4, 4_3, 16_9, 9_16
+  return code.replace(/:/g, '_');
+}
+
+exports.getTagDefinitionsByCodes = async function(tagCodes) {
   if (!tagCodes || tagCodes.length === 0) {
     return [];
   }
 
-  // First, get existing tag definitions
-  const existingTags = await this.getTagDefinitionsByCodes(tagCodes);
-  const existingCodes = new Set(existingTags.map(tag => tag.tag_code));
+  // Convert all codes to lowercase and handle ratios for tag_code searches
+  const convertedCodes = tagCodes.map(code => {
+    const lowerCode = code.toLowerCase();
+    return convertRatioForTagCode(lowerCode);
+  });
   
-  // Find missing tag codes
-  const missingCodes = tagCodes.filter(code => !existingCodes.has(code));
-  
-  // Create missing tag definitions
-  const createdTags = [];
-  for (const code of missingCodes) {
-    try {
-      const tagData = {
-        tag_name: code.charAt(0).toUpperCase() + code.slice(1), // Capitalize first letter
-        tag_code: code,
-        tag_description: `Auto-generated tag for ${code}`
-      };
-      
-      const createdTag = await this.createTemplateTagDefinition(tagData);
-      createdTags.push(createdTag);
-    } catch (error) {
-      // If creation fails (e.g., duplicate), try to get the existing one
-      const existingTag = await this.getTemplateTagDefinitionByCode(code);
-      if (existingTag) {
-        createdTags.push(existingTag);
-      }
-    }
-  }
-  
-  // Combine existing and created tags
-  return [...existingTags, ...createdTags];
+  const placeholders = convertedCodes.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      ttd_id,
+      tag_name,
+      tag_code,
+      tag_description,
+      created_at,
+      updated_at
+    FROM template_tag_definitions
+    WHERE LOWER(tag_code) IN (${placeholders})
+    AND archived_at IS NULL
+    ORDER BY tag_name ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, convertedCodes);
 };
 
 exports.checkTagDefinitionExists = async function(tagId) {

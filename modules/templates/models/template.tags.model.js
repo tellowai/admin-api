@@ -94,16 +94,29 @@ exports.addTagToTemplate = async function(templateId, tagDefinitionId) {
   return true;
 };
 
+/**
+ * Convert ratio format for tag_code searches (3:4 -> 3_4)
+ * @param {string} code - Tag code to convert
+ * @returns {string} - Converted code
+ */
+function convertRatioForTagCode(code) {
+  // Convert ratios like 3:4, 4:3, 16:9, 9:16 to 3_4, 4_3, 16_9, 9_16
+  return code.replace(/:/g, '_');
+}
+
 exports.getTemplatesByTag = async function(tagCode, pagination = null) {
+  // Convert tag code to lowercase and handle ratios
+  const convertedTagCode = convertRatioForTagCode(tagCode.toLowerCase());
+  
   // First get the tag definition ID
   const tagDefinitionQuery = `
     SELECT ttd_id
     FROM template_tag_definitions
-    WHERE tag_code = ?
+    WHERE LOWER(tag_code) = ?
     AND archived_at IS NULL
   `;
   
-  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefinitionQuery, [tagCode]);
+  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefinitionQuery, [convertedTagCode]);
   
   if (tagDefinitions.length === 0) {
     return [];

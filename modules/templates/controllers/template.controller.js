@@ -138,6 +138,16 @@ function extractAssetTypesFromClips(clips) {
 }
 
 /**
+ * Convert ratio format for tag_code (3:4 -> 3_4)
+ * @param {string} code - Tag code to convert
+ * @returns {string} - Converted code
+ */
+function convertRatioForTagCode(code) {
+  // Convert ratios like 3:4, 4:3, 16:9, 9:16 to 3_4, 4_3, 16_9, 9_16
+  return code.replace(/:/g, '_');
+}
+
+/**
  * Generate tags array for template
  * @param {Object} templateData - Template data object
  * @returns {Array} - Array of tags
@@ -148,12 +158,12 @@ async function generateTemplateTags(templateData) {
   try {
     // Add template_clips_assets_type (ai or non-ai)
     if (templateData.template_clips_assets_type) {
-      tags.push(templateData.template_clips_assets_type);
+      tags.push(templateData.template_clips_assets_type.toLowerCase());
     }
     
     // Add template output type tag
     if (templateData.template_output_type) {
-      tags.push(templateData.template_output_type);
+      tags.push(templateData.template_output_type.toLowerCase());
     }
     
     // Get Bodymovin JSON URL
@@ -178,10 +188,11 @@ async function generateTemplateTags(templateData) {
         const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
         
         if (aspectRatio) {
-          tags.push(aspectRatio);
+          // Convert ratio to underscore format for tag_code
+          tags.push(convertRatioForTagCode(aspectRatio.toLowerCase()));
         }
         if (orientation) {
-          tags.push(orientation);
+          tags.push(orientation.toLowerCase());
         }
       }
     }
@@ -189,7 +200,7 @@ async function generateTemplateTags(templateData) {
     // Extract asset types from clips
     const assetTypes = extractAssetTypesFromClips(templateData.clips);
     assetTypes.forEach(assetType => {
-      tags.push(assetType);
+      tags.push(assetType.toLowerCase());
     });
     
   } catch (error) {
@@ -211,8 +222,8 @@ async function storeTemplateTags(templateId, tags) {
       return [];
     }
 
-    // Get or create tag definitions for the provided tag codes
-    const tagDefinitions = await TemplateTagDefinitionModel.getOrCreateTagDefinitions(tags);
+    // Get existing tag definitions for the provided tag codes
+    const tagDefinitions = await TemplateTagDefinitionModel.getTagDefinitionsByCodes(tags);
     
     // Extract tag definition IDs
     const tagDefinitionIds = tagDefinitions.map(tag => tag.ttd_id);
