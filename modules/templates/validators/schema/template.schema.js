@@ -28,7 +28,8 @@ const customTextInputFieldSchema = Joi.object({
   user_input_field_name: Joi.string().required(),
   input_field_type: Joi.string().valid('text', 'long_text', 'date', 'datetime', 'time').required(),
   default_text: Joi.string().allow('', null).optional(),
-  linked_layer_names: Joi.array().items(Joi.string()).default([]).optional()
+  linked_layer_names: Joi.array().items(Joi.string()).default([]).optional(),
+  format: Joi.string().allow(null).optional()
 });
 
 const createTemplateSchema = Joi.object().keys({
