@@ -9,6 +9,8 @@ exports.listExploreSections = async function(pagination) {
       section_name,
       layout_type,
       section_items_type,
+      section_type,
+      ui_type,
       sort_order,
       status,
       additional_data,

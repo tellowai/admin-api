@@ -42,6 +42,9 @@ exports.listExploreSections = async function(req, res) {
  *
  * @apiBody {String} section_name Section name
  * @apiBody {String} [layout_type=horizontal_scroller] Layout type
+ * @apiBody {String} [section_items_type=manual] Section items type
+ * @apiBody {String} [section_type=mixed] Section type
+ * @apiBody {String} [ui_type=normal] UI type
  * @apiBody {Number} [sort_order=0] Sort order
  * @apiBody {String} [status=active] Section status
  * @apiBody {Object} [additional_data] Additional section data
@@ -86,6 +89,9 @@ exports.createExploreSection = async function(req, res) {
  * @apiParam {Number} sectionId Section ID
  * @apiBody {String} [section_name] Section name
  * @apiBody {String} [layout_type] Layout type
+ * @apiBody {String} [section_items_type] Section items type
+ * @apiBody {String} [section_type] Section type
+ * @apiBody {String} [ui_type] UI type
  * @apiBody {Number} [sort_order] Sort order
  * @apiBody {String} [status] Section status
  * @apiBody {Object} [additional_data] Additional section data
