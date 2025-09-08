@@ -76,16 +76,15 @@ exports.searchCollections = async function(searchQuery, page, limit) {
 };
 
 exports.createCollection = async function(collectionData) {
-  // Filter out undefined values and prepare fields and values
+  // Filter out undefined and null values and prepare fields and values
   const fields = [];
   const values = [];
   const placeholders = [];
 
   Object.entries(collectionData).forEach(([key, value]) => {
-    if (value !== undefined) {
+    if (value !== undefined && value !== null) {
       fields.push(key);
-      values.push(value === null ? null : 
-        (key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
+      values.push((key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
       placeholders.push('?');
     }
   });
@@ -101,15 +100,14 @@ exports.createCollection = async function(collectionData) {
 };
 
 exports.updateCollection = async function(collectionId, collectionData) {
-  // Filter out undefined values and prepare set clause
+  // Filter out undefined and null values and prepare set clause
   const setClause = [];
   const values = [];
 
   Object.entries(collectionData).forEach(([key, value]) => {
-    if (value !== undefined) {
+    if (value !== undefined && value !== null) {
       setClause.push(`${key} = ?`);
-      values.push(value === null ? null : 
-        (key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
+      values.push((key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
     }
   });
 
