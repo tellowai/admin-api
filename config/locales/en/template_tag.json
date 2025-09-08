@@ -1,0 +1,14 @@
+{
+  "TEMPLATE_TAG_CREATED": "Template tag definition created successfully",
+  "TEMPLATE_TAG_UPDATED": "Template tag definition updated successfully",
+  "TEMPLATE_TAG_NOT_FOUND": "Template tag definition not found",
+  "TEMPLATE_TAG_ARCHIVED": "Template tag definition archived successfully",
+  "TEMPLATE_TAGS_BULK_ARCHIVED": "Template tag definitions archived successfully",
+  "NO_TEMPLATE_TAGS_ARCHIVED": "No template tag definitions were archived",
+  "TEMPLATE_TAGS_BULK_UNARCHIVED": "Template tag definitions unarchived successfully",
+  "NO_TEMPLATE_TAGS_UNARCHIVED": "No template tag definitions were unarchived",
+  "TAG_CODE_EXISTS": "Tag code already exists",
+  "INVALID_FACET_ID": "Invalid facet ID provided",
+  "SEARCH_QUERY_REQUIRED": "Search query is required",
+  "TEMPLATE_TAG_LIST_FAILED": "Failed to list template tag definitions"
+}

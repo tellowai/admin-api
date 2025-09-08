@@ -1,0 +1,5 @@
+{
+  "INVALID_FACET_NAME": "Invalid facet name provided",
+  "FACET_NOT_FOUND": "Facet not found",
+  "FACET_LIST_FAILED": "Failed to list template facets"
+}
