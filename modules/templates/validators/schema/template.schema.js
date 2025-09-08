@@ -32,6 +32,12 @@ const customTextInputFieldSchema = Joi.object({
   format: Joi.string().allow(null).optional()
 });
 
+// Template tag schema
+const templateTagSchema = Joi.object({
+  facet_id: Joi.number().integer().positive().required(),
+  ttd_id: Joi.number().integer().positive().required()
+});
+
 const createTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).required(),
   template_code: Joi.string().max(9).required(),
@@ -66,6 +72,7 @@ const createTemplateSchema = Joi.object().keys({
   user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
   credits: Joi.number().integer().min(1).default(1),
   additional_data: Joi.object().allow(null),
+  template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
   clips: Joi.array()
     .items(clipSchema)
@@ -106,6 +113,7 @@ const updateTemplateSchema = Joi.object().keys({
   user_assets_layer: Joi.string().valid('top', 'bottom').optional(),
   credits: Joi.number().integer().min(1).optional(),
   additional_data: Joi.object().allow(null).optional(),
+  template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   clips: Joi.array().items(clipSchema).optional()
 });
 

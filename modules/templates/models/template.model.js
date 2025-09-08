@@ -374,6 +374,48 @@ exports.getTemplateById = async function(templateId) {
 };
 
 /**
+ * Get template by code
+ */
+exports.getTemplateByCode = async function(templateCode) {
+  const query = `
+    SELECT 
+      template_id,
+      template_name,
+      template_code,
+      template_gender,
+      template_output_type,
+      template_clips_assets_type,
+      description,
+      prompt,
+      faces_needed,
+      image_uploads_required,
+      video_uploads_required,
+      user_assets_layer,
+      cf_r2_key,
+      cf_r2_url,
+      cf_r2_bucket,
+      thumb_frame_asset_key,
+      thumb_frame_bucket,
+      color_video_bucket,
+      color_video_key,
+      mask_video_bucket,
+      mask_video_key,
+      bodymovin_json_bucket,
+      bodymovin_json_key,
+      custom_text_input_fields,
+      credits,
+      additional_data,
+      created_at
+    FROM templates
+    WHERE template_code = ?
+    AND archived_at IS NULL
+  `;
+
+  const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateCode]);
+  return template;
+};
+
+/**
  * Get template by ID with complete data
  */
 exports.getTemplateByIdWithAssets = async function(templateId) {
@@ -648,4 +690,149 @@ exports.getClipWorkflow = async function(tacId) {
     }
     return entry.workflow;
   }).filter(Boolean);
+};
+
+/**
+ * Create template tags for a template
+ */
+exports.createTemplateTags = async function(templateId, templateTagIds) {
+  if (!templateTagIds || templateTagIds.length === 0) {
+    return [];
+  }
+
+  const values = templateTagIds.map(tag => `(?, ?, ?, NOW(), NOW())`).join(',');
+  const query = `
+    INSERT IGNORE INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
+    VALUES ${values}
+  `;
+
+  const queryParams = [];
+  templateTagIds.forEach(tag => {
+    queryParams.push(templateId, tag.ttd_id, tag.facet_id);
+  });
+
+  await mysqlQueryRunner.runQueryInMaster(query, queryParams);
+  return await this.getTemplateTags(templateId);
+};
+
+/**
+ * Get template tags for a template
+ */
+exports.getTemplateTags = async function(templateId) {
+  const query = `
+    SELECT 
+      tt_id,
+      template_id,
+      ttd_id,
+      facet_id,
+      created_at,
+      updated_at
+    FROM template_tags
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+    ORDER BY created_at ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+};
+
+/**
+ * Update template tags (smart update - only add/remove what's needed)
+ */
+exports.updateTemplateTags = async function(templateId, templateTagIds) {
+  // Get existing template tags
+  const existingTags = await this.getTemplateTags(templateId);
+  
+  // Convert to comparable format for easier comparison
+  const existingTagKeys = existingTags.map(tag => `${tag.facet_id}-${tag.ttd_id}`);
+  const newTagKeys = (templateTagIds || []).map(tag => `${tag.facet_id}-${tag.ttd_id}`);
+  
+  // Find tags to remove (exist in current but not in new)
+  const tagsToRemove = existingTags.filter(tag => 
+    !newTagKeys.includes(`${tag.facet_id}-${tag.ttd_id}`)
+  );
+  
+  // Find tags to add (exist in new but not in current)
+  const tagsToAdd = (templateTagIds || []).filter(tag => 
+    !existingTagKeys.includes(`${tag.facet_id}-${tag.ttd_id}`)
+  );
+  
+  // Remove tags that are no longer needed
+  if (tagsToRemove.length > 0) {
+    const ttdIdsToRemove = tagsToRemove.map(tag => tag.ttd_id);
+    await this.removeTemplateTags(templateId, ttdIdsToRemove);
+  }
+  
+  // Add new tags
+  if (tagsToAdd.length > 0) {
+    await this.createTemplateTags(templateId, tagsToAdd);
+  }
+  
+  // Return updated tags
+  return await this.getTemplateTags(templateId);
+};
+
+/**
+ * Update template tags (legacy method - remove all existing and add new ones)
+ */
+exports.updateTemplateTagsLegacy = async function(templateId, templateTagIds) {
+  // First remove all existing tags
+  await this.removeAllTemplateTags(templateId);
+  
+  // Then add new tags if provided
+  if (templateTagIds && templateTagIds.length > 0) {
+    return await this.createTemplateTags(templateId, templateTagIds);
+  }
+  
+  return [];
+};
+
+/**
+ * Remove all template tags for a template
+ */
+exports.removeAllTemplateTags = async function(templateId) {
+  const query = `
+    UPDATE template_tags 
+    SET deleted_at = NOW()
+    WHERE template_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  await mysqlQueryRunner.runQueryInMaster(query, [templateId]);
+  return true;
+};
+
+/**
+ * Remove specific template tags for a template
+ */
+exports.removeTemplateTags = async function(templateId, ttdIds) {
+  if (!ttdIds || ttdIds.length === 0) {
+    return true;
+  }
+
+  const placeholders = ttdIds.map(() => '?').join(',');
+  const query = `
+    UPDATE template_tags 
+    SET deleted_at = NOW()
+    WHERE template_id = ? AND ttd_id IN (${placeholders})
+    AND deleted_at IS NULL
+  `;
+
+  await mysqlQueryRunner.runQueryInMaster(query, [templateId, ...ttdIds]);
+  return true;
+};
+
+/**
+ * Check if a specific template tag exists
+ */
+exports.checkTemplateTagExists = async function(templateId, facetId, ttdId) {
+  const query = `
+    SELECT tt_id 
+    FROM template_tags 
+    WHERE template_id = ? AND facet_id = ? AND ttd_id = ?
+    AND deleted_at IS NULL
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInSlave(query, [templateId, facetId, ttdId]);
+  return result.length > 0;
 }; 

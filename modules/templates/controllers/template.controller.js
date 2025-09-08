@@ -3,6 +3,7 @@
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const TemplateModel = require('../models/template.model');
 const TemplateTagDefinitionModel = require('../models/template.tag.definition.model');
+const TemplateTagFacetModel = require('../models/template.tag.facet.model');
 const TemplateTagsModel = require('../models/template.tags.model');
 const TemplateErrorHandler = require('../middlewares/template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
@@ -456,10 +457,107 @@ exports.listTemplates = async function(req, res) {
           }
         }
 
-        // Load template tags
+        // Load template tags (both auto-generated and manually assigned)
         template.tags = await getTemplateTagsWithDetails(template.template_id);
+        
+        // Load manually assigned template tags
+        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+        
+        // Stitch facet information for template tags
+        if (template.template_tags && template.template_tags.length > 0) {
+          // Log initial state for debugging
+          logger.info('Template tags before stitching:', {
+            templateId: template.template_id,
+            tagsCount: template.template_tags.length,
+            sampleTag: template.template_tags[0],
+            tagsWithFacetId: template.template_tags.filter(tag => tag.facet_id).length
+          });
+          
+          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
+          
+          // Get tag definitions to extract facet_ids
+          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
+          logger.info('Tag definitions fetched:', {
+            templateId: template.template_id,
+            tagDefinitionsCount: tagDefinitions.length,
+            sampleTagDef: tagDefinitions[0]
+          });
+          
+          // Extract facet_ids from tag definitions
+          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+          logger.info('Facet IDs extracted:', {
+            templateId: template.template_id,
+            facetIds: facetIds
+          });
+          
+          // Get facets data
+          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
+          logger.info('Facets fetched:', {
+            templateId: template.template_id,
+            facetsCount: facets.length,
+            sampleFacet: facets[0]
+          });
+          
+          // Create lookup maps
+          const tagDefinitionMap = new Map();
+          tagDefinitions.forEach(tagDef => {
+            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+          });
+          
+          const facetMap = new Map();
+          facets.forEach(facet => {
+            facetMap.set(facet.facet_id, facet);
+          });
+          
+          // Stitch the data together
+          template.template_tags.forEach(tag => {
+            const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
+            
+            if (tagDefinition) {
+              // Add tag definition data
+              tag.tag_name = tagDefinition.tag_name;
+              tag.tag_code = tagDefinition.tag_code;
+              tag.tag_description = tagDefinition.tag_description;
+              tag.is_active = tagDefinition.is_active;
+              
+              // Use facet_id from tag definition (primary source)
+              const facetId = tagDefinition.facet_id;
+              if (facetId) {
+                tag.facet_id = facetId; // Ensure facet_id is present
+                
+                const facet = facetMap.get(facetId);
+                if (facet) {
+                  tag.facet_key = facet.facet_key;
+                  tag.facet_display_name = facet.display_name;
+                  tag.facet_cardinality = facet.cardinality;
+                  tag.facet_strict = facet.strict;
+                  tag.facet_required_for_publish = facet.required_for_publish;
+                  tag.facet_visible = facet.visible;
+                  tag.facet_allow_suggestions = facet.allow_suggestions;
+                }
+              }
+            }
+          });
+          
+          // Log final state for validation
+          logger.info('Template tags after stitching:', {
+            templateId: template.template_id,
+            tagsCount: template.template_tags.length,
+            tagsWithFacetId: template.template_tags.filter(tag => tag.facet_id).length,
+            tagsWithFacetKey: template.template_tags.filter(tag => tag.facet_key).length,
+            sampleStitchedTag: template.template_tags[0]
+          });
+        }
       }));
     }
+
+    // Log final validation summary
+    logger.info('List templates completed:', {
+      totalTemplates: templates.length,
+      templatesWithTags: templates.filter(t => t.template_tags && t.template_tags.length > 0).length,
+      totalTags: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.length : 0), 0),
+      tagsWithFacetData: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.filter(tag => tag.facet_key).length : 0), 0)
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: templates
@@ -627,8 +725,65 @@ exports.listArchivedTemplates = async function(req, res) {
           }
         }
 
-        // Load template tags
+        // Load template tags (both auto-generated and manually assigned)
         template.tags = await getTemplateTagsWithDetails(template.template_id);
+        
+        // Load manually assigned template tags
+        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+        
+        // Stitch facet information for template tags
+        if (template.template_tags && template.template_tags.length > 0) {
+          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
+          
+          // Get tag definitions first to get facet_id information
+          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
+          
+          // Create lookup map for tag definitions
+          const tagDefinitionMap = new Map();
+          tagDefinitions.forEach(tagDef => {
+            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+          });
+          
+          // Get facet_ids from tag definitions and create facet lookup
+          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
+          
+          // Create lookup map for facets
+          const facetMap = new Map();
+          facets.forEach(facet => {
+            facetMap.set(facet.facet_id, facet);
+          });
+          
+          // Stitch the data together
+          template.template_tags.forEach(tag => {
+            const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
+            
+            if (tagDefinition) {
+              // Add tag definition data
+              tag.tag_name = tagDefinition.tag_name;
+              tag.tag_code = tagDefinition.tag_code;
+              tag.tag_description = tagDefinition.tag_description;
+              tag.is_active = tagDefinition.is_active;
+              
+              // Get facet_id from tag definition if not present in template tag
+              const facetId = tag.facet_id || tagDefinition.facet_id;
+              if (facetId) {
+                tag.facet_id = facetId; // Ensure facet_id is present
+                
+                const facet = facetMap.get(facetId);
+                if (facet) {
+                  tag.facet_key = facet.facet_key;
+                  tag.facet_display_name = facet.display_name;
+                  tag.facet_cardinality = facet.cardinality;
+                  tag.facet_strict = facet.strict;
+                  tag.facet_required_for_publish = facet.required_for_publish;
+                  tag.facet_visible = facet.visible;
+                  tag.facet_allow_suggestions = facet.allow_suggestions;
+                }
+              }
+            }
+          });
+        }
       }));
     }
 
@@ -789,8 +944,65 @@ exports.searchTemplates = async function(req, res) {
           }
         }
 
-        // Load template tags
+        // Load template tags (both auto-generated and manually assigned)
         template.tags = await getTemplateTagsWithDetails(template.template_id);
+        
+        // Load manually assigned template tags
+        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+        
+        // Stitch facet information for template tags
+        if (template.template_tags && template.template_tags.length > 0) {
+          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
+          
+          // Get tag definitions first to get facet_id information
+          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
+          
+          // Create lookup map for tag definitions
+          const tagDefinitionMap = new Map();
+          tagDefinitions.forEach(tagDef => {
+            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+          });
+          
+          // Get facet_ids from tag definitions and create facet lookup
+          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
+          
+          // Create lookup map for facets
+          const facetMap = new Map();
+          facets.forEach(facet => {
+            facetMap.set(facet.facet_id, facet);
+          });
+          
+          // Stitch the data together
+          template.template_tags.forEach(tag => {
+            const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
+            
+            if (tagDefinition) {
+              // Add tag definition data
+              tag.tag_name = tagDefinition.tag_name;
+              tag.tag_code = tagDefinition.tag_code;
+              tag.tag_description = tagDefinition.tag_description;
+              tag.is_active = tagDefinition.is_active;
+              
+              // Get facet_id from tag definition if not present in template tag
+              const facetId = tag.facet_id || tagDefinition.facet_id;
+              if (facetId) {
+                tag.facet_id = facetId; // Ensure facet_id is present
+                
+                const facet = facetMap.get(facetId);
+                if (facet) {
+                  tag.facet_key = facet.facet_key;
+                  tag.facet_display_name = facet.display_name;
+                  tag.facet_cardinality = facet.cardinality;
+                  tag.facet_strict = facet.strict;
+                  tag.facet_required_for_publish = facet.required_for_publish;
+                  tag.facet_visible = facet.visible;
+                  tag.facet_allow_suggestions = facet.allow_suggestions;
+                }
+              }
+            }
+          });
+        }
       }));
     }
 
@@ -922,11 +1134,18 @@ exports.createTemplate = async function(req, res) {
       }
     }
 
-    // Extract clips data for transaction
+    // Extract clips data and template_tag_ids for transaction
     const clips = templateData.clips;
+    const templateTagIds = templateData.template_tag_ids;
     delete templateData.clips;
+    delete templateData.template_tag_ids;
 
     await TemplateModel.createTemplate(templateData, clips);
+    
+    // Create template tags if provided
+    if (templateTagIds && templateTagIds.length > 0) {
+      await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
+    }
     
     // Generate and store tags for the template
     const tags = await generateTemplateTags(templateData);
@@ -1574,6 +1793,16 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
+    // Check if template_code is being updated and if it already exists for another template
+    if (templateData.template_code && templateData.template_code !== existingTemplate.template_code) {
+      const templateWithSameCode = await TemplateModel.getTemplateByCode(templateData.template_code);
+      if (templateWithSameCode && templateWithSameCode.template_id !== templateId) {
+        return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+          message: req.t('template:TEMPLATE_CODE_EXISTS')
+        });
+      }
+    }
+
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
     
@@ -1750,6 +1979,10 @@ exports.updateTemplate = async function(req, res) {
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
+    // Extract template_tag_ids for separate handling
+    const templateTagIds = templateData.template_tag_ids;
+    delete templateData.template_tag_ids;
+
     logger.info('Final uploads required before persist', {
       templateId,
       image_uploads_required: templateData.image_uploads_required,
@@ -1763,6 +1996,11 @@ exports.updateTemplate = async function(req, res) {
     } else {
       // Use regular update for templates without clips
       updated = await TemplateModel.updateTemplate(templateId, templateData);
+    }
+    
+    // Update template tags if provided
+    if (templateTagIds !== undefined) {
+      await TemplateModel.updateTemplateTags(templateId, templateTagIds);
     }
     
     if (!updated) {

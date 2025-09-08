@@ -296,3 +296,28 @@ exports.searchTemplateTagDefinitions = async function(searchQuery, pagination) {
     [searchPattern, searchPattern, searchPattern, pagination.limit, pagination.offset]
   );
 };
+
+exports.getTemplateTagDefinitionsByIds = async function(ttdIds) {
+  if (!ttdIds || ttdIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = ttdIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      ttd_id,
+      tag_name,
+      tag_code,
+      tag_description,
+      facet_id,
+      is_active,
+      created_at,
+      updated_at
+    FROM template_tag_definitions
+    WHERE ttd_id IN (${placeholders})
+    AND archived_at IS NULL
+    ORDER BY tag_name ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, ttdIds);
+};
