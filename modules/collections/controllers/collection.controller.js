@@ -46,6 +46,17 @@ exports.listCollections = async function(req, res) {
             });
           }
         }
+
+        if (collection.rule_json && typeof collection.rule_json === 'string') {
+          try {
+            collection.rule_json = JSON.parse(collection.rule_json);
+          } catch (err) {
+            logger.error('Error parsing rule_json:', {
+              error: err.message,
+              value: collection.rule_json
+            });
+          }
+        }
       });
     }
 
@@ -70,6 +81,9 @@ exports.listCollections = async function(req, res) {
  * @apiBody {String} [thumbnail_cf_r2_key] Cloudflare R2 key for thumbnail
  * @apiBody {String} [thumbnail_cf_r2_url] Cloudflare R2 URL for thumbnail
  * @apiBody {Object} [additional_data] Additional collection data
+ * @apiBody {Boolean} [is_manual] Whether collection is manually curated
+ * @apiBody {Object} [rule_json] Collection filtering rules
+ * @apiBody {Boolean} [is_materialized] Whether collection is materialized
  */
 exports.createCollection = async function(req, res) {
   try {
@@ -114,6 +128,9 @@ exports.createCollection = async function(req, res) {
  * @apiBody {String} [thumbnail_cf_r2_key] Cloudflare R2 key for thumbnail
  * @apiBody {String} [thumbnail_cf_r2_url] Cloudflare R2 URL for thumbnail
  * @apiBody {Object} [additional_data] Additional collection data
+ * @apiBody {Boolean} [is_manual] Whether collection is manually curated
+ * @apiBody {Object} [rule_json] Collection filtering rules
+ * @apiBody {Boolean} [is_materialized] Whether collection is materialized
  */
 exports.updateCollection = async function(req, res) {
   try {
@@ -237,6 +254,17 @@ exports.searchCollections = async function(req, res) {
             logger.error('Error parsing additional_data:', {
               error: err.message,
               value: collection.additional_data
+            });
+          }
+        }
+
+        if (collection.rule_json && typeof collection.rule_json === 'string') {
+          try {
+            collection.rule_json = JSON.parse(collection.rule_json);
+          } catch (err) {
+            logger.error('Error parsing rule_json:', {
+              error: err.message,
+              value: collection.rule_json
             });
           }
         }
@@ -469,6 +497,17 @@ exports.getCollection = async function(req, res) {
         logger.error('Error parsing additional_data:', {
           error: err.message,
           value: collection.additional_data
+        });
+      }
+    }
+
+    if (collection.rule_json && typeof collection.rule_json === 'string') {
+      try {
+        collection.rule_json = JSON.parse(collection.rule_json);
+      } catch (err) {
+        logger.error('Error parsing rule_json:', {
+          error: err.message,
+          value: collection.rule_json
         });
       }
     }

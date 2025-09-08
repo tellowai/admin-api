@@ -6,14 +6,20 @@ const createCollectionSchema = Joi.object().keys({
   collection_name: Joi.string().max(255).required(),
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).allow(null),
-  additional_data: Joi.object().allow(null)
+  additional_data: Joi.object().allow(null),
+  is_manual: Joi.boolean().optional(),
+  rule_json: Joi.object().allow(null).optional(),
+  is_materialized: Joi.boolean().optional()
 });
 
 const updateCollectionSchema = Joi.object().keys({
   collection_name: Joi.string().max(255).optional(),
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null).optional(),
   thumbnail_cf_r2_url: Joi.string().max(1000).allow(null).optional(),
-  additional_data: Joi.object().allow(null).optional()
+  additional_data: Joi.object().allow(null).optional(),
+  is_manual: Joi.boolean().optional(),
+  rule_json: Joi.object().allow(null).optional(),
+  is_materialized: Joi.boolean().optional()
 });
 
 const addTemplatesSchema = Joi.object().keys({

@@ -10,6 +10,9 @@ exports.listCollections = async function(pagination) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
+      is_manual,
+      rule_json,
+      is_materialized,
       created_at
     FROM collections
     WHERE archived_at IS NULL
@@ -31,6 +34,9 @@ exports.getCollectionById = async function(collectionId) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
+      is_manual,
+      rule_json,
+      is_materialized,
       created_at
     FROM collections
     WHERE collection_id = ?
@@ -51,6 +57,9 @@ exports.searchCollections = async function(searchQuery, page, limit) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
+      is_manual,
+      rule_json,
+      is_materialized,
       created_at
     FROM collections
     WHERE archived_at IS NULL
@@ -76,7 +85,7 @@ exports.createCollection = async function(collectionData) {
     if (value !== undefined) {
       fields.push(key);
       values.push(value === null ? null : 
-        key === 'additional_data' ? JSON.stringify(value) : value);
+        (key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
       placeholders.push('?');
     }
   });
@@ -100,7 +109,7 @@ exports.updateCollection = async function(collectionId, collectionData) {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
       values.push(value === null ? null : 
-        key === 'additional_data' ? JSON.stringify(value) : value);
+        (key === 'additional_data' || key === 'rule_json') ? JSON.stringify(value) : value);
     }
   });
 
