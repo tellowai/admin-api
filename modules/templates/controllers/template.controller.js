@@ -1147,6 +1147,35 @@ exports.createTemplate = async function(req, res) {
       await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
     }
     
+    // Calculate aspect ratio and orientation from bodymovin JSON
+    if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
+      try {
+        const storage = StorageFactory.getProvider();
+        const isPublic = templateData.bodymovin_json_bucket === 'public' || 
+                       templateData.bodymovin_json_bucket === storage.publicBucket || 
+                       templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
+        
+        let bodymovinUrl;
+        if (isPublic) {
+          bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${templateData.bodymovin_json_key}`;
+        } else {
+          bodymovinUrl = await storage.generatePresignedDownloadUrl(templateData.bodymovin_json_key);
+        }
+
+        const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
+        if (dimensions) {
+          const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
+          templateData.aspect_ratio = aspectRatio;
+          templateData.orientation = orientation;
+        }
+      } catch (error) {
+        logger.warn('Failed to calculate aspect ratio and orientation for template', { 
+          templateId: templateData.template_id, 
+          error: error.message 
+        });
+      }
+    }
+
     // Generate and store tags for the template
     const tags = await generateTemplateTags(templateData);
     console.log('Generated tags array for template:', tags);
@@ -1978,6 +2007,38 @@ exports.updateTemplate = async function(req, res) {
       }
     }
     // If clips is undefined, don't modify faces_needed (partial update)
+
+    // Calculate aspect ratio and orientation from bodymovin JSON
+    const bodymovinKey = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
+    const bodymovinBucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
+    
+    if (bodymovinKey && bodymovinBucket) {
+      try {
+        const storage = StorageFactory.getProvider();
+        const isPublic = bodymovinBucket === 'public' || 
+                       bodymovinBucket === storage.publicBucket || 
+                       bodymovinBucket === (config.os2?.r2?.public?.bucket);
+        
+        let bodymovinUrl;
+        if (isPublic) {
+          bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${bodymovinKey}`;
+        } else {
+          bodymovinUrl = await storage.generatePresignedDownloadUrl(bodymovinKey);
+        }
+
+        const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
+        if (dimensions) {
+          const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
+          templateData.aspect_ratio = aspectRatio;
+          templateData.orientation = orientation;
+        }
+      } catch (error) {
+        logger.warn('Failed to calculate aspect ratio and orientation for template update', { 
+          templateId, 
+          error: error.message 
+        });
+      }
+    }
 
     // Extract template_tag_ids for separate handling
     const templateTagIds = templateData.template_tag_ids;

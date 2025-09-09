@@ -33,6 +33,8 @@ exports.listTemplates = async function(pagination) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data,
       created_at
     FROM templates
@@ -75,6 +77,8 @@ exports.listArchivedTemplates = async function(pagination) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data,
       created_at,
       archived_at
@@ -102,6 +106,8 @@ exports.getTemplatePrompt = async function(templateId) {
       video_uploads_required,
       user_assets_layer,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data
     FROM templates
     WHERE template_id = ?
@@ -140,6 +146,8 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data,
       created_at
     FROM templates
@@ -362,6 +370,8 @@ exports.getTemplateById = async function(templateId) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data,
       created_at
     FROM templates
@@ -404,6 +414,8 @@ exports.getTemplateByCode = async function(templateCode) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      aspect_ratio,
+      orientation,
       additional_data,
       created_at
     FROM templates

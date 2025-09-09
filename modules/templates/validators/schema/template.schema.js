@@ -71,6 +71,8 @@ const createTemplateSchema = Joi.object().keys({
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null),
   user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
   credits: Joi.number().integer().min(1).default(1),
+  aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
+  orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
@@ -112,6 +114,8 @@ const updateTemplateSchema = Joi.object().keys({
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null).optional(),
   user_assets_layer: Joi.string().valid('top', 'bottom').optional(),
   credits: Joi.number().integer().min(1).optional(),
+  aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
+  orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null).optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   clips: Joi.array().items(clipSchema).optional()
