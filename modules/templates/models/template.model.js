@@ -712,9 +712,11 @@ exports.createTemplateTags = async function(templateId, templateTagIds) {
     return [];
   }
 
-  const values = templateTagIds.map(tag => `(?, ?, ?, NOW(), NOW())`).join(',');
+  // Extract both ttd_id and facet_id from templateTagIds
+  
+  const values = templateTagIds.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
   const query = `
-    INSERT IGNORE INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
+    INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
     VALUES ${values}
   `;
 
@@ -723,8 +725,12 @@ exports.createTemplateTags = async function(templateId, templateTagIds) {
     queryParams.push(templateId, tag.ttd_id, tag.facet_id);
   });
 
-  await mysqlQueryRunner.runQueryInMaster(query, queryParams);
-  return await this.getTemplateTags(templateId);
+  try {
+    await mysqlQueryRunner.runQueryInMaster(query, queryParams);
+    return await this.getTemplateTags(templateId);
+  } catch (error) {
+    throw error;
+  }
 };
 
 /**
@@ -755,7 +761,7 @@ exports.updateTemplateTags = async function(templateId, templateTagIds) {
   // Get existing template tags
   const existingTags = await this.getTemplateTags(templateId);
   
-  // Convert to comparable format for easier comparison
+  // Convert to comparable format for easier comparison (using both facet_id and ttd_id)
   const existingTagKeys = existingTags.map(tag => `${tag.facet_id}-${tag.ttd_id}`);
   const newTagKeys = (templateTagIds || []).map(tag => `${tag.facet_id}-${tag.ttd_id}`);
   
@@ -775,9 +781,9 @@ exports.updateTemplateTags = async function(templateId, templateTagIds) {
     await this.removeTemplateTags(templateId, ttdIdsToRemove);
   }
   
-  // Add new tags
+  // Add new tags (handle both new inserts and restoring soft-deleted tags)
   if (tagsToAdd.length > 0) {
-    await this.createTemplateTags(templateId, tagsToAdd);
+    await this.createOrRestoreTemplateTags(templateId, tagsToAdd);
   }
   
   // Return updated tags
@@ -847,4 +853,144 @@ exports.checkTemplateTagExists = async function(templateId, facetId, ttdId) {
 
   const result = await mysqlQueryRunner.runQueryInSlave(query, [templateId, facetId, ttdId]);
   return result.length > 0;
+};
+
+/**
+ * Get AI clips for multiple templates (batch operation)
+ */
+exports.getTemplateAiClipsForMultipleTemplates = async function(templateIds) {
+  if (!templateIds || templateIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      tac_id,
+      template_id,
+      clip_index,
+      asset_type,
+      created_at,
+      updated_at
+    FROM template_ai_clips
+    WHERE template_id IN (${placeholders})
+    AND deleted_at IS NULL
+    ORDER BY template_id, clip_index ASC
+  `;
+
+  const clips = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+  
+  // Get workflows for all clips in batch
+  if (clips.length > 0) {
+    const tacIds = clips.map(clip => clip.tac_id);
+    const workflowPlaceholders = tacIds.map(() => '?').join(',');
+    const workflowQuery = `
+      SELECT 
+        cw_id,
+        tac_id,
+        workflow,
+        created_at,
+        updated_at
+      FROM clip_workflow
+      WHERE tac_id IN (${workflowPlaceholders})
+      AND deleted_at IS NULL
+    `;
+    
+    const workflows = await mysqlQueryRunner.runQueryInSlave(workflowQuery, tacIds);
+    const workflowMap = new Map();
+    
+    // Group workflows by tac_id (multiple workflows per clip)
+    workflows.forEach(workflow => {
+      if (!workflowMap.has(workflow.tac_id)) {
+        workflowMap.set(workflow.tac_id, []);
+      }
+      
+      // Parse workflow JSON if it's a string
+      let parsedWorkflow = workflow.workflow;
+      if (typeof parsedWorkflow === 'string') {
+        try {
+          parsedWorkflow = JSON.parse(parsedWorkflow);
+        } catch (error) {
+          console.error('Error parsing workflow JSON:', error);
+          parsedWorkflow = null;
+        }
+      }
+      
+      if (parsedWorkflow) {
+        workflowMap.get(workflow.tac_id).push(parsedWorkflow);
+      }
+    });
+    
+    // Attach workflows to clips (as arrays)
+    clips.forEach(clip => {
+      clip.workflow = workflowMap.get(clip.tac_id) || [];
+    });
+  }
+  
+  return clips;
+};
+
+/**
+ * Get template tags for multiple templates (batch operation)
+ */
+exports.getTemplateTagsForMultipleTemplates = async function(templateIds) {
+  if (!templateIds || templateIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT 
+      tt_id,
+      template_id,
+      ttd_id,
+      facet_id,
+      created_at,
+      updated_at
+    FROM template_tags
+    WHERE template_id IN (${placeholders})
+    AND deleted_at IS NULL
+    ORDER BY template_id, created_at ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+};
+
+/**
+ * Create or restore template tags (handles both new inserts and soft-deleted restores)
+ */
+exports.createOrRestoreTemplateTags = async function(templateId, templateTagIds) {
+  if (!templateTagIds || templateTagIds.length === 0) {
+    return [];
+  }
+
+  // First, try to restore any soft-deleted tags
+  const ttdIds = templateTagIds.map(tag => tag.ttd_id);
+  const restoreQuery = `
+    UPDATE template_tags 
+    SET deleted_at = NULL, updated_at = NOW()
+    WHERE template_id = ? AND ttd_id IN (${ttdIds.map(() => '?').join(',')})
+    AND deleted_at IS NOT NULL
+  `;
+  
+  await mysqlQueryRunner.runQueryInMaster(restoreQuery, [templateId, ...ttdIds]);
+  
+  // Then, insert any tags that don't exist at all (new or restored)
+  const values = templateTagIds.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
+  const insertQuery = `
+    INSERT IGNORE INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
+    VALUES ${values}
+  `;
+
+  const queryParams = [];
+  templateTagIds.forEach(tag => {
+    queryParams.push(templateId, tag.ttd_id, tag.facet_id);
+  });
+
+  try {
+    await mysqlQueryRunner.runQueryInMaster(insertQuery, queryParams);
+    return await this.getTemplateTags(templateId);
+  } catch (error) {
+    throw error;
+  }
 }; 

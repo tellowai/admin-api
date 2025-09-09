@@ -148,105 +148,39 @@ function convertSpecialCharsToUnderscore(code) {
   return code.replace(/[:]/g, '_').replace(/-/g, '_');
 }
 
-/**
- * Generate tags array for template
- * @param {Object} templateData - Template data object
- * @returns {Array} - Array of tags
- */
-async function generateTemplateTags(templateData) {
-  const tags = [];
-  
-  try {
-    // Add template_clips_assets_type (ai or non-ai)
-    if (templateData.template_clips_assets_type) {
-      tags.push(templateData.template_clips_assets_type.toLowerCase());
-    }
-    
-    // Add template output type tag
-    if (templateData.template_output_type) {
-      tags.push(templateData.template_output_type.toLowerCase());
-    }
-    
-    // Get Bodymovin JSON URL
-    let bodymovinUrl = null;
-    if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
-      const storage = StorageFactory.getProvider();
-      const isPublic = templateData.bodymovin_json_bucket === 'public' || 
-                     templateData.bodymovin_json_bucket === storage.publicBucket || 
-                     templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
-      
-      if (isPublic) {
-        bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${templateData.bodymovin_json_key}`;
-      } else {
-        bodymovinUrl = await storage.generatePresignedDownloadUrl(templateData.bodymovin_json_key);
-      }
-    }
-    
-    // Fetch dimensions and calculate aspect ratio
-    if (bodymovinUrl) {
-      const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
-      if (dimensions) {
-        const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
-        
-        if (aspectRatio) {
-          // Convert special characters to underscore format for tag_code
-          tags.push(convertSpecialCharsToUnderscore(aspectRatio.toLowerCase()));
-        }
-        if (orientation) {
-          tags.push(orientation.toLowerCase());
-        }
-      }
-    }
-    
-    // Extract asset types from clips
-    const assetTypes = extractAssetTypesFromClips(templateData.clips);
-    assetTypes.forEach(assetType => {
-      tags.push(assetType.toLowerCase());
-    });
-    
-  } catch (error) {
-    logger.error('Error generating template tags', { error: error.message, templateId: templateData.template_id });
-  }
-  
-  return tags;
-}
 
 /**
- * Store template tags in database
+ * Get template tags with full tag definition details from pre-fetched data
  * @param {string} templateId - Template ID
- * @param {Array} tags - Array of tag codes
- * @returns {Array} - Array of stored tag definitions
+ * @param {Map} templateTagsMap - Pre-fetched template tags map
+ * @param {Map} tagDefinitionMap - Pre-fetched tag definitions map
+ * @returns {Array} - Array of tags with full details
  */
-async function storeTemplateTags(templateId, tags) {
-  try {
-    if (!tags || tags.length === 0) {
-      return [];
-    }
-
-    // Get existing tag definitions for the provided tag codes
-    const tagDefinitions = await TemplateTagDefinitionModel.getTagDefinitionsByCodes(tags);
-    
-    // Extract tag definition IDs
-    const tagDefinitionIds = tagDefinitions.map(tag => tag.ttd_id);
-    
-    // Assign tags to template
-    const assignedTags = await TemplateTagsModel.assignTagsToTemplate(templateId, tagDefinitionIds);
-    
-    logger.info('Stored template tags', { 
-      templateId, 
-      tagCodes: tags, 
-      assignedCount: assignedTags.length 
-    });
-    
-    return assignedTags;
-  } catch (error) {
-    logger.error('Error storing template tags', { 
-      error: error.message, 
-      templateId, 
-      tags 
-    });
+function getTemplateTagsWithDetailsFromPrefetched(templateId, templateTagsMap, tagDefinitionMap) {
+  const templateTags = templateTagsMap.get(templateId) || [];
+  
+  if (templateTags.length === 0) {
     return [];
   }
+  
+  // Stitch the data together using pre-fetched maps
+  const tagsWithDetails = templateTags.map(tt => {
+    const tagDefinition = tagDefinitionMap.get(tt.ttd_id);
+    return {
+      tt_id: tt.tt_id,
+      template_id: tt.template_id,
+      ttd_id: tt.ttd_id,
+      facet_id: tt.facet_id,
+      tag_name: tagDefinition ? tagDefinition.tag_name : null,
+      tag_code: tagDefinition ? tagDefinition.tag_code : null,
+      tag_description: tagDefinition ? tagDefinition.tag_description : null,
+      is_active: tagDefinition ? tagDefinition.is_active : null,
+      created_at: tt.created_at,
+      updated_at: tt.updated_at
+    };
+  });
+  
+  return tagsWithDetails;
 }
 
 /**
@@ -320,6 +254,47 @@ exports.listTemplates = async function(req, res) {
     if (templates.length) {
       const storage = StorageFactory.getProvider();
       
+      // Get all template IDs for batch database calls
+      const templateIds = templates.map(template => template.template_id);
+      
+      // Batch fetch all clips for all templates
+      const allClips = await TemplateModel.getTemplateAiClipsForMultipleTemplates(templateIds);
+      const clipsMap = new Map();
+      allClips.forEach(clip => {
+        if (!clipsMap.has(clip.template_id)) {
+          clipsMap.set(clip.template_id, []);
+        }
+        clipsMap.get(clip.template_id).push(clip);
+      });
+      
+      // Batch fetch all template tags for all templates
+      const allTemplateTags = await TemplateModel.getTemplateTagsForMultipleTemplates(templateIds);
+      const templateTagsMap = new Map();
+      allTemplateTags.forEach(tag => {
+        if (!templateTagsMap.has(tag.template_id)) {
+          templateTagsMap.set(tag.template_id, []);
+        }
+        templateTagsMap.get(tag.template_id).push(tag);
+      });
+      
+      // Get all unique ttd_ids for batch tag definition lookup
+      const allTtdIds = [...new Set(allTemplateTags.map(tag => tag.ttd_id))];
+      const tagDefinitions = allTtdIds.length > 0 ? 
+        await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(allTtdIds) : [];
+      const tagDefinitionMap = new Map();
+      tagDefinitions.forEach(tagDef => {
+        tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+      });
+      
+      // Get all unique facet_ids for batch facet lookup
+      const allFacetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+      const facets = allFacetIds.length > 0 ? 
+        await TemplateTagFacetModel.getTemplateTagFacetsByIds(allFacetIds) : [];
+      const facetMap = new Map();
+      facets.forEach(facet => {
+        facetMap.set(facet.facet_id, facet);
+      });
+      
       await Promise.all(templates.map(async (template) => {
         // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
@@ -328,8 +303,8 @@ exports.listTemplates = async function(req, res) {
           template.r2_url = template.cf_r2_url;
         }
         
-        // Load AI clips for all templates
-        template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
+        // Load AI clips for all templates (from pre-fetched data)
+        template.clips = clipsMap.get(template.template_id) || [];
         
         // Generate R2 URLs for AI clip assets
         if (template.clips && template.clips.length > 0) {
@@ -457,57 +432,15 @@ exports.listTemplates = async function(req, res) {
           }
         }
 
-        // Load template tags (both auto-generated and manually assigned)
-        template.tags = await getTemplateTagsWithDetails(template.template_id);
+        // Load template tags (both auto-generated and manually assigned) - from pre-fetched data
+        template.tags = getTemplateTagsWithDetailsFromPrefetched(template.template_id, templateTagsMap, tagDefinitionMap);
         
-        // Load manually assigned template tags
-        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+        // Load manually assigned template tags (from pre-fetched data)
+        template.template_tags = templateTagsMap.get(template.template_id) || [];
         
-        // Stitch facet information for template tags
+        // Stitch facet information for template tags (using pre-fetched data)
         if (template.template_tags && template.template_tags.length > 0) {
-          // Log initial state for debugging
-          logger.info('Template tags before stitching:', {
-            templateId: template.template_id,
-            tagsCount: template.template_tags.length,
-            sampleTag: template.template_tags[0],
-            tagsWithFacetId: template.template_tags.filter(tag => tag.facet_id).length
-          });
-          
-          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-          
-          // Get tag definitions to extract facet_ids
-          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
-          logger.info('Tag definitions fetched:', {
-            templateId: template.template_id,
-            tagDefinitionsCount: tagDefinitions.length,
-            sampleTagDef: tagDefinitions[0]
-          });
-          
-          // Extract facet_ids from tag definitions
-          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
-          logger.info('Facet IDs extracted:', {
-            templateId: template.template_id,
-            facetIds: facetIds
-          });
-          
-          // Get facets data
-          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
-          logger.info('Facets fetched:', {
-            templateId: template.template_id,
-            facetsCount: facets.length,
-            sampleFacet: facets[0]
-          });
-          
-          // Create lookup maps
-          const tagDefinitionMap = new Map();
-          tagDefinitions.forEach(tagDef => {
-            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
-          });
-          
-          const facetMap = new Map();
-          facets.forEach(facet => {
-            facetMap.set(facet.facet_id, facet);
-          });
+          // Use pre-fetched tag definitions and facets
           
           // Stitch the data together
           template.template_tags.forEach(tag => {
@@ -537,15 +470,6 @@ exports.listTemplates = async function(req, res) {
                 }
               }
             }
-          });
-          
-          // Log final state for validation
-          logger.info('Template tags after stitching:', {
-            templateId: template.template_id,
-            tagsCount: template.template_tags.length,
-            tagsWithFacetId: template.template_tags.filter(tag => tag.facet_id).length,
-            tagsWithFacetKey: template.template_tags.filter(tag => tag.facet_key).length,
-            sampleStitchedTag: template.template_tags[0]
           });
         }
       }));
@@ -765,8 +689,8 @@ exports.listArchivedTemplates = async function(req, res) {
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
               
-              // Get facet_id from tag definition if not present in template tag
-              const facetId = tag.facet_id || tagDefinition.facet_id;
+              // Get facet_id from tag definition (template_tags table doesn't store facet_id)
+              const facetId = tagDefinition.facet_id;
               if (facetId) {
                 tag.facet_id = facetId; // Ensure facet_id is present
                 
@@ -984,8 +908,8 @@ exports.searchTemplates = async function(req, res) {
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
               
-              // Get facet_id from tag definition if not present in template tag
-              const facetId = tag.facet_id || tagDefinition.facet_id;
+              // Get facet_id from tag definition (template_tags table doesn't store facet_id)
+              const facetId = tagDefinition.facet_id;
               if (facetId) {
                 tag.facet_id = facetId; // Ensure facet_id is present
                 
@@ -1144,7 +1068,11 @@ exports.createTemplate = async function(req, res) {
     
     // Create template tags if provided
     if (templateTagIds && templateTagIds.length > 0) {
-      await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
+      console.log('Creating manual template tags:', JSON.stringify(templateTagIds, null, 2));
+      const result = await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
+      console.log('Manual template tags created:', JSON.stringify(result, null, 2));
+    } else {
+      console.log('No manual template tags provided');
     }
     
     // Calculate aspect ratio and orientation from bodymovin JSON
@@ -1176,12 +1104,7 @@ exports.createTemplate = async function(req, res) {
       }
     }
 
-    // Generate and store tags for the template
-    const tags = await generateTemplateTags(templateData);
-    console.log('Generated tags array for template:', tags);
-    
-    // Store tags in database
-    await storeTemplateTags(templateData.template_id, tags);
+    // Manual template tags are already stored above
     
     // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
@@ -2050,6 +1973,7 @@ exports.updateTemplate = async function(req, res) {
       video_uploads_required: templateData.video_uploads_required,
       hasClips
     });
+    
     let updated;
     if (hasClips) {
       // Use transaction for template updates with clips
@@ -2061,7 +1985,11 @@ exports.updateTemplate = async function(req, res) {
     
     // Update template tags if provided
     if (templateTagIds !== undefined) {
-      await TemplateModel.updateTemplateTags(templateId, templateTagIds);
+      console.log('Updating manual template tags:', JSON.stringify(templateTagIds, null, 2));
+      const result = await TemplateModel.updateTemplateTags(templateId, templateTagIds);
+      console.log('Manual template tags updated:', JSON.stringify(result, null, 2));
+    } else {
+      console.log('No manual template tags to update');
     }
     
     if (!updated) {
@@ -2070,12 +1998,7 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
-    // Generate and store tags for the template
-    const tags = await generateTemplateTags(templateData);
-    console.log('Generated tags array for template update:', tags);
-    
-    // Store tags in database
-    await storeTemplateTags(templateId, tags);
+    // Manual template tags are already stored above
     
     // Publish activity log command
     await kafkaCtrl.sendMessage(
@@ -2099,7 +2022,7 @@ exports.updateTemplate = async function(req, res) {
     logger.error('Error updating template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
-}; 
+} 
 
 /**
  * @api {post} /templates/:templateId/archive Archive template
@@ -2325,9 +2248,7 @@ exports.copyTemplate = async function(req, res) {
     // Create the new template with all related data
     await TemplateModel.createTemplate(newTemplateData, clipsToCopy);
     
-    // Generate and store tags for the copied template
-    const tags = await generateTemplateTags(newTemplateData);
-    await storeTemplateTags(newTemplateId, tags);
+    // Manual template tags are already stored above
     
     // Publish activity log command
     await kafkaCtrl.sendMessage(
