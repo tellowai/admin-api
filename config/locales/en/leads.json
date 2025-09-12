@@ -1,0 +1,10 @@
+{
+  "errors": {
+    "lead_not_found": "Lead not found",
+    "lead_operation_failed": "Lead operation failed"
+  },
+  "success": {
+    "leads_listed": "Leads retrieved successfully",
+    "lead_retrieved": "Lead retrieved successfully"
+  }
+}

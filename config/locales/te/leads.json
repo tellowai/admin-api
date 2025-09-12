@@ -1,0 +1,10 @@
+{
+  "errors": {
+    "lead_not_found": "లీడ్ కనుగొనబడలేదు",
+    "lead_operation_failed": "లీడ్ ఆపరేషన్ విఫలమైంది"
+  },
+  "success": {
+    "leads_listed": "లీడ్లు విజయవంతంగా పొందబడ్డాయి",
+    "lead_retrieved": "లీడ్ విజయవంతంగా పొందబడింది"
+  }
+}

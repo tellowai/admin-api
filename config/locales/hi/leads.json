@@ -1,0 +1,10 @@
+{
+  "errors": {
+    "lead_not_found": "लीड नहीं मिला",
+    "lead_operation_failed": "लीड ऑपरेशन विफल"
+  },
+  "success": {
+    "leads_listed": "लीड सफलतापूर्वक प्राप्त किए गए",
+    "lead_retrieved": "लीड सफलतापूर्वक प्राप्त किया गया"
+  }
+}
