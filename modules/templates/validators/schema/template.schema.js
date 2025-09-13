@@ -10,7 +10,7 @@ const workflowStepSchema = Joi.object({
   data: Joi.array().items(
     Joi.object({
       type: Joi.string().required(),
-      value: Joi.alternatives().try(Joi.string(), Joi.number(), Joi.object()).required()
+      value: Joi.alternatives().try(Joi.string(), Joi.number(), Joi.object(), Joi.boolean()).required()
     })
   ).optional()
 });
