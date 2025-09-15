@@ -18,8 +18,18 @@ module.exports.validate = function (schema, payload) {
   // }
 
   if(payloadValidation.error && payloadValidation.error.details) {
+    // Process error details to use custom messages when available
+    const processedErrors = payloadValidation.error.details.map(detail => {
+      if (detail.type === 'any.invalid' && detail.context && detail.context.message) {
+        return {
+          ...detail,
+          message: detail.context.message
+        };
+      }
+      return detail;
+    });
 
-    response.error = payloadValidation.error.details;
+    response.error = processedErrors;
   }
 
   response.value = payloadValidation.value;

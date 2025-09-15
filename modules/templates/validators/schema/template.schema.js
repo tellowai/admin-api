@@ -2,6 +2,23 @@
 
 const Joi = require('@hapi/joi');
 
+// Custom validation for word count
+const wordCountValidation = (value, helpers) => {
+  if (!value || value.trim() === '') {
+    return value; // Allow empty values
+  }
+  
+  const wordCount = value.trim().split(/\s+/).filter(word => word.length > 0).length;
+  
+  if (wordCount > 50) {
+    return helpers.error('any.invalid', { 
+      message: `Description must not exceed 50 words. Current word count: ${wordCount}` 
+    });
+  }
+  
+  return value;
+};
+
 // Workflow step schema
 const workflowStepSchema = Joi.object({
   workflow_id: Joi.string().required(),
@@ -44,7 +61,7 @@ const createTemplateSchema = Joi.object().keys({
   template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').required(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
-  description: Joi.string().allow(null, ''),
+  description: Joi.string().allow(null, '').custom(wordCountValidation),
   prompt: Joi.string().allow('').when('template_output_type', {
     is: 'image',
     then: Joi.optional(),
@@ -105,7 +122,7 @@ const updateTemplateSchema = Joi.object().keys({
   template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
-  description: Joi.string().allow(null, '').optional(),
+  description: Joi.string().allow(null, '').custom(wordCountValidation).optional(),
   prompt: Joi.string().allow('').optional(),
   faces_needed: Joi.array().items(Joi.object().keys({
     character_name: Joi.string().optional(),
