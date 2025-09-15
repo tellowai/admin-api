@@ -75,6 +75,20 @@ const createTemplateSchema = Joi.object().keys({
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
+  image_uploads_json: Joi.array().items(
+    Joi.object({
+      clip_index: Joi.number().integer().min(1).required(),
+      step_index: Joi.number().integer().min(0).required(),
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
+    })
+  ).allow(null).optional(),
+  video_uploads_json: Joi.array().items(
+    Joi.object({
+      clip_index: Joi.number().integer().min(1).required(),
+      step_index: Joi.number().integer().min(0).required(),
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
+    })
+  ).allow(null).optional(),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
   clips: Joi.array()
     .items(clipSchema)
@@ -118,6 +132,20 @@ const updateTemplateSchema = Joi.object().keys({
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null).optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
+  image_uploads_json: Joi.array().items(
+    Joi.object({
+      clip_index: Joi.number().integer().min(1).required(),
+      step_index: Joi.number().integer().min(0).required(),
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
+    })
+  ).allow(null).optional(),
+  video_uploads_json: Joi.array().items(
+    Joi.object({
+      clip_index: Joi.number().integer().min(1).required(),
+      step_index: Joi.number().integer().min(0).required(),
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
+    })
+  ).allow(null).optional(),
   clips: Joi.array().items(clipSchema).optional()
 });
 

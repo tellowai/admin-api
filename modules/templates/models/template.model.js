@@ -19,6 +19,8 @@ exports.listTemplates = async function(pagination) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -63,6 +65,8 @@ exports.listArchivedTemplates = async function(pagination) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -104,6 +108,8 @@ exports.getTemplatePrompt = async function(templateId) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       credits,
       aspect_ratio,
@@ -132,6 +138,8 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -184,7 +192,7 @@ exports.createTemplate = async function(templateData, clips = null) {
         if (value !== undefined) {
           fields.push(key);
           values.push(value === null ? null : 
-            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields') ? 
+            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
             JSON.stringify(value) : value);
           placeholders.push('?');
         }
@@ -224,7 +232,7 @@ exports.createTemplate = async function(templateData, clips = null) {
       if (value !== undefined) {
         fields.push(key);
         values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields') ? 
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
           JSON.stringify(value) : value);
         placeholders.push('?');
       }
@@ -254,7 +262,7 @@ exports.updateTemplate = async function(templateId, templateData) {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
       values.push(value === null ? null : 
-        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields') ? 
+        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
         JSON.stringify(value) : value);
     }
   });
@@ -294,7 +302,7 @@ exports.updateTemplateWithClips = async function(templateId, templateData, clips
       if (value !== undefined) {
         setClause.push(`${key} = ?`);
         values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields') ? 
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
           JSON.stringify(value) : value);
       }
     });
@@ -356,6 +364,8 @@ exports.getTemplateById = async function(templateId) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -400,6 +410,8 @@ exports.getTemplateByCode = async function(templateCode) {
       faces_needed,
       image_uploads_required,
       video_uploads_required,
+      image_uploads_json,
+      video_uploads_json,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,

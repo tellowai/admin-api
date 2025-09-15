@@ -1034,9 +1034,50 @@ exports.createTemplate = async function(req, res) {
     } else {
       // AI templates: derive from clips
       if (templateData.clips && templateData.clips.length > 0) {
+        logger.info('CREATE: Starting calculations for AI template', {
+          templateId: templateData.template_id,
+          clipsCount: templateData.clips.length,
+          existingFacesNeeded: templateData.faces_needed,
+          existingImageUploadsJson: templateData.image_uploads_json,
+          existingVideoUploadsJson: templateData.video_uploads_json
+        });
+
         templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
         templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
         templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
+        
+        logger.info('CREATE: After basic calculations', {
+          templateId: templateData.template_id,
+          facesNeeded: templateData.faces_needed,
+          imageUploadsRequired: templateData.image_uploads_required,
+          videoUploadsRequired: templateData.video_uploads_required
+        });
+        
+        // Generate image_uploads_json and video_uploads_json from clips if not provided
+        if (!templateData.image_uploads_json) {
+          templateData.image_uploads_json = generateImageUploadsJsonFromClips(templateData.clips);
+          logger.info('CREATE: Generated image_uploads_json from clips', {
+            templateId: templateData.template_id,
+            imageUploadsJson: templateData.image_uploads_json
+          });
+        } else {
+          logger.info('CREATE: Using provided image_uploads_json', {
+            templateId: templateData.template_id,
+            imageUploadsJson: templateData.image_uploads_json
+          });
+        }
+        if (!templateData.video_uploads_json) {
+          templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
+          logger.info('CREATE: Generated video_uploads_json from clips', {
+            templateId: templateData.template_id,
+            videoUploadsJson: templateData.video_uploads_json
+          });
+        } else {
+          logger.info('CREATE: Using provided video_uploads_json', {
+            templateId: templateData.template_id,
+            videoUploadsJson: templateData.video_uploads_json
+          });
+        }
         
         if (!templateData.template_gender) {
           if (templateData.faces_needed && templateData.faces_needed.length === 2) {
@@ -1063,6 +1104,15 @@ exports.createTemplate = async function(req, res) {
     const templateTagIds = templateData.template_tag_ids;
     delete templateData.clips;
     delete templateData.template_tag_ids;
+
+    logger.info('CREATE: Final values before database insert', {
+      templateId: templateData.template_id,
+      facesNeeded: templateData.faces_needed,
+      imageUploadsRequired: templateData.image_uploads_required,
+      videoUploadsRequired: templateData.video_uploads_required,
+      imageUploadsJson: templateData.image_uploads_json,
+      videoUploadsJson: templateData.video_uploads_json
+    });
 
     await TemplateModel.createTemplate(templateData, clips);
     
@@ -1138,8 +1188,11 @@ exports.createTemplate = async function(req, res) {
  */
 function generateFacesNeededFromClips(clips) {
   if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    logger.info('generateFacesNeededFromClips: No clips provided, returning empty array');
     return [];
   }
+
+  logger.info('generateFacesNeededFromClips: Starting with clips', { clipsCount: clips.length });
 
   // Collect genders from any workflow step data items with type 'character_gender' (or legacy 'gender')
   const gendersSet = new Set();
@@ -1150,29 +1203,58 @@ function generateFacesNeededFromClips(clips) {
     clip.workflow.forEach((workflowStep, stepIndex) => {
       if (!workflowStep || !Array.isArray(workflowStep.data)) return;
 
-      for (const item of workflowStep.data) {
-        if (!item || !item.type) continue;
+      // Only process "generate image" type nodes (not upload nodes)
+      const workflowCode = (workflowStep.workflow_code ? String(workflowStep.workflow_code) : '').toLowerCase().trim();
+      const workflowId = (workflowStep.workflow_id ? String(workflowStep.workflow_id) : '').toLowerCase().trim();
 
-        const itemType = String(item.type).toLowerCase().trim();
-        if (itemType === 'character_gender' || itemType === 'gender') {
-          const value = (item.value ?? '').toString().toLowerCase().trim();
+      // Check if this is a "generate image" type node
+      const isGenerateImageByCode = workflowCode === 'multi_image_editing' || 
+                                   workflowCode === 'style_change_convert_image' || 
+                                   workflowCode === 'image_generation' ||
+                                   workflowCode === 'generate_image' ||
+                                   workflowCode === 'image_editing' ||
+                                   workflowCode === 'inpainting';
+      const isGenerateImageById = workflowId === 'multi-image-editing' || 
+                                 workflowId === 'style-change' ||
+                                 workflowId === 'image-generation' ||
+                                 workflowId === 'generate-image' ||
+                                 workflowId === 'image-editing' ||
+                                 workflowId === 'inpainting';
 
-          if (!value) {
-            logger.warn('Skipping empty character gender value', { clipIndex, stepIndex });
-            continue;
-          }
+      const isGenerateImageStep = isGenerateImageByCode || isGenerateImageById;
 
-          // Normalize and validate
-          if (value === 'male' || value === 'female') {
-            gendersSet.add(value);
-          } else if (value === 'unisex') {
-            gendersSet.add('unisex');
-          } else if (value === 'couple') {
-            // Interpret 'couple' as requiring both male and female faces
-            gendersSet.add('male');
-            gendersSet.add('female');
-          } else {
-            logger.warn('Skipping unsupported character gender', { clipIndex, stepIndex, value });
+      if (isGenerateImageStep) {
+        logger.info('generateFacesNeededFromClips: Found generate image step', {
+          clipIndex,
+          stepIndex,
+          workflowCode,
+          workflowId
+        });
+
+        for (const item of workflowStep.data) {
+          if (!item || !item.type) continue;
+
+          const itemType = String(item.type).toLowerCase().trim();
+          if (itemType === 'character_gender' || itemType === 'gender') {
+            const value = (item.value ?? '').toString().toLowerCase().trim();
+
+            if (!value) {
+              logger.warn('Skipping empty character gender value', { clipIndex, stepIndex });
+              continue;
+            }
+
+            // Normalize and validate
+            if (value === 'male' || value === 'female') {
+              gendersSet.add(value);
+            } else if (value === 'unisex') {
+              gendersSet.add('unisex');
+            } else if (value === 'couple') {
+              // Interpret 'couple' as requiring both male and female faces
+              gendersSet.add('male');
+              gendersSet.add('female');
+            } else {
+              logger.warn('Skipping unsupported character gender', { clipIndex, stepIndex, value });
+            }
           }
         }
       }
@@ -1213,7 +1295,7 @@ function generateFacesNeededFromClips(clips) {
     };
   });
 
-  logger.info('Generated faces_needed from clips', {
+  logger.info('generateFacesNeededFromClips: Generated faces_needed from clips', {
     totalClips: clips.length,
     genders: Array.from(gendersSet),
     facesNeeded: facesWithIds
@@ -1294,6 +1376,146 @@ function calculateVideoUploadsRequiredFromClips(clips) {
   }
 
   return uploads;
+}
+
+/**
+ * Generate image_uploads_json from clips data
+ * Extracts upload steps with gender information for image uploads
+ * @param {Array} clips - Array of clip objects with workflows
+ * @returns {Array} Array of image upload objects with clip_index, step_index, and gender
+ */
+function generateImageUploadsJsonFromClips(clips) {
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    logger.info('generateImageUploadsJsonFromClips: No clips provided, returning empty array');
+    return [];
+  }
+
+  logger.info('generateImageUploadsJsonFromClips: Starting with clips', { clipsCount: clips.length });
+
+  const imageUploads = [];
+
+  clips.forEach((clip, clipIndex) => {
+    if (!clip || !Array.isArray(clip.workflow)) return;
+
+    clip.workflow.forEach((workflowStep, stepIndex) => {
+      if (!workflowStep || !Array.isArray(workflowStep.data)) return;
+
+      const workflowCode = (workflowStep.workflow_code ? String(workflowStep.workflow_code) : '').toLowerCase().trim();
+      const workflowId = (workflowStep.workflow_id ? String(workflowStep.workflow_id) : '').toLowerCase().trim();
+
+      const isAskUploadByCode = workflowCode === 'ask_user_to_upload_image' || workflowCode === 'ask-user-to-upload-image' || workflowCode === 'ask_user_upload_image';
+      const isAskUploadById = workflowId === 'user-upload-image' || workflowId === 'user_upload_image';
+
+      if (isAskUploadByCode || isAskUploadById) {
+        logger.info('generateImageUploadsJsonFromClips: Found image upload step', {
+          clipIndex,
+          stepIndex,
+          workflowCode,
+          workflowId
+        });
+
+        // Look for gender information in the step data
+        let gender = 'unisex'; // Default gender
+
+        for (const item of workflowStep.data) {
+          if (!item || !item.type) continue;
+
+          const itemType = String(item.type).toLowerCase().trim();
+          if (itemType === 'character_gender' || itemType === 'gender') {
+            const value = (item.value ?? '').toString().toLowerCase().trim();
+            
+            if (value === 'male' || value === 'female' || value === 'unisex' || value === 'couple') {
+              gender = value;
+              break;
+            }
+          }
+        }
+
+        imageUploads.push({
+          clip_index: clipIndex + 1, // 1-based indexing
+          step_index: stepIndex,
+          gender: gender
+        });
+      }
+    });
+  });
+
+  logger.info('generateImageUploadsJsonFromClips: Generated image uploads', {
+    clipsCount: clips.length,
+    imageUploads: imageUploads
+  });
+
+  return imageUploads;
+}
+
+/**
+ * Generate video_uploads_json from clips data
+ * Extracts upload steps with gender information for video uploads
+ * @param {Array} clips - Array of clip objects with workflows
+ * @returns {Array} Array of video upload objects with clip_index, step_index, and gender
+ */
+function generateVideoUploadsJsonFromClips(clips) {
+  if (!clips || !Array.isArray(clips) || clips.length === 0) {
+    logger.info('generateVideoUploadsJsonFromClips: No clips provided, returning empty array');
+    return [];
+  }
+
+  logger.info('generateVideoUploadsJsonFromClips: Starting with clips', { clipsCount: clips.length });
+
+  const videoUploads = [];
+
+  clips.forEach((clip, clipIndex) => {
+    if (!clip || !Array.isArray(clip.workflow)) return;
+
+    clip.workflow.forEach((workflowStep, stepIndex) => {
+      if (!workflowStep || !Array.isArray(workflowStep.data)) return;
+
+      const workflowCode = (workflowStep.workflow_code ? String(workflowStep.workflow_code) : '').toLowerCase().trim();
+      const workflowId = (workflowStep.workflow_id ? String(workflowStep.workflow_id) : '').toLowerCase().trim();
+
+      const isAskUploadByCode = workflowCode === 'ask_user_to_upload_video' || workflowCode === 'ask-user-to-upload-video' || workflowCode === 'ask_user_upload_video';
+      const isAskUploadById = workflowId === 'user-upload-video' || workflowId === 'user_upload_video';
+
+      if (isAskUploadByCode || isAskUploadById) {
+        logger.info('generateVideoUploadsJsonFromClips: Found video upload step', {
+          clipIndex,
+          stepIndex,
+          workflowCode,
+          workflowId
+        });
+
+        // Look for gender information in the step data
+        let gender = 'unisex'; // Default gender
+
+        for (const item of workflowStep.data) {
+          if (!item || !item.type) continue;
+
+          const itemType = String(item.type).toLowerCase().trim();
+          if (itemType === 'character_gender' || itemType === 'gender') {
+            const value = (item.value ?? '').toString().toLowerCase().trim();
+            
+            if (value === 'male' || value === 'female' || value === 'unisex' || value === 'couple') {
+              gender = value;
+              break;
+            }
+          }
+        }
+
+        videoUploads.push({
+          clip_index: clipIndex + 1, // 1-based indexing
+          step_index: stepIndex,
+          gender: gender
+        });
+      }
+    });
+  });
+
+  logger.info('generateVideoUploadsJsonFromClips: Generated video uploads', {
+    clipsCount: clips.length,
+    videoUploads: videoUploads
+  });
+
+  return videoUploads;
 }
 
 /**
@@ -1843,12 +2065,53 @@ exports.updateTemplate = async function(req, res) {
     const hasClips = templateData.clips && templateData.clips.length > 0;
     
     if (hasClips) {
+      logger.info('UPDATE: Starting calculations for AI template with clips', {
+        templateId,
+        clipsCount: templateData.clips.length,
+        existingFacesNeeded: templateData.faces_needed,
+        existingImageUploadsJson: templateData.image_uploads_json,
+        existingVideoUploadsJson: templateData.video_uploads_json
+      });
+
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
       
       // Recompute uploads required when clips are provided
       templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
       templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
+
+      logger.info('UPDATE: After basic calculations', {
+        templateId,
+        facesNeeded: templateData.faces_needed,
+        imageUploadsRequired: templateData.image_uploads_required,
+        videoUploadsRequired: templateData.video_uploads_required
+      });
+
+      // Generate image_uploads_json and video_uploads_json from clips if not provided
+      if (!templateData.image_uploads_json) {
+        templateData.image_uploads_json = generateImageUploadsJsonFromClips(templateData.clips);
+        logger.info('UPDATE: Generated image_uploads_json from clips', {
+          templateId,
+          imageUploadsJson: templateData.image_uploads_json
+        });
+      } else {
+        logger.info('UPDATE: Using provided image_uploads_json', {
+          templateId,
+          imageUploadsJson: templateData.image_uploads_json
+        });
+      }
+      if (!templateData.video_uploads_json) {
+        templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
+        logger.info('UPDATE: Generated video_uploads_json from clips', {
+          templateId,
+          videoUploadsJson: templateData.video_uploads_json
+        });
+      } else {
+        logger.info('UPDATE: Using provided video_uploads_json', {
+          templateId,
+          videoUploadsJson: templateData.video_uploads_json
+        });
+      }
 
       // faces_needed derived from clips; retained for debugging via structured logs if needed
       // Auto-derive template_gender if not explicitly provided in update
@@ -1877,12 +2140,32 @@ exports.updateTemplate = async function(req, res) {
         });
       }
     } else if (templateData.clips !== undefined) {
+      logger.info('UPDATE: Handling empty clips array', {
+        templateId,
+        isNonAi,
+        existingFacesNeeded: templateData.faces_needed,
+        existingImageUploadsJson: templateData.image_uploads_json,
+        existingVideoUploadsJson: templateData.video_uploads_json
+      });
+
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
       // and zero out uploads required unless we are non-ai (counts already derived from JSON)
       if (!isNonAi) {
         templateData.image_uploads_required = 0;
         templateData.video_uploads_required = 0;
+        // Clear upload JSON arrays for empty clips
+        templateData.image_uploads_json = [];
+        templateData.video_uploads_json = [];
+        
+        logger.info('UPDATE: Cleared all values for empty clips', {
+          templateId,
+          facesNeeded: templateData.faces_needed,
+          imageUploadsRequired: templateData.image_uploads_required,
+          videoUploadsRequired: templateData.video_uploads_required,
+          imageUploadsJson: templateData.image_uploads_json,
+          videoUploadsJson: templateData.video_uploads_json
+        });
       }
       
       // Always calculate credits even for empty clips (will be 0 or 1)
@@ -1967,10 +2250,13 @@ exports.updateTemplate = async function(req, res) {
     const templateTagIds = templateData.template_tag_ids;
     delete templateData.template_tag_ids;
 
-    logger.info('Final uploads required before persist', {
+    logger.info('UPDATE: Final values before database update', {
       templateId,
+      facesNeeded: templateData.faces_needed,
       image_uploads_required: templateData.image_uploads_required,
       video_uploads_required: templateData.video_uploads_required,
+      imageUploadsJson: templateData.image_uploads_json,
+      videoUploadsJson: templateData.video_uploads_json,
       hasClips
     });
     
