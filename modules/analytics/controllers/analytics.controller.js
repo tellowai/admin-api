@@ -1,7 +1,7 @@
 'use strict';
 
 const i18next = require('i18next');
-const AnalyticsModel = require('../models/analytics.model');
+const AnalyticsService = require('../services/analytics.service');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const AnalyticsErrorHandler = require('../middlewares/analytics.error.handler');
 const logger = require('../../../config/lib/logger');
@@ -15,13 +15,15 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        gender: queryParams.gender,
-        character_id: queryParams.character_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const characterCreations = await AnalyticsModel.queryCharacterCreations(filters);
+      const additionalFilters = {};
+      if (queryParams.gender) additionalFilters.gender = queryParams.gender;
+      if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const characterCreations = await AnalyticsService.queryMixedDateRange('CHARACTER_CREATIONS', filters, additionalFilters);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: characterCreations
@@ -44,13 +46,15 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        gender: queryParams.gender,
-        character_id: queryParams.character_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const characterTrainings = await AnalyticsModel.queryCharacterTrainings(filters);
+      const additionalFilters = {};
+      if (queryParams.gender) additionalFilters.gender = queryParams.gender;
+      if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const characterTrainings = await AnalyticsService.queryMixedDateRange('CHARACTER_TRAININGS', filters, additionalFilters);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: characterTrainings
@@ -73,16 +77,18 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        output_type: queryParams.output_type,
-        aspect_ratio: queryParams.aspect_ratio,
-        orientation: queryParams.orientation,
-        generation_type: queryParams.generation_type,
-        template_id: queryParams.template_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const templateViews = await AnalyticsModel.queryTemplateViews(filters);
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: templateViews
@@ -105,22 +111,58 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        output_type: queryParams.output_type,
-        aspect_ratio: queryParams.aspect_ratio,
-        orientation: queryParams.orientation,
-        generation_type: queryParams.generation_type,
-        template_id: queryParams.template_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const templateTries = await AnalyticsModel.queryTemplateTries(filters);
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: templateTries
       });
     } catch (error) {
       logger.error('Error fetching template tries analytics:', { 
+        error: error.message, 
+        stack: error.stack,
+        query: req.validatedQuery 
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTemplateDownloads(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time
+      };
+
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', filters, additionalFilters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: templateDownloads
+      });
+    } catch (error) {
+      logger.error('Error fetching template downloads analytics:', { 
         error: error.message, 
         stack: error.stack,
         query: req.validatedQuery 
@@ -137,24 +179,26 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        gender: queryParams.gender,
-        character_id: queryParams.character_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const [creationsCount, trainingsCount] = await Promise.all([
-        AnalyticsModel.getCharacterCreationsCount(filters),
-        AnalyticsModel.getCharacterTrainingsCount(filters)
+      const additionalFilters = {};
+      if (queryParams.gender) additionalFilters.gender = queryParams.gender;
+      if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const [totalCreations, totalTrainings] = await Promise.all([
+        AnalyticsService.getCountMixedDateRange('CHARACTER_CREATIONS', filters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('CHARACTER_TRAININGS', filters, additionalFilters)
       ]);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
           character_creations: {
-            total_count: creationsCount
+            total_count: totalCreations
           },
           character_trainings: {
-            total_count: trainingsCount
+            total_count: totalTrainings
           },
           date_range: {
             start_date: queryParams.start_date,
@@ -180,27 +224,29 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        output_type: queryParams.output_type,
-        aspect_ratio: queryParams.aspect_ratio,
-        orientation: queryParams.orientation,
-        generation_type: queryParams.generation_type,
-        template_id: queryParams.template_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const [viewsCount, triesCount] = await Promise.all([
-        AnalyticsModel.getTemplateViewsCount(filters),
-        AnalyticsModel.getTemplateTriesCount(filters)
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const [totalViews, totalTries] = await Promise.all([
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters)
       ]);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
           template_views: {
-            total_count: viewsCount
+            total_count: totalViews
           },
           template_tries: {
-            total_count: triesCount
+            total_count: totalTries
           },
           date_range: {
             start_date: queryParams.start_date,
@@ -218,38 +264,6 @@ class AnalyticsController {
     }
   }
 
-  static async getTemplateDownloads(req, res) {
-    try {
-      const queryParams = req.validatedQuery;
-      
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        output_type: queryParams.output_type,
-        aspect_ratio: queryParams.aspect_ratio,
-        orientation: queryParams.orientation,
-        generation_type: queryParams.generation_type,
-        template_id: queryParams.template_id,
-        user_id: queryParams.user_id
-      };
-
-      const templateDownloads = await AnalyticsModel.queryTemplateDownloads(filters);
-
-      return res.status(HTTP_STATUS_CODES.OK).json({
-        data: templateDownloads
-      });
-    } catch (error) {
-      logger.error('Error fetching template downloads analytics:', { 
-        error: error.message, 
-        stack: error.stack,
-        query: req.validatedQuery 
-      });
-      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
-    }
-  }
-
   static async getTemplateDownloadsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
@@ -258,31 +272,33 @@ class AnalyticsController {
         start_date: queryParams.start_date,
         end_date: queryParams.end_date,
         start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
-        output_type: queryParams.output_type,
-        aspect_ratio: queryParams.aspect_ratio,
-        orientation: queryParams.orientation,
-        generation_type: queryParams.generation_type,
-        template_id: queryParams.template_id,
-        user_id: queryParams.user_id
+        end_time: queryParams.end_time
       };
 
-      const [viewsCount, triesCount, downloadsCount] = await Promise.all([
-        AnalyticsModel.getTemplateViewsCount(filters),
-        AnalyticsModel.getTemplateTriesCount(filters),
-        AnalyticsModel.getTemplateDownloadsCount(filters)
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const [totalViews, totalTries, totalDownloads] = await Promise.all([
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_DOWNLOADS', filters, additionalFilters)
       ]);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
           template_views: {
-            total_count: viewsCount
+            total_count: totalViews
           },
           template_tries: {
-            total_count: triesCount
+            total_count: totalTries
           },
           template_downloads: {
-            total_count: downloadsCount
+            total_count: totalDownloads
           },
           date_range: {
             start_date: queryParams.start_date,
@@ -295,6 +311,106 @@ class AnalyticsController {
         error: error.message, 
         stack: error.stack,
         query: req.validatedQuery 
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSignups(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time,
+        provider: queryParams.provider,
+        user_id: queryParams.user_id
+      };
+
+      const signups = await AnalyticsService.getSignups(filters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: signups
+      });
+    } catch (error) {
+      logger.error('Error fetching signup analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getLogins(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time,
+        provider: queryParams.provider,
+        user_id: queryParams.user_id
+      };
+
+      const logins = await AnalyticsService.getLogins(filters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: logins
+      });
+    } catch (error) {
+      logger.error('Error fetching login analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAuthAnalyticsSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time,
+        provider: queryParams.provider,
+        user_id: queryParams.user_id
+      };
+
+      const additionalFilters = {};
+      if (queryParams.provider) additionalFilters.provider = queryParams.provider;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const totalSignups = await AnalyticsService.getCountMixedDateRange('SIGNUPS', filters, additionalFilters);
+      const totalLogins = await AnalyticsService.getCountMixedDateRange('LOGINS', filters, additionalFilters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: {
+          signups: {
+            total_count: totalSignups
+          },
+          logins: {
+            total_count: totalLogins
+          },
+          date_range: {
+            start_date: queryParams.start_date,
+            end_date: queryParams.end_date
+          }
+        }
+      });
+    } catch (error) {
+      logger.error('Error fetching auth analytics summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }

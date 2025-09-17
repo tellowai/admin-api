@@ -11,6 +11,7 @@ This module provides analytics functionality for querying data from ClickHouse t
 - Summary endpoints for quick insights
 - Returns day-wise aggregated counts for the specified date range
 - Time filtering support (hours:minutes:seconds) with sensible defaults
+- **Smart table selection** for optimal performance based on date range
 
 ## API Endpoints
 
@@ -183,6 +184,58 @@ GET /analytics/templates/views?start_date=2025-01-01&end_date=2025-01-01&start_t
 # Get data for evening hours (6 PM to 11 PM)
 GET /analytics/templates/views?start_date=2025-01-01&end_date=2025-01-01&start_time=18:00:00&end_time=23:00:00
 ```
+
+## Smart Table Selection
+
+The analytics module automatically selects the most appropriate table(s) based on the date range for optimal performance:
+
+### Table Selection Logic
+
+1. **Current Day Only**: Uses hourly summary tables (`*_hourly_summary`)
+   - Best for real-time analytics and detailed hourly breakdowns
+   - Example: `start_date=2025-01-15&end_date=2025-01-15` (today)
+
+2. **Single Previous Day**: Uses daily summary tables (`*_daily_summary`)
+   - Best for single day historical analysis
+   - Example: `start_date=2025-01-14&end_date=2025-01-14` (yesterday)
+
+3. **Full Month**: Uses monthly summary tables (`*_monthly_summary`)
+   - Best for monthly reports and long-term trends
+   - Example: `start_date=2025-01-01&end_date=2025-01-31` (entire month)
+
+4. **Mixed Date Ranges**: Uses multiple tables and combines results
+   - **Today + Previous Days**: Hourly table for today + Daily table for previous days
+   - **Cross-Month Ranges**: Raw tables for comprehensive coverage
+   - **Complex Periods**: Automatically breaks down into optimal table combinations
+
+### Mixed Date Range Examples
+
+- **Today's few hours + Last few days**: 
+  - `start_date=2025-01-13&end_date=2025-01-15` (today + 2 previous days)
+  - Uses: Daily table for 2025-01-13 to 2025-01-14 + Hourly table for 2025-01-15
+
+- **Last few months + Today's few hours**:
+  - `start_date=2024-12-01&end_date=2025-01-15` (cross-month with today)
+  - Uses: Raw table for comprehensive coverage
+
+- **Partial month + Today**:
+  - `start_date=2025-01-10&end_date=2025-01-15` (partial month + today)
+  - Uses: Daily table for 2025-01-10 to 2025-01-14 + Hourly table for 2025-01-15
+
+### Performance Benefits
+
+- **Hourly Tables**: Pre-aggregated data for current day queries (fastest for real-time)
+- **Daily Tables**: Pre-aggregated data for single day queries (fast for historical single days)
+- **Monthly Tables**: Pre-aggregated data for full month queries (fast for monthly reports)
+- **Raw Tables**: Fallback for complex queries (slower but comprehensive)
+
+### Table Structure
+
+Each summary table contains:
+- **Hourly**: `day` (Date), `hour` (UInt8), `events_count` (UInt64)
+- **Daily**: `day` (Date), `events_count` (UInt64)
+- **Monthly**: `month` (String), `events_count` (UInt64)
+- **Raw**: `generated_at` (DateTime64), individual records
 
 ## Authentication
 

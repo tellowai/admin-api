@@ -71,4 +71,29 @@ module.exports = function(app) {
     AnalyticsValidator.validateTemplateAnalyticsQuery,
     AnalyticsCtrl.getTemplateDownloadsSummary
   );
+
+  // Auth Analytics Routes (Signup & Login)
+  app.route(
+    versionConfig.routePrefix + '/analytics/auth/signups'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateSignupAnalyticsQuery,
+    AnalyticsCtrl.getSignups
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/auth/logins'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateLoginAnalyticsQuery,
+    AnalyticsCtrl.getLogins
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/auth/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateSignupAnalyticsQuery,
+    AnalyticsCtrl.getAuthAnalyticsSummary
+  );
 };

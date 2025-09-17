@@ -32,6 +32,26 @@ const templateAnalyticsSchema = Joi.object().keys({
   user_id: Joi.string().optional()
 });
 
+const signupAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  start_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  provider: Joi.string().valid('google', 'facebook', 'truecaller', 'otp', 'otp_mobile', 'otp_email', 'unknown').optional(),
+  user_id: Joi.string().optional()
+});
+
+const loginAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  start_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  provider: Joi.string().valid('google', 'facebook', 'truecaller', 'otp', 'otp_mobile', 'otp_email', 'unknown').optional(),
+  user_id: Joi.string().optional()
+});
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
+exports.signupAnalyticsSchema = signupAnalyticsSchema;
+exports.loginAnalyticsSchema = loginAnalyticsSchema;
