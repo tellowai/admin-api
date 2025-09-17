@@ -10,6 +10,7 @@ const ANALYTICS_CONSTANTS = {
     TEMPLATE_DOWNLOADS: "template_downloads",
     SIGNUPS: "signup",
     LOGINS: "login",
+    PURCHASES: "purchases",
 
     // Summary tables for better performance
     TEMPLATE_VIEWS_HOURLY: "template_views_hourly_summary",
@@ -39,6 +40,10 @@ const ANALYTICS_CONSTANTS = {
     LOGINS_HOURLY: "login_hourly_summary",
     LOGINS_DAILY: "login_daily_summary",
     LOGINS_MONTHLY: "login_monthly_summary",
+
+    PURCHASES_HOURLY: "purchases_hourly_summary",
+    PURCHASES_DAILY: "purchases_daily_summary",
+    PURCHASES_MONTHLY: "purchases_monthly_summary",
   },
   GENDER_ENUMS: {
     MALE: "male",
@@ -79,6 +84,28 @@ const ANALYTICS_CONSTANTS = {
     OTP: "otp",
     OTP_MOBILE: "otp_mobile",
     OTP_EMAIL: "otp_email",
+    UNKNOWN: "unknown",
+  },
+  PAYMENT_PROVIDER_ENUMS: {
+    RAZORPAY: "razorpay",
+    STRIPE: "stripe",
+    PAYPAL: "paypal",
+    GOOGLE_PAY: "google_pay",
+    APPLE_PAY: "apple_pay",
+    UPI: "upi",
+    CARD: "card",
+    NET_BANKING: "net_banking",
+    WALLET: "wallet",
+    UNKNOWN: "unknown",
+  },
+  PLAN_TYPE_ENUMS: {
+    SUBSCRIPTION: "subscription",
+    ONE_TIME: "one-time",
+    UNKNOWN: "unknown",
+  },
+  CURRENCY_ENUMS: {
+    INR: "INR",
+    USD: "USD",
     UNKNOWN: "unknown",
   },
   ERRORS: {

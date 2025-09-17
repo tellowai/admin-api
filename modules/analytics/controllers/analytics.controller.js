@@ -415,6 +415,86 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getPurchases(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time,
+        plan_id: queryParams.plan_id,
+        plan_name: queryParams.plan_name,
+        plan_type: queryParams.plan_type,
+        payment_provider: queryParams.payment_provider,
+        currency: queryParams.currency,
+        user_id: queryParams.user_id
+      };
+
+      const purchases = await AnalyticsService.getPurchases(filters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: purchases
+      });
+    } catch (error) {
+      logger.error('Error fetching purchases analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getPurchasesSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+
+      const filters = {
+        start_date: queryParams.start_date,
+        end_date: queryParams.end_date,
+        start_time: queryParams.start_time,
+        end_time: queryParams.end_time,
+        plan_id: queryParams.plan_id,
+        plan_name: queryParams.plan_name,
+        plan_type: queryParams.plan_type,
+        payment_provider: queryParams.payment_provider,
+        currency: queryParams.currency,
+        user_id: queryParams.user_id
+      };
+
+      const additionalFilters = {};
+      if (queryParams.plan_id) additionalFilters.plan_id = queryParams.plan_id;
+      if (queryParams.plan_name) additionalFilters.plan_name = queryParams.plan_name;
+      if (queryParams.plan_type) additionalFilters.plan_type = queryParams.plan_type;
+      if (queryParams.payment_provider) additionalFilters.payment_provider = queryParams.payment_provider;
+      if (queryParams.currency) additionalFilters.currency = queryParams.currency;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const totalPurchases = await AnalyticsService.getCountMixedDateRange('PURCHASES', filters, additionalFilters);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: {
+          purchases: {
+            total_count: totalPurchases
+          },
+          date_range: {
+            start_date: queryParams.start_date,
+            end_date: queryParams.end_date
+          }
+        }
+      });
+    } catch (error) {
+      logger.error('Error fetching purchases summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

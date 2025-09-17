@@ -303,6 +303,17 @@ class AnalyticsService {
     if (filters.user_id) additionalFilters.user_id = filters.user_id;
     return this.queryMixedDateRange('LOGINS', filters, additionalFilters);
   }
+
+  static async getPurchases(filters) {
+    const additionalFilters = {};
+    if (filters.plan_id) additionalFilters.plan_id = filters.plan_id;
+    if (filters.plan_name) additionalFilters.plan_name = filters.plan_name;
+    if (filters.plan_type) additionalFilters.plan_type = filters.plan_type;
+    if (filters.payment_provider) additionalFilters.payment_provider = filters.payment_provider;
+    if (filters.currency) additionalFilters.currency = filters.currency;
+    if (filters.user_id) additionalFilters.user_id = filters.user_id;
+    return this.queryMixedDateRange('PURCHASES', filters, additionalFilters);
+  }
 }
 
 module.exports = AnalyticsService;

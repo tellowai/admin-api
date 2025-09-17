@@ -96,4 +96,21 @@ module.exports = function(app) {
     AnalyticsValidator.validateSignupAnalyticsQuery,
     AnalyticsCtrl.getAuthAnalyticsSummary
   );
+
+  // Purchases Analytics Routes
+  app.route(
+    versionConfig.routePrefix + '/analytics/purchases'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePurchasesAnalyticsQuery,
+    AnalyticsCtrl.getPurchases
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/purchases/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePurchasesAnalyticsQuery,
+    AnalyticsCtrl.getPurchasesSummary
+  );
 };

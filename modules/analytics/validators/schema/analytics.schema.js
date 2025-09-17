@@ -50,8 +50,22 @@ const loginAnalyticsSchema = Joi.object().keys({
   user_id: Joi.string().optional()
 });
 
+const purchasesAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  start_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
+  plan_id: Joi.string().optional(),
+  plan_name: Joi.string().optional(),
+  plan_type: Joi.string().valid('subscription', 'one-time', 'unknown').optional(),
+  payment_provider: Joi.string().valid('razorpay', 'stripe', 'paypal', 'google_pay', 'apple_pay', 'upi', 'card', 'net_banking', 'wallet', 'unknown').optional(),
+  currency: Joi.string().valid('INR', 'USD', 'unknown').optional(),
+  user_id: Joi.string().optional()
+});
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
 exports.signupAnalyticsSchema = signupAnalyticsSchema;
 exports.loginAnalyticsSchema = loginAnalyticsSchema;
+exports.purchasesAnalyticsSchema = purchasesAnalyticsSchema;
