@@ -1,0 +1,12 @@
+{
+  "errors": {
+    "invalid_date_range": "अमान्य तिथि सीमा प्रदान की गई",
+    "invalid_date_format": "अमान्य तिथि प्रारूप। कृपया ISO 8601 प्रारूप (YYYY-MM-DD) का उपयोग करें",
+    "missing_date_parameters": "प्रारंभ तिथि और समाप्ति तिथि आवश्यक हैं",
+    "analytics_query_failed": "विश्लेषण डेटा प्राप्त करने में विफल",
+    "analytics_operation_failed": "विश्लेषण ऑपरेशन विफल"
+  },
+  "success": {
+    "analytics_data_fetched": "विश्लेषण डेटा सफलतापूर्वक प्राप्त किया गया"
+  }
+}

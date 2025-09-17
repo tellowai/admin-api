@@ -1,0 +1,12 @@
+{
+  "errors": {
+    "invalid_date_range": "చెల్లని తేదీ పరిధి అందించబడింది",
+    "invalid_date_format": "చెల్లని తేదీ ఫార్మాట్. దయచేసి ISO 8601 ఫార్మాట్ (YYYY-MM-DD) ని ఉపయోగించండి",
+    "missing_date_parameters": "ప్రారంభ తేదీ మరియు ముగింపు తేదీ అవసరం",
+    "analytics_query_failed": "విశ్లేషణ డేటాను పొందడంలో విఫలమైంది",
+    "analytics_operation_failed": "విశ్లేషణ ఆపరేషన్ విఫలమైంది"
+  },
+  "success": {
+    "analytics_data_fetched": "విశ్లేషణ డేటా విజయవంతంగా పొందబడింది"
+  }
+}

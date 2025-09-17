@@ -1,0 +1,12 @@
+{
+  "errors": {
+    "invalid_date_range": "Invalid date range provided",
+    "invalid_date_format": "Invalid date format. Please use ISO 8601 format (YYYY-MM-DD)",
+    "missing_date_parameters": "Start date and end date are required",
+    "analytics_query_failed": "Failed to fetch analytics data",
+    "analytics_operation_failed": "Analytics operation failed"
+  },
+  "success": {
+    "analytics_data_fetched": "Analytics data fetched successfully"
+  }
+}
