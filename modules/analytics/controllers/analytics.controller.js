@@ -2,6 +2,7 @@
 
 const i18next = require('i18next');
 const AnalyticsService = require('../services/analytics.service');
+const TimezoneService = require('../services/timezone.service');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const AnalyticsErrorHandler = require('../middlewares/analytics.error.handler');
 const logger = require('../../../config/lib/logger');
@@ -10,23 +11,29 @@ class AnalyticsController {
   static async getCharacterCreations(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.gender) additionalFilters.gender = queryParams.gender;
       if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const characterCreations = await AnalyticsService.queryMixedDateRange('CHARACTER_CREATIONS', filters, additionalFilters);
+      const characterCreations = await AnalyticsService.queryMixedDateRange('CHARACTER_CREATIONS', utcFilters, additionalFilters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(characterCreations, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: characterCreations
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching character creations analytics:', { 
@@ -41,23 +48,29 @@ class AnalyticsController {
   static async getCharacterTrainings(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.gender) additionalFilters.gender = queryParams.gender;
       if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const characterTrainings = await AnalyticsService.queryMixedDateRange('CHARACTER_TRAININGS', filters, additionalFilters);
+      const characterTrainings = await AnalyticsService.queryMixedDateRange('CHARACTER_TRAININGS', utcFilters, additionalFilters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(characterTrainings, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: characterTrainings
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching character trainings analytics:', { 
@@ -72,13 +85,16 @@ class AnalyticsController {
   static async getTemplateViews(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -88,10 +104,13 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters);
+      const templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(templateViews, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: templateViews
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching template views analytics:', { 
@@ -106,13 +125,16 @@ class AnalyticsController {
   static async getTemplateTries(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -122,10 +144,13 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters);
+      const templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(templateTries, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: templateTries
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching template tries analytics:', { 
@@ -140,13 +165,16 @@ class AnalyticsController {
   static async getTemplateDownloads(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -156,10 +184,13 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', filters, additionalFilters);
+      const templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(templateDownloads, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: templateDownloads
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching template downloads analytics:', { 
@@ -174,13 +205,16 @@ class AnalyticsController {
   static async getCharacterAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.gender) additionalFilters.gender = queryParams.gender;
@@ -188,9 +222,16 @@ class AnalyticsController {
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
       const [totalCreations, totalTrainings] = await Promise.all([
-        AnalyticsService.getCountMixedDateRange('CHARACTER_CREATIONS', filters, additionalFilters),
-        AnalyticsService.getCountMixedDateRange('CHARACTER_TRAININGS', filters, additionalFilters)
+        AnalyticsService.getCountMixedDateRange('CHARACTER_CREATIONS', utcFilters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('CHARACTER_TRAININGS', utcFilters, additionalFilters)
       ]);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -200,10 +241,7 @@ class AnalyticsController {
           character_trainings: {
             total_count: totalTrainings
           },
-          date_range: {
-            start_date: queryParams.start_date,
-            end_date: queryParams.end_date
-          }
+          date_range: convertedDateRange
         }
       });
     } catch (error) {
@@ -219,13 +257,16 @@ class AnalyticsController {
   static async getTemplateAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -236,9 +277,16 @@ class AnalyticsController {
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
       const [totalViews, totalTries] = await Promise.all([
-        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters),
-        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters)
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters)
       ]);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -248,10 +296,7 @@ class AnalyticsController {
           template_tries: {
             total_count: totalTries
           },
-          date_range: {
-            start_date: queryParams.start_date,
-            end_date: queryParams.end_date
-          }
+          date_range: convertedDateRange
         }
       });
     } catch (error) {
@@ -267,13 +312,16 @@ class AnalyticsController {
   static async getTemplateDownloadsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
       
-      const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time
-      };
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -284,10 +332,17 @@ class AnalyticsController {
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
       const [totalViews, totalTries, totalDownloads] = await Promise.all([
-        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', filters, additionalFilters),
-        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', filters, additionalFilters),
-        AnalyticsService.getCountMixedDateRange('TEMPLATE_DOWNLOADS', filters, additionalFilters)
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters),
+        AnalyticsService.getCountMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters)
       ]);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -300,10 +355,7 @@ class AnalyticsController {
           template_downloads: {
             total_count: totalDownloads
           },
-          date_range: {
-            start_date: queryParams.start_date,
-            end_date: queryParams.end_date
-          }
+          date_range: convertedDateRange
         }
       });
     } catch (error) {
@@ -319,20 +371,30 @@ class AnalyticsController {
   static async getSignups(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
+        ...utcFilters,
         provider: queryParams.provider,
         user_id: queryParams.user_id
       };
 
       const signups = await AnalyticsService.getSignups(filters);
 
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(signups, timezone);
+
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: signups
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching signup analytics:', {
@@ -347,20 +409,30 @@ class AnalyticsController {
   static async getLogins(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
+        ...utcFilters,
         provider: queryParams.provider,
         user_id: queryParams.user_id
       };
 
       const logins = await AnalyticsService.getLogins(filters);
 
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(logins, timezone);
+
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: logins
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching login analytics:', {
@@ -375,12 +447,19 @@ class AnalyticsController {
   static async getAuthAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
+        ...utcFilters,
         provider: queryParams.provider,
         user_id: queryParams.user_id
       };
@@ -389,8 +468,15 @@ class AnalyticsController {
       if (queryParams.provider) additionalFilters.provider = queryParams.provider;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const totalSignups = await AnalyticsService.getCountMixedDateRange('SIGNUPS', filters, additionalFilters);
-      const totalLogins = await AnalyticsService.getCountMixedDateRange('LOGINS', filters, additionalFilters);
+      const totalSignups = await AnalyticsService.getCountMixedDateRange('SIGNUPS', utcFilters, additionalFilters);
+      const totalLogins = await AnalyticsService.getCountMixedDateRange('LOGINS', utcFilters, additionalFilters);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -400,10 +486,7 @@ class AnalyticsController {
           logins: {
             total_count: totalLogins
           },
-          date_range: {
-            start_date: queryParams.start_date,
-            end_date: queryParams.end_date
-          }
+          date_range: convertedDateRange
         }
       });
     } catch (error) {
@@ -419,12 +502,19 @@ class AnalyticsController {
   static async getPurchases(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
+        ...utcFilters,
         plan_id: queryParams.plan_id,
         plan_name: queryParams.plan_name,
         plan_type: queryParams.plan_type,
@@ -435,8 +525,11 @@ class AnalyticsController {
 
       const purchases = await AnalyticsService.getPurchases(filters);
 
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(purchases, timezone);
+
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: purchases
+        data: convertedResults
       });
     } catch (error) {
       logger.error('Error fetching purchases analytics:', {
@@ -451,12 +544,19 @@ class AnalyticsController {
   static async getPurchasesSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
 
       const filters = {
-        start_date: queryParams.start_date,
-        end_date: queryParams.end_date,
-        start_time: queryParams.start_time,
-        end_time: queryParams.end_time,
+        ...utcFilters,
         plan_id: queryParams.plan_id,
         plan_name: queryParams.plan_name,
         plan_type: queryParams.plan_type,
@@ -473,17 +573,21 @@ class AnalyticsController {
       if (queryParams.currency) additionalFilters.currency = queryParams.currency;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const totalPurchases = await AnalyticsService.getCountMixedDateRange('PURCHASES', filters, additionalFilters);
+      const totalPurchases = await AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
           purchases: {
             total_count: totalPurchases
           },
-          date_range: {
-            start_date: queryParams.start_date,
-            end_date: queryParams.end_date
-          }
+          date_range: convertedDateRange
         }
       });
     } catch (error) {

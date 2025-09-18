@@ -113,4 +113,5 @@ module.exports = function(app) {
     AnalyticsValidator.validatePurchasesAnalyticsQuery,
     AnalyticsCtrl.getPurchasesSummary
   );
+
 };

@@ -112,45 +112,146 @@ class AnalyticsService {
         });
       } else {
         // Range includes today + previous days
-        periods.push({
-          start_date: startDate,
-          end_date: new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          tableType: 'DAILY',
-          isCurrentDay: false
-        });
-        periods.push({
-          start_date: today,
-          end_date: today,
-          tableType: 'HOURLY',
-          isCurrentDay: true
-        });
+        // Check if the previous day is also recent (data might be in hourly table)
+        const prevDay = new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const prevDayObj = new Date(prevDay);
+        const prevDayDiff = Math.floor((new Date(today) - prevDayObj) / (1000 * 60 * 60 * 24));
+        
+        if (prevDayDiff <= 1) {
+          // Previous day is also recent, use hourly table for both recent days
+          const dailyEndDate = new Date(new Date(prevDay).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          periods.push({
+            start_date: startDate,
+            end_date: dailyEndDate,
+            tableType: 'DAILY',
+            isCurrentDay: false
+          });
+          periods.push({
+            start_date: prevDay,
+            end_date: today,
+            tableType: 'HOURLY',
+            isCurrentDay: true
+          });
+        } else {
+          // Previous day is not recent, use daily for it, hourly for today
+          periods.push({
+            start_date: startDate,
+            end_date: prevDay,
+            tableType: 'DAILY',
+            isCurrentDay: false
+          });
+          periods.push({
+            start_date: today,
+            end_date: today,
+            tableType: 'HOURLY',
+            isCurrentDay: true
+          });
+        }
       }
     } else {
-      // No current day in range
-      const startMonth = new Date(start_date).toISOString().slice(0, 7);
-      const endMonth = new Date(end_date).toISOString().slice(0, 7);
+      // No current day in range - check if end_date is recent (within last 2 days)
+      // If so, use hourly table for the last day, daily for the rest
+      const endDateObj = new Date(endDate);
+      const todayObj = new Date(today);
+      const daysDiff = Math.floor((todayObj - endDateObj) / (1000 * 60 * 60 * 24));
       
-      if (startMonth === endMonth) {
-        const firstDayOfMonth = new Date(start_date).toISOString().slice(0, 8) + '01';
-        const year = new Date(start_date).getFullYear();
-        const month = new Date(start_date).getMonth();
-        const lastDayOfMonth = new Date(year, month + 1, 0).toISOString().split('T')[0];
-        
-        // Check if end_date is the last day of the month
-        const endDay = new Date(end_date).getDate();
-        const actualLastDay = new Date(year, month + 1, 0).getDate();
-        const isLastDayOfMonth = endDate === lastDayOfMonth || endDay === actualLastDay;
-        
-        if (startDate === firstDayOfMonth && isLastDayOfMonth) {
-          // Full month
+      if (daysDiff <= 1) {
+        // End date is recent, use hourly table for it
+        if (startDate === endDate) {
+          // Single recent day
           periods.push({
             start_date: startDate,
             end_date: endDate,
-            tableType: 'MONTHLY',
+            tableType: 'HOURLY',
             isCurrentDay: false
           });
         } else {
-          // Partial month - use daily
+          // Range ending with recent day - check if start date is also recent
+          const startDateObj = new Date(startDate);
+          const startDaysDiff = Math.floor((todayObj - startDateObj) / (1000 * 60 * 60 * 24));
+          
+          if (startDaysDiff <= 1) {
+            // Both start and end dates are recent, use hourly table for both
+            periods.push({
+              start_date: startDate,
+              end_date: endDate,
+              tableType: 'HOURLY',
+              isCurrentDay: false
+            });
+          } else {
+            // Start date is not recent, end date is recent
+            // But we need to check if there are any recent days in between that might be in hourly table
+            const prevDay = new Date(new Date(endDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+            const prevDayObj = new Date(prevDay);
+            const prevDayDiff = Math.floor((todayObj - prevDayObj) / (1000 * 60 * 60 * 24));
+            
+            if (prevDayDiff <= 1) {
+              // Previous day is also recent, use hourly table for both recent days
+              const dailyEndDate = new Date(new Date(prevDay).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+              periods.push({
+                start_date: startDate,
+                end_date: dailyEndDate,
+                tableType: 'DAILY',
+                isCurrentDay: false
+              });
+              periods.push({
+                start_date: prevDay,
+                end_date: endDate,
+                tableType: 'HOURLY',
+                isCurrentDay: false
+              });
+            } else {
+              // Previous day is not recent, use daily for it, hourly for end date
+              periods.push({
+                start_date: startDate,
+                end_date: prevDay,
+                tableType: 'DAILY',
+                isCurrentDay: false
+              });
+              periods.push({
+                start_date: endDate,
+                end_date: endDate,
+                tableType: 'HOURLY',
+                isCurrentDay: false
+              });
+            }
+          }
+        }
+      } else {
+        // End date is not recent, use regular logic
+        const startMonth = new Date(start_date).toISOString().slice(0, 7);
+        const endMonth = new Date(end_date).toISOString().slice(0, 7);
+        
+        if (startMonth === endMonth) {
+          const firstDayOfMonth = new Date(start_date).toISOString().slice(0, 8) + '01';
+          const year = new Date(start_date).getFullYear();
+          const month = new Date(start_date).getMonth();
+          const lastDayOfMonth = new Date(year, month + 1, 0).toISOString().split('T')[0];
+          
+          // Check if end_date is the last day of the month
+          const endDay = new Date(end_date).getDate();
+          const actualLastDay = new Date(year, month + 1, 0).getDate();
+          const isLastDayOfMonth = endDate === lastDayOfMonth || endDay === actualLastDay;
+          
+          if (startDate === firstDayOfMonth && isLastDayOfMonth) {
+            // Full month
+            periods.push({
+              start_date: startDate,
+              end_date: endDate,
+              tableType: 'MONTHLY',
+              isCurrentDay: false
+            });
+          } else {
+            // Partial month - use daily
+            periods.push({
+              start_date: startDate,
+              end_date: endDate,
+              tableType: 'DAILY',
+              isCurrentDay: false
+            });
+          }
+        } else {
+          // Cross-month range - use daily table (much faster than raw)
           periods.push({
             start_date: startDate,
             end_date: endDate,
@@ -158,14 +259,6 @@ class AnalyticsService {
             isCurrentDay: false
           });
         }
-      } else {
-        // Cross-month range - use daily table (much faster than raw)
-        periods.push({
-          start_date: startDate,
-          end_date: endDate,
-          tableType: 'DAILY',
-          isCurrentDay: false
-        });
       }
     }
     
