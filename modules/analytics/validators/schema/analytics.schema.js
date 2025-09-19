@@ -44,6 +44,7 @@ const signupAnalyticsSchema = Joi.object().keys({
   end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
   provider: Joi.string().valid('google', 'facebook', 'truecaller', 'otp', 'otp_mobile', 'otp_email', 'unknown').optional(),
   user_id: Joi.string().optional(),
+  group_by: Joi.string().valid('provider').optional(),
   tz: Joi.string().optional()
 });
 
@@ -54,6 +55,7 @@ const loginAnalyticsSchema = Joi.object().keys({
   end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
   provider: Joi.string().valid('google', 'facebook', 'truecaller', 'otp', 'otp_mobile', 'otp_email', 'unknown').optional(),
   user_id: Joi.string().optional(),
+  group_by: Joi.string().valid('provider').optional(),
   tz: Joi.string().optional()
 });
 

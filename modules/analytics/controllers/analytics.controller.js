@@ -413,7 +413,15 @@ class AnalyticsController {
         user_id: queryParams.user_id
       };
 
-      const signups = await AnalyticsService.getSignups(filters);
+      let signups;
+      if (queryParams.group_by) {
+        const additionalFilters = {};
+        if (queryParams.provider) additionalFilters.provider = queryParams.provider;
+        if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+        signups = await AnalyticsService.queryMixedDateRangeGrouped('SIGNUPS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        signups = await AnalyticsService.getSignups(filters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(signups, timezone);
@@ -451,7 +459,15 @@ class AnalyticsController {
         user_id: queryParams.user_id
       };
 
-      const logins = await AnalyticsService.getLogins(filters);
+      let logins;
+      if (queryParams.group_by) {
+        const additionalFilters = {};
+        if (queryParams.provider) additionalFilters.provider = queryParams.provider;
+        if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+        logins = await AnalyticsService.queryMixedDateRangeGrouped('LOGINS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        logins = await AnalyticsService.getLogins(filters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(logins, timezone);
