@@ -112,112 +112,23 @@ class AnalyticsService {
         });
       } else {
         // Range includes today + previous days
-        // Check if the previous day is also recent (data might be in hourly table)
+        // Always use DAILY up to yesterday, and HOURLY for today only
         const prevDay = new Date(new Date(today).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const prevDayObj = new Date(prevDay);
-        const prevDayDiff = Math.floor((new Date(today) - prevDayObj) / (1000 * 60 * 60 * 24));
-        
-        if (prevDayDiff <= 1) {
-          // Previous day is also recent, use hourly table for both recent days
-          const dailyEndDate = new Date(new Date(prevDay).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-          periods.push({
-            start_date: startDate,
-            end_date: dailyEndDate,
-            tableType: 'DAILY',
-            isCurrentDay: false
-          });
-          periods.push({
-            start_date: prevDay,
-            end_date: today,
-            tableType: 'HOURLY',
-            isCurrentDay: true
-          });
-        } else {
-          // Previous day is not recent, use daily for it, hourly for today
-          periods.push({
-            start_date: startDate,
-            end_date: prevDay,
-            tableType: 'DAILY',
-            isCurrentDay: false
-          });
-          periods.push({
-            start_date: today,
-            end_date: today,
-            tableType: 'HOURLY',
-            isCurrentDay: true
-          });
-        }
+        periods.push({
+          start_date: startDate,
+          end_date: prevDay,
+          tableType: 'DAILY',
+          isCurrentDay: false
+        });
+        periods.push({
+          start_date: today,
+          end_date: today,
+          tableType: 'HOURLY',
+          isCurrentDay: true
+        });
       }
     } else {
-      // No current day in range - check if end_date is recent (within last 2 days)
-      // If so, use hourly table for the last day, daily for the rest
-      const endDateObj = new Date(endDate);
-      const todayObj = new Date(today);
-      const daysDiff = Math.floor((todayObj - endDateObj) / (1000 * 60 * 60 * 24));
-      
-      if (daysDiff <= 1) {
-        // End date is recent, use hourly table for it
-        if (startDate === endDate) {
-          // Single recent day
-          periods.push({
-            start_date: startDate,
-            end_date: endDate,
-            tableType: 'HOURLY',
-            isCurrentDay: false
-          });
-        } else {
-          // Range ending with recent day - check if start date is also recent
-          const startDateObj = new Date(startDate);
-          const startDaysDiff = Math.floor((todayObj - startDateObj) / (1000 * 60 * 60 * 24));
-          
-          if (startDaysDiff <= 1) {
-            // Both start and end dates are recent, use hourly table for both
-            periods.push({
-              start_date: startDate,
-              end_date: endDate,
-              tableType: 'HOURLY',
-              isCurrentDay: false
-            });
-          } else {
-            // Start date is not recent, end date is recent
-            // But we need to check if there are any recent days in between that might be in hourly table
-            const prevDay = new Date(new Date(endDate).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-            const prevDayObj = new Date(prevDay);
-            const prevDayDiff = Math.floor((todayObj - prevDayObj) / (1000 * 60 * 60 * 24));
-            
-            if (prevDayDiff <= 1) {
-              // Previous day is also recent, use hourly table for both recent days
-              const dailyEndDate = new Date(new Date(prevDay).getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-              periods.push({
-                start_date: startDate,
-                end_date: dailyEndDate,
-                tableType: 'DAILY',
-                isCurrentDay: false
-              });
-              periods.push({
-                start_date: prevDay,
-                end_date: endDate,
-                tableType: 'HOURLY',
-                isCurrentDay: false
-              });
-            } else {
-              // Previous day is not recent, use daily for it, hourly for end date
-              periods.push({
-                start_date: startDate,
-                end_date: prevDay,
-                tableType: 'DAILY',
-                isCurrentDay: false
-              });
-              periods.push({
-                start_date: endDate,
-                end_date: endDate,
-                tableType: 'HOURLY',
-                isCurrentDay: false
-              });
-            }
-          }
-        }
-      } else {
+      // No current day in range - use DAILY/MONTHLY logic only (no HOURLY)
         // End date is not recent, use regular logic
         const startMonth = new Date(start_date).toISOString().slice(0, 7);
         const endMonth = new Date(end_date).toISOString().slice(0, 7);
@@ -259,7 +170,6 @@ class AnalyticsService {
             isCurrentDay: false
           });
         }
-      }
     }
     
     return periods;
@@ -344,6 +254,57 @@ class AnalyticsService {
     });
     
     return Object.values(combinedResults).sort((a, b) => new Date(a.date) - new Date(b.date));
+  }
+
+  // Grouped by dimension within mixed date range
+  static async queryMixedDateRangeGrouped(baseTableName, filters, additionalFilters = {}, groupBy) {
+    const { start_date, end_date, start_time, end_time } = filters;
+    const periods = this.getDateRangePeriods(start_date, end_date);
+
+    const allResults = [];
+
+    for (const period of periods) {
+      const tableName = ANALYTICS_CONSTANTS.TABLES[`${baseTableName}_${period.tableType}`];
+      const tableType = period.tableType;
+
+      let whereConditions = this.buildSummaryTableConditions(period.start_date, period.end_date, start_time, end_time, tableType);
+
+      Object.keys(additionalFilters).forEach(key => {
+        if (additionalFilters[key]) {
+          whereConditions.push(`${key} = '${additionalFilters[key]}'`);
+        }
+      });
+
+      let results = [];
+      if (tableType === 'HOURLY') {
+        results = await AnalyticsModel.queryHourlyTableGrouped(tableName, whereConditions, groupBy);
+      } else if (tableType === 'DAILY') {
+        results = await AnalyticsModel.queryDailyTableGrouped(tableName, whereConditions, groupBy);
+      } else if (tableType === 'MONTHLY') {
+        results = await AnalyticsModel.queryMonthlyTableGrouped(tableName, whereConditions, groupBy);
+      } else {
+        results = await AnalyticsModel.queryRawTableGrouped(tableName, whereConditions, groupBy);
+      }
+
+      if (results && results.length > 0) {
+        allResults.push(...results);
+      }
+    }
+
+    // Merge across periods by (date, group_key)
+    const combined = new Map();
+    for (const row of allResults) {
+      const key = `${row.date}__${row.group_key}`;
+      const prev = combined.get(key) || 0;
+      combined.set(key, prev + Number(row.count));
+    }
+
+    const mergedRows = Array.from(combined.entries()).map(([k, v]) => {
+      const [date, group_key] = k.split('__');
+      return { date, group_key, count: v };
+    }).sort((a, b) => new Date(a.date) - new Date(b.date) || String(a.group_key).localeCompare(String(b.group_key)));
+
+    return mergedRows;
   }
 
   // Get count for mixed date range

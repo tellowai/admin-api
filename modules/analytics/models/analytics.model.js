@@ -20,6 +20,22 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  static async queryRawTableGrouped(tableName, whereConditions, groupByColumn) {
+    const query = `
+      SELECT 
+        toDate(generated_at) as date,
+        ${groupByColumn} as group_key,
+        count(*) as count
+      FROM ${tableName}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY toDate(generated_at), ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryHourlyTable(tableName, whereConditions) {
     const query = `
       SELECT 
@@ -29,6 +45,22 @@ class AnalyticsModel {
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY day
       ORDER BY date ASC
+    `;
+    
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryHourlyTableGrouped(tableName, whereConditions, groupByColumn) {
+    const query = `
+      SELECT 
+        day as date,
+        ${groupByColumn} as group_key,
+        sum(events_count) as count
+      FROM ${tableName}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY day, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
     `;
     
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -50,6 +82,22 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  static async queryDailyTableGrouped(tableName, whereConditions, groupByColumn) {
+    const query = `
+      SELECT 
+        day as date,
+        ${groupByColumn} as group_key,
+        sum(events_count) as count
+      FROM ${tableName}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY day, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryMonthlyTable(tableName, whereConditions) {
     const query = `
       SELECT 
@@ -59,6 +107,22 @@ class AnalyticsModel {
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY month
       ORDER BY date ASC
+    `;
+    
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryMonthlyTableGrouped(tableName, whereConditions, groupByColumn) {
+    const query = `
+      SELECT 
+        month as date,
+        ${groupByColumn} as group_key,
+        sum(events_count) as count
+      FROM ${tableName}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY month, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
     `;
     
     const result = await slaveClickhouse.querying(query, { dataObjects: true });

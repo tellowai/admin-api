@@ -104,7 +104,12 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters);
+      let templateViews;
+      if (queryParams.group_by) {
+        templateViews = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_VIEWS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(templateViews, timezone);
@@ -144,7 +149,12 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters);
+      let templateTries;
+      if (queryParams.group_by) {
+        templateTries = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_TRIES', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(templateTries, timezone);
@@ -184,7 +194,12 @@ class AnalyticsController {
       if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters);
+      let templateDownloads;
+      if (queryParams.group_by) {
+        templateDownloads = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(templateDownloads, timezone);

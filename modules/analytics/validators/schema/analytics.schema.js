@@ -32,6 +32,7 @@ const templateAnalyticsSchema = Joi.object().keys({
   generation_type: Joi.string().valid('ai', 'non-ai', 'unknown').optional(),
   template_id: Joi.string().optional(),
   user_id: Joi.string().optional(),
+  group_by: Joi.string().valid('output_type', 'aspect_ratio', 'orientation', 'generation_type').optional(),
   tz: Joi.string().optional()
 });
 
