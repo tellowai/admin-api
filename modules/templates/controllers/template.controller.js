@@ -16,6 +16,7 @@ const { v4: uuidv4 } = require('uuid');
 const config = require('../../../config/config');
 const fetch = require('node-fetch');
 const AiModelModel = require('../../ai-models/models/ai-model.model');
+const TemplateRedisService = require('../services/template.redis.service');
 
 // Timeout for fetching Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -2284,6 +2285,9 @@ exports.updateTemplate = async function(req, res) {
       });
     }
 
+    // Update Redis cache with fresh template data
+    await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+
     // Manual template tags are already stored above
     
     // Publish activity log command
@@ -2331,6 +2335,9 @@ exports.archiveTemplate = async function(req, res) {
       });
     }
 
+    // Remove template from Redis cache since it's archived
+    await TemplateRedisService.removeTemplateGenerationMeta(templateId);
+
     // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
@@ -2375,6 +2382,9 @@ exports.bulkArchiveTemplates = async function(req, res) {
         message: req.t('template:NO_TEMPLATES_ARCHIVED')
       });
     }
+
+    // Remove archived templates from Redis cache
+    await TemplateRedisService.removeMultipleTemplateGenerationMeta(template_ids);
 
     // Publish activity log command for each archived template
     const activityLogCommands = template_ids.map(templateId => ({
@@ -2426,6 +2436,11 @@ exports.bulkUnarchiveTemplates = async function(req, res) {
         message: req.t('template:NO_TEMPLATES_UNARCHIVED')
       });
     }
+
+    // Update Redis cache for unarchived templates
+    await Promise.all(template_ids.map(templateId => 
+      TemplateRedisService.updateTemplateGenerationMeta(templateId)
+    ));
 
     // Publish activity log command for each unarchived template
     const activityLogCommands = template_ids.map(templateId => ({

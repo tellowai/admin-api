@@ -51,6 +51,28 @@ exports.listTemplates = async function(pagination) {
   );
 };
 
+exports.getTemplateGenerationMeta = async function(templateId) {
+  const query = `
+    SELECT 
+      template_id,
+      template_name,
+      template_code,
+      template_gender,
+      aspect_ratio,
+      orientation,
+      template_output_type,
+      template_clips_assets_type,
+      credits
+    FROM templates
+    WHERE template_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  return template;
+};
+
+
 exports.listArchivedTemplates = async function(pagination) {
   const query = `
     SELECT 
