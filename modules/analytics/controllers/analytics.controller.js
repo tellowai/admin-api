@@ -27,7 +27,12 @@ class AnalyticsController {
       if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const characterCreations = await AnalyticsService.queryMixedDateRange('CHARACTER_CREATIONS', utcFilters, additionalFilters);
+      let characterCreations;
+      if (queryParams.group_by) {
+        characterCreations = await AnalyticsService.queryMixedDateRangeGrouped('CHARACTER_CREATIONS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        characterCreations = await AnalyticsService.queryMixedDateRange('CHARACTER_CREATIONS', utcFilters, additionalFilters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(characterCreations, timezone);
@@ -64,7 +69,12 @@ class AnalyticsController {
       if (queryParams.character_id) additionalFilters.character_id = queryParams.character_id;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const characterTrainings = await AnalyticsService.queryMixedDateRange('CHARACTER_TRAININGS', utcFilters, additionalFilters);
+      let characterTrainings;
+      if (queryParams.group_by) {
+        characterTrainings = await AnalyticsService.queryMixedDateRangeGrouped('CHARACTER_TRAININGS', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        characterTrainings = await AnalyticsService.queryMixedDateRange('CHARACTER_TRAININGS', utcFilters, additionalFilters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(characterTrainings, timezone);
@@ -538,7 +548,19 @@ class AnalyticsController {
         user_id: queryParams.user_id
       };
 
-      const purchases = await AnalyticsService.getPurchases(filters);
+      let purchases;
+      if (queryParams.group_by) {
+        const additionalFilters = {};
+        if (queryParams.plan_id) additionalFilters.plan_id = queryParams.plan_id;
+        if (queryParams.plan_name) additionalFilters.plan_name = queryParams.plan_name;
+        if (queryParams.plan_type) additionalFilters.plan_type = queryParams.plan_type;
+        if (queryParams.payment_provider) additionalFilters.payment_provider = queryParams.payment_provider;
+        if (queryParams.currency) additionalFilters.currency = queryParams.currency;
+        if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+        purchases = await AnalyticsService.queryMixedDateRangeGrouped('PURCHASES', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        purchases = await AnalyticsService.getPurchases(filters);
+      }
 
       // Convert UTC results back to client timezone
       const convertedResults = TimezoneService.convertFromUTC(purchases, timezone);

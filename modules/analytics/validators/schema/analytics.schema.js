@@ -18,6 +18,7 @@ const characterAnalyticsSchema = Joi.object().keys({
   gender: Joi.string().valid('male', 'female', 'couple', 'unknown').optional(),
   character_id: Joi.string().optional(),
   user_id: Joi.string().optional(),
+  group_by: Joi.string().valid('gender').optional(),
   tz: Joi.string().optional()
 });
 
@@ -67,6 +68,7 @@ const purchasesAnalyticsSchema = Joi.object().keys({
   payment_provider: Joi.string().valid('razorpay', 'stripe', 'paypal', 'google_pay', 'apple_pay', 'upi', 'card', 'net_banking', 'wallet', 'unknown').optional(),
   currency: Joi.string().valid('INR', 'USD', 'unknown').optional(),
   user_id: Joi.string().optional(),
+  group_by: Joi.string().valid('currency', 'payment_provider', 'plan_name').optional(),
   tz: Joi.string().optional()
 });
 
