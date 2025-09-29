@@ -1209,18 +1209,20 @@ function generateFacesNeededFromClips(clips) {
       const workflowId = (workflowStep.workflow_id ? String(workflowStep.workflow_id) : '').toLowerCase().trim();
 
       // Check if this is a "generate image" type node
-      const isGenerateImageByCode = workflowCode === 'multi_image_editing' || 
-                                   workflowCode === 'style_change_convert_image' || 
+      const isGenerateImageByCode = workflowCode === 'multi_image_editing' ||
+                                   workflowCode === 'style_change_convert_image' ||
                                    workflowCode === 'image_generation' ||
                                    workflowCode === 'generate_image' ||
                                    workflowCode === 'image_editing' ||
-                                   workflowCode === 'inpainting';
-      const isGenerateImageById = workflowId === 'multi-image-editing' || 
+                                   workflowCode === 'inpainting' ||
+                                   workflowCode === 'inpaint_one_character';
+      const isGenerateImageById = workflowId === 'multi-image-editing' ||
                                  workflowId === 'style-change' ||
                                  workflowId === 'image-generation' ||
                                  workflowId === 'generate-image' ||
                                  workflowId === 'image-editing' ||
-                                 workflowId === 'inpainting';
+                                 workflowId === 'inpainting' ||
+                                 workflowId === 'inpaint-one-character';
 
       const isGenerateImageStep = isGenerateImageByCode || isGenerateImageById;
 
