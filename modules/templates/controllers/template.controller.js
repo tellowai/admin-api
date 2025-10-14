@@ -1035,49 +1035,16 @@ exports.createTemplate = async function(req, res) {
     } else {
       // AI templates: derive from clips
       if (templateData.clips && templateData.clips.length > 0) {
-        logger.info('CREATE: Starting calculations for AI template', {
-          templateId: templateData.template_id,
-          clipsCount: templateData.clips.length,
-          existingFacesNeeded: templateData.faces_needed,
-          existingImageUploadsJson: templateData.image_uploads_json,
-          existingVideoUploadsJson: templateData.video_uploads_json
-        });
-
         templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
         templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
         templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
-        
-        logger.info('CREATE: After basic calculations', {
-          templateId: templateData.template_id,
-          facesNeeded: templateData.faces_needed,
-          imageUploadsRequired: templateData.image_uploads_required,
-          videoUploadsRequired: templateData.video_uploads_required
-        });
-        
+
         // Generate image_uploads_json and video_uploads_json from clips if not provided
         if (!templateData.image_uploads_json) {
           templateData.image_uploads_json = generateImageUploadsJsonFromClips(templateData.clips);
-          logger.info('CREATE: Generated image_uploads_json from clips', {
-            templateId: templateData.template_id,
-            imageUploadsJson: templateData.image_uploads_json
-          });
-        } else {
-          logger.info('CREATE: Using provided image_uploads_json', {
-            templateId: templateData.template_id,
-            imageUploadsJson: templateData.image_uploads_json
-          });
         }
         if (!templateData.video_uploads_json) {
           templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
-          logger.info('CREATE: Generated video_uploads_json from clips', {
-            templateId: templateData.template_id,
-            videoUploadsJson: templateData.video_uploads_json
-          });
-        } else {
-          logger.info('CREATE: Using provided video_uploads_json', {
-            templateId: templateData.template_id,
-            videoUploadsJson: templateData.video_uploads_json
-          });
         }
         
         if (!templateData.template_gender) {
@@ -1100,40 +1067,14 @@ exports.createTemplate = async function(req, res) {
       }
     }
 
-    // Extract clips data and template_tag_ids for transaction
-    const clips = templateData.clips;
-    const templateTagIds = templateData.template_tag_ids;
-    delete templateData.clips;
-    delete templateData.template_tag_ids;
-
-    logger.info('CREATE: Final values before database insert', {
-      templateId: templateData.template_id,
-      facesNeeded: templateData.faces_needed,
-      imageUploadsRequired: templateData.image_uploads_required,
-      videoUploadsRequired: templateData.video_uploads_required,
-      imageUploadsJson: templateData.image_uploads_json,
-      videoUploadsJson: templateData.video_uploads_json
-    });
-
-    await TemplateModel.createTemplate(templateData, clips);
-    
-    // Create template tags if provided
-    if (templateTagIds && templateTagIds.length > 0) {
-      console.log('Creating manual template tags:', JSON.stringify(templateTagIds, null, 2));
-      const result = await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
-      console.log('Manual template tags created:', JSON.stringify(result, null, 2));
-    } else {
-      console.log('No manual template tags provided');
-    }
-    
-    // Calculate aspect ratio and orientation from bodymovin JSON
+    // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
     if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
       try {
         const storage = StorageFactory.getProvider();
-        const isPublic = templateData.bodymovin_json_bucket === 'public' || 
-                       templateData.bodymovin_json_bucket === storage.publicBucket || 
+        const isPublic = templateData.bodymovin_json_bucket === 'public' ||
+                       templateData.bodymovin_json_bucket === storage.publicBucket ||
                        templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
-        
+
         let bodymovinUrl;
         if (isPublic) {
           bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${templateData.bodymovin_json_key}`;
@@ -1141,21 +1082,52 @@ exports.createTemplate = async function(req, res) {
           bodymovinUrl = await storage.generatePresignedDownloadUrl(templateData.bodymovin_json_key);
         }
 
-        const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
-        if (dimensions) {
-          const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
-          templateData.aspect_ratio = aspectRatio;
-          templateData.orientation = orientation;
+        const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
+        if (response.ok) {
+          const bodymovinJson = await response.json();
+
+          // Calculate aspect ratio and orientation
+          if (bodymovinJson.w && bodymovinJson.h) {
+            const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(bodymovinJson.w, bodymovinJson.h);
+            templateData.aspect_ratio = aspectRatio;
+            templateData.orientation = orientation;
+          }
+
+          // Compute total asset counts for ALL templates (AI and non-AI)
+          const { total_images_count, total_videos_count, total_texts_count } = computeTotalAssetCountsFromBodymovin(bodymovinJson);
+          templateData.total_images_count = total_images_count;
+          templateData.total_videos_count = total_videos_count;
+          templateData.total_texts_count = total_texts_count;
         }
       } catch (error) {
-        logger.warn('Failed to calculate aspect ratio and orientation for template', { 
-          templateId: templateData.template_id, 
-          error: error.message 
+        logger.warn('Failed to process bodymovin JSON for template', {
+          templateId: templateData.template_id,
+          error: error.message
         });
+        // Set defaults if processing fails
+        templateData.total_images_count = templateData.total_images_count || 0;
+        templateData.total_videos_count = templateData.total_videos_count || 0;
+        templateData.total_texts_count = templateData.total_texts_count || 0;
       }
+    } else {
+      // No bodymovin JSON provided; default to zero
+      templateData.total_images_count = 0;
+      templateData.total_videos_count = 0;
+      templateData.total_texts_count = 0;
     }
 
-    // Manual template tags are already stored above
+    // Extract clips data and template_tag_ids for transaction
+    const clips = templateData.clips;
+    const templateTagIds = templateData.template_tag_ids;
+    delete templateData.clips;
+    delete templateData.template_tag_ids;
+
+    await TemplateModel.createTemplate(templateData, clips);
+
+    // Create template tags if provided
+    if (templateTagIds && templateTagIds.length > 0) {
+      await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
+    }
     
     // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
@@ -1544,6 +1516,72 @@ function computeAssetCountsFromBodymovin(bodymovinJson) {
     return { imageCount, videoCount };
   } catch (_e) {
     return { imageCount: 0, videoCount: 0 };
+  }
+}
+
+/**
+ * Recursively count text layers in Lottie JSON structure
+ * @param {Array} layers - Array of layers
+ * @returns {number} - Total count of text layers
+ */
+function countTextLayers(layers) {
+  if (!Array.isArray(layers)) return 0;
+
+  let count = 0;
+  for (const layer of layers) {
+    if (!layer) continue;
+
+    // Lottie layer type 5 is text
+    if (Number(layer.ty) === 5) {
+      count++;
+    }
+
+    // Recursively check nested layers (precomps, etc.)
+    if (Array.isArray(layer.layers)) {
+      count += countTextLayers(layer.layers);
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Compute total assets counts from a Bodymovin (Lottie) JSON
+ * This includes all images, videos, and text layers in the entire template
+ * @param {Object} bodymovinJson - The Bodymovin JSON object
+ * @returns {Object} - Object containing total_images_count, total_videos_count, total_texts_count
+ */
+function computeTotalAssetCountsFromBodymovin(bodymovinJson) {
+  try {
+    const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
+    const layers = Array.isArray(bodymovinJson?.layers) ? bodymovinJson.layers : [];
+
+    // Count total images from assets (all image types)
+    const totalImagesCount = assets.filter(a => {
+      if (!a || typeof a.id !== 'string') return false;
+      // Check if it's an image asset by presence of 'p' property with image extension
+      if (a.p) {
+        const name = String(a.p).toLowerCase();
+        return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp') || name.endsWith('.gif');
+      }
+      // Also check for embedded images (have w, h, and e properties)
+      return a.w && a.h && (a.e === 1 || a.e === 0);
+    }).length;
+
+    // Count total videos from layers (Lottie layer type 9 is video)
+    const totalVideosCount = layers.filter(l => l && Number(l.ty) === 9).length;
+
+    // Count total text layers (Lottie layer type 5 is text)
+    const totalTextsCount = countTextLayers(layers);
+
+    return {
+      total_images_count: totalImagesCount,
+      total_videos_count: totalVideosCount,
+      total_texts_count: totalTextsCount
+    };
+  } catch (error) {
+    logger.error('Error computing total asset counts from Bodymovin', { error: error.message });
+    return { total_images_count: 0, total_videos_count: 0, total_texts_count: 0 };
   }
 }
 
@@ -2038,22 +2076,18 @@ exports.updateTemplate = async function(req, res) {
             }
           }
 
-          logger.info('Fetching Bodymovin JSON for non-ai template', { templateId, bucket, key, downloadUrl });
           const response = await fetchWithTimeout(downloadUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
           if (response.ok) {
             const bodymovinJson = await response.json();
             const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
             templateData.image_uploads_required = imageCount;
             templateData.video_uploads_required = videoCount;
-            logger.info('Computed asset counts from Bodymovin', { templateId, imageCount, videoCount });
           } else {
             logger.warn('Failed to fetch Bodymovin JSON for non-ai template update', { templateId, key, status: response.status });
-            // Fallback to zero if cannot fetch
             templateData.image_uploads_required = 0;
             templateData.video_uploads_required = 0;
           }
         } else {
-          // No JSON provided; default to zero
           templateData.image_uploads_required = 0;
           templateData.video_uploads_required = 0;
         }
@@ -2066,54 +2100,21 @@ exports.updateTemplate = async function(req, res) {
 
     // Handle faces_needed for all template types
     const hasClips = templateData.clips && templateData.clips.length > 0;
-    
-    if (hasClips) {
-      logger.info('UPDATE: Starting calculations for AI template with clips', {
-        templateId,
-        clipsCount: templateData.clips.length,
-        existingFacesNeeded: templateData.faces_needed,
-        existingImageUploadsJson: templateData.image_uploads_json,
-        existingVideoUploadsJson: templateData.video_uploads_json
-      });
 
+    if (hasClips) {
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
-      
+
       // Recompute uploads required when clips are provided
       templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
       templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
 
-      logger.info('UPDATE: After basic calculations', {
-        templateId,
-        facesNeeded: templateData.faces_needed,
-        imageUploadsRequired: templateData.image_uploads_required,
-        videoUploadsRequired: templateData.video_uploads_required
-      });
-
       // Generate image_uploads_json and video_uploads_json from clips if not provided
       if (!templateData.image_uploads_json) {
         templateData.image_uploads_json = generateImageUploadsJsonFromClips(templateData.clips);
-        logger.info('UPDATE: Generated image_uploads_json from clips', {
-          templateId,
-          imageUploadsJson: templateData.image_uploads_json
-        });
-      } else {
-        logger.info('UPDATE: Using provided image_uploads_json', {
-          templateId,
-          imageUploadsJson: templateData.image_uploads_json
-        });
       }
       if (!templateData.video_uploads_json) {
         templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
-        logger.info('UPDATE: Generated video_uploads_json from clips', {
-          templateId,
-          videoUploadsJson: templateData.video_uploads_json
-        });
-      } else {
-        logger.info('UPDATE: Using provided video_uploads_json', {
-          templateId,
-          videoUploadsJson: templateData.video_uploads_json
-        });
       }
 
       // faces_needed derived from clips; retained for debugging via structured logs if needed
@@ -2128,29 +2129,14 @@ exports.updateTemplate = async function(req, res) {
 
       // Credits: always calculate minimum from AI models used for updates with clips
       const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
-      logger.info('CreditsCalc: update flow derived minimum', { minimumCredits });
-      
+
       if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
         // User provided sufficient credits, use them
-        logger.info('CreditsCalc: using provided credits (update)', { provided: templateData.credits, minimumCredits });
       } else {
         // User provided insufficient credits or no credits, always assign calculated minimum
         templateData.credits = minimumCredits || 1;
-        logger.info('CreditsCalc: assigned calculated minimum credits (update)', { 
-          provided: templateData.credits, 
-          assigned: templateData.credits,
-          minimumCredits 
-        });
       }
     } else if (templateData.clips !== undefined) {
-      logger.info('UPDATE: Handling empty clips array', {
-        templateId,
-        isNonAi,
-        existingFacesNeeded: templateData.faces_needed,
-        existingImageUploadsJson: templateData.image_uploads_json,
-        existingVideoUploadsJson: templateData.video_uploads_json
-      });
-
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
       // and zero out uploads required unless we are non-ai (counts already derived from JSON)
@@ -2160,30 +2146,15 @@ exports.updateTemplate = async function(req, res) {
         // Clear upload JSON arrays for empty clips
         templateData.image_uploads_json = [];
         templateData.video_uploads_json = [];
-        
-        logger.info('UPDATE: Cleared all values for empty clips', {
-          templateId,
-          facesNeeded: templateData.faces_needed,
-          imageUploadsRequired: templateData.image_uploads_required,
-          videoUploadsRequired: templateData.video_uploads_required,
-          imageUploadsJson: templateData.image_uploads_json,
-          videoUploadsJson: templateData.video_uploads_json
-        });
       }
-      
+
       // Always calculate credits even for empty clips (will be 0 or 1)
       const minimumCredits = await calculateMinimumCreditsFromClips([]);
       if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
         // User provided sufficient credits, use them
-        logger.info('CreditsCalc: using provided credits for empty clips (update)', { provided: templateData.credits, minimumCredits });
       } else {
         // User provided insufficient credits or no credits, assign calculated minimum
         templateData.credits = minimumCredits || 1;
-        logger.info('CreditsCalc: assigned calculated minimum credits for empty clips (update)', { 
-          provided: templateData.credits, 
-          assigned: templateData.credits,
-          minimumCredits 
-        });
       }
     } else {
       // No clips provided in update - use resolved template type
@@ -2192,42 +2163,32 @@ exports.updateTemplate = async function(req, res) {
           // User specified AI or auto-detected as AI - get existing clips and calculate credits
           const existingClips = await TemplateModel.getTemplateAiClips(templateId);
           const minimumCredits = await calculateMinimumCreditsFromClips(existingClips || []);
-          
+
           if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
             // User provided sufficient credits, use them
-            logger.info('CreditsCalc: using provided credits for existing AI clips (update)', { provided: templateData.credits, minimumCredits });
           } else {
             // User provided insufficient credits or no credits, assign calculated minimum
             templateData.credits = minimumCredits || 1;
-            logger.info('CreditsCalc: assigned calculated minimum credits for existing AI clips (update)', { 
-              provided: templateData.credits, 
-              assigned: templateData.credits,
-              minimumCredits 
-            });
           }
         } else {
           // User specified Non-AI or auto-detected as Non-AI
           templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, []);
-          logger.info('CreditsCalc: treated as Non-AI (update)', { 
-            provided: templateData.credits, 
-            assigned: templateData.credits
-          });
         }
       }
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
-    // Calculate aspect ratio and orientation from bodymovin JSON
+    // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
     const bodymovinKey = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
     const bodymovinBucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
-    
+
     if (bodymovinKey && bodymovinBucket) {
       try {
         const storage = StorageFactory.getProvider();
-        const isPublic = bodymovinBucket === 'public' || 
-                       bodymovinBucket === storage.publicBucket || 
+        const isPublic = bodymovinBucket === 'public' ||
+                       bodymovinBucket === storage.publicBucket ||
                        bodymovinBucket === (config.os2?.r2?.public?.bucket);
-        
+
         let bodymovinUrl;
         if (isPublic) {
           bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${bodymovinKey}`;
@@ -2235,33 +2196,43 @@ exports.updateTemplate = async function(req, res) {
           bodymovinUrl = await storage.generatePresignedDownloadUrl(bodymovinKey);
         }
 
-        const dimensions = await fetchBodymovinDimensions(bodymovinUrl);
-        if (dimensions) {
-          const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(dimensions.width, dimensions.height);
-          templateData.aspect_ratio = aspectRatio;
-          templateData.orientation = orientation;
+        const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
+        if (response.ok) {
+          const bodymovinJson = await response.json();
+
+          // Calculate aspect ratio and orientation
+          if (bodymovinJson.w && bodymovinJson.h) {
+            const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(bodymovinJson.w, bodymovinJson.h);
+            templateData.aspect_ratio = aspectRatio;
+            templateData.orientation = orientation;
+          }
+
+          // Compute total asset counts for ALL templates (AI and non-AI)
+          const { total_images_count, total_videos_count, total_texts_count } = computeTotalAssetCountsFromBodymovin(bodymovinJson);
+          templateData.total_images_count = total_images_count;
+          templateData.total_videos_count = total_videos_count;
+          templateData.total_texts_count = total_texts_count;
         }
       } catch (error) {
-        logger.warn('Failed to calculate aspect ratio and orientation for template update', { 
-          templateId, 
-          error: error.message 
+        logger.warn('Failed to process bodymovin JSON for template update', {
+          templateId,
+          error: error.message
         });
+        // Set defaults if processing fails
+        templateData.total_images_count = templateData.total_images_count || existingTemplate.total_images_count || 0;
+        templateData.total_videos_count = templateData.total_videos_count || existingTemplate.total_videos_count || 0;
+        templateData.total_texts_count = templateData.total_texts_count || existingTemplate.total_texts_count || 0;
       }
+    } else {
+      // No bodymovin JSON provided; keep existing values or default to zero
+      templateData.total_images_count = templateData.total_images_count || existingTemplate.total_images_count || 0;
+      templateData.total_videos_count = templateData.total_videos_count || existingTemplate.total_videos_count || 0;
+      templateData.total_texts_count = templateData.total_texts_count || existingTemplate.total_texts_count || 0;
     }
 
     // Extract template_tag_ids for separate handling
     const templateTagIds = templateData.template_tag_ids;
     delete templateData.template_tag_ids;
-
-    logger.info('UPDATE: Final values before database update', {
-      templateId,
-      facesNeeded: templateData.faces_needed,
-      image_uploads_required: templateData.image_uploads_required,
-      video_uploads_required: templateData.video_uploads_required,
-      imageUploadsJson: templateData.image_uploads_json,
-      videoUploadsJson: templateData.video_uploads_json,
-      hasClips
-    });
     
     let updated;
     if (hasClips) {
@@ -2274,11 +2245,7 @@ exports.updateTemplate = async function(req, res) {
     
     // Update template tags if provided
     if (templateTagIds !== undefined) {
-      console.log('Updating manual template tags:', JSON.stringify(templateTagIds, null, 2));
-      const result = await TemplateModel.updateTemplateTags(templateId, templateTagIds);
-      console.log('Manual template tags updated:', JSON.stringify(result, null, 2));
-    } else {
-      console.log('No manual template tags to update');
+      await TemplateModel.updateTemplateTags(templateId, templateTagIds);
     }
     
     if (!updated) {
