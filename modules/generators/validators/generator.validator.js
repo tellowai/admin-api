@@ -359,7 +359,7 @@ exports.validateWorkflowQueue = function(req, res, next) {
   ).min(1);
 
   const workflowDataSchema = Joi.object({
-    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur', 'existing_clip_selection', 'mask_prompt', 'multi_step_selection').required(),
+    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur', 'existing_clip_selection', 'mask_prompt', 'multi_step_selection', 'aspect_ratio').required(),
     value: Joi.alternatives().conditional('type', {
       switch: [
         {
