@@ -348,8 +348,18 @@ exports.validateWorkflowQueue = function(req, res, next) {
     data_type: Joi.string().valid('output', 'input').required()
   });
 
+  const multiStepSelectionValueSchema = Joi.array().items(
+    Joi.object({
+      step_index: Joi.number().integer().min(0).required(),
+      step_name: Joi.string().required(),
+      node_id: Joi.string().required(),
+      clip_index: Joi.number().integer().min(0).required(),
+      clip_name: Joi.string().required()
+    })
+  ).min(1);
+
   const workflowDataSchema = Joi.object({
-    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur', 'existing_clip_selection', 'mask_prompt').required(),
+    type: Joi.string().valid('ai_model', 'prompt', 'file_upload', 'character_gender', 'grow', 'blur', 'existing_clip_selection', 'mask_prompt', 'multi_step_selection').required(),
     value: Joi.alternatives().conditional('type', {
       switch: [
         {
@@ -359,6 +369,10 @@ exports.validateWorkflowQueue = function(req, res, next) {
         {
           is: 'existing_clip_selection',
           then: existingClipSelectionValueSchema
+        },
+        {
+          is: 'multi_step_selection',
+          then: multiStepSelectionValueSchema
         }
       ],
       otherwise: Joi.alternatives().try(Joi.string(), Joi.number()).required()
