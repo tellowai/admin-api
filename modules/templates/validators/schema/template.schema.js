@@ -178,8 +178,51 @@ const exportTemplatesSchema = Joi.object().keys({
   template_ids: Joi.array().items(Joi.string().required()).min(1).max(100).required()
 });
 
+// Asset object schema for import
+const assetObjectSchema = Joi.object({
+  asset_key: Joi.string().allow(null).optional(),
+  asset_bucket: Joi.string().allow(null).optional()
+}).allow(null);
+
+// Import template schema
+const importTemplateObjectSchema = Joi.object({
+  template_name: Joi.string().required(),
+  template_code: Joi.string().required(),
+  template_gender: Joi.string().valid('male', 'female', 'couple', 'unisex').optional(),
+  description: Joi.string().allow('', null).optional(),
+  prompt: Joi.string().allow('', null).optional(),
+  faces_needed: Joi.array().optional(),
+  custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).optional(),
+  credits: Joi.number().integer().min(0).optional(),
+  total_images_count: Joi.number().integer().min(0).optional(),
+  total_videos_count: Joi.number().integer().min(0).optional(),
+  total_texts_count: Joi.number().integer().min(0).optional(),
+  image_uploads_required: Joi.number().integer().min(0).optional(),
+  video_uploads_required: Joi.number().integer().min(0).optional(),
+  image_uploads_json: Joi.array().optional(),
+  video_uploads_json: Joi.array().optional(),
+  aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
+  orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
+  template_output_type: Joi.string().valid('image', 'video', 'audio').default('image'),
+  template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
+  user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
+  additional_data: Joi.object().allow(null).optional(),
+  cf_r2_asset: assetObjectSchema,
+  thumb_frame_asset: assetObjectSchema,
+  color_video_asset: assetObjectSchema,
+  mask_video_asset: assetObjectSchema,
+  bodymovin_json_asset: assetObjectSchema,
+  clips: Joi.array().items(clipSchema).optional()
+});
+
+const importTemplatesSchema = Joi.object().keys({
+  meta: Joi.object().optional(),
+  templates: Joi.array().items(importTemplateObjectSchema).min(1).max(50).required()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
 exports.bulkArchiveTemplatesSchema = bulkArchiveTemplatesSchema;
 exports.bulkUnarchiveTemplatesSchema = bulkUnarchiveTemplatesSchema;
-exports.exportTemplatesSchema = exportTemplatesSchema; 
+exports.exportTemplatesSchema = exportTemplatesSchema;
+exports.importTemplatesSchema = importTemplatesSchema; 

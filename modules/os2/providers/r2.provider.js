@@ -140,7 +140,7 @@ class R2StorageProvider extends StorageProvider {
 
           const buffer = await response.buffer();
           const fileName = path.basename(url.split('?')[0]);
-          
+
           // Generate unique filename by adding cuid prefix
           const uniqueId = createId();
           const uniqueFileName = `${uniqueId}_${fileName}`;
@@ -155,7 +155,7 @@ class R2StorageProvider extends StorageProvider {
           });
 
           await this.client.send(command);
-          
+
           return {
             status: 'success',
             originalUrl: url,
@@ -192,6 +192,77 @@ class R2StorageProvider extends StorageProvider {
       log.error('Error in batch upload to R2', {
         error: error.message,
         stack: error.stack
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Upload a single file from URL to specific bucket
+   */
+  async uploadFromUrlToBucket(sourceUrl, sourceBucket, targetBucket, options = {}) {
+    try {
+      // Generate presigned download URL from source bucket
+      let downloadUrl;
+      if (sourceBucket === 'public' || sourceBucket === this.publicBucket) {
+        // If source is public bucket, use public URL or generate presigned URL
+        if (/^https?:\/\//i.test(sourceUrl)) {
+          downloadUrl = sourceUrl;
+        } else {
+          downloadUrl = await this.generatePublicBucketPresignedDownloadUrl(sourceUrl);
+        }
+      } else {
+        // Generate presigned URL for private bucket
+        downloadUrl = await this.generatePresignedDownloadUrl(sourceUrl);
+      }
+
+      // Fetch the file
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch file: ${response.status}`);
+      }
+
+      const buffer = await response.buffer();
+      const fileName = path.basename(sourceUrl.split('?')[0]);
+
+      // Generate unique filename
+      const uniqueId = createId();
+      const uniqueFileName = `${uniqueId}_${fileName}`;
+      const key = options.keyPrefix ? `${options.keyPrefix}/${uniqueFileName}` : `assets/${uniqueFileName}`;
+
+      // Determine target bucket
+      const bucket = targetBucket === 'public' || targetBucket === this.publicBucket
+        ? this.publicBucket
+        : this.bucket;
+
+      const bucketUrl = targetBucket === 'public' || targetBucket === this.publicBucket
+        ? config.os2.r2.public.bucketUrl
+        : this.bucketUrl;
+
+      // Upload to target bucket
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: response.headers.get('content-type') || options.contentType,
+        ACL: bucket === this.publicBucket ? 'public-read' : 'private'
+      });
+
+      await this.client.send(command);
+
+      return {
+        key,
+        bucket,
+        url: `${bucketUrl}/${key}`,
+        contentType: response.headers.get('content-type'),
+        size: buffer.length
+      };
+    } catch (error) {
+      log.error('Error uploading file from URL to bucket', {
+        error: error.message,
+        sourceUrl,
+        sourceBucket,
+        targetBucket
       });
       throw error;
     }

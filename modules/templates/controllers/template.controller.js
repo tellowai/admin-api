@@ -2649,4 +2649,177 @@ function transformTemplateForExport(template) {
 
     created_at: template.created_at
   };
-} 
+}
+
+/**
+ * @api {post} /templates/import Import templates
+ * @apiVersion 1.0.0
+ * @apiName ImportTemplates
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {Object} meta Import metadata
+ * @apiBody {Array} templates Array of template objects to import
+ */
+exports.importTemplates = async function(req, res) {
+  try {
+    const { templates: importTemplates } = req.validatedBody;
+
+    if (!importTemplates || importTemplates.length === 0) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'No templates to import'
+      });
+    }
+
+    const storage = StorageFactory.getProvider();
+    const targetBucket = config.os2.r2.bucket; // Current environment bucket
+    const targetPublicBucket = config.os2.r2.public.bucket;
+
+    // Process all templates in parallel
+    const templateCreationPromises = importTemplates.map(async (importTemplate) => {
+      try {
+        // Generate new UUID for template
+        const newTemplateId = uuidv4();
+
+        // Helper function to process asset
+        const processAsset = async (assetObj, assetType) => {
+          if (!assetObj || !assetObj.asset_key) return null;
+
+          const sourceBucket = assetObj.asset_bucket;
+          const sourceKey = assetObj.asset_key;
+
+          // Determine target bucket based on source
+          const targetBkt = sourceBucket === 'public' ? targetPublicBucket : targetBucket;
+
+          try {
+            const result = await storage.uploadFromUrlToBucket(
+              sourceKey,
+              sourceBucket,
+              targetBkt,
+              { keyPrefix: `templates/${assetType}` }
+            );
+            return {
+              key: result.key,
+              bucket: result.bucket,
+              url: result.url
+            };
+          } catch (error) {
+            logger.error(`Failed to process ${assetType} asset`, {
+              templateName: importTemplate.template_name,
+              error: error.message
+            });
+            return null;
+          }
+        };
+
+        // Process all assets in parallel
+        const [cf_r2, thumbFrame, colorVideo, maskVideo, bodymovinJson] = await Promise.all([
+          processAsset(importTemplate.cf_r2_asset, 'cf_r2'),
+          processAsset(importTemplate.thumb_frame_asset, 'thumb'),
+          processAsset(importTemplate.color_video_asset, 'color_video'),
+          processAsset(importTemplate.mask_video_asset, 'mask_video'),
+          processAsset(importTemplate.bodymovin_json_asset, 'bodymovin')
+        ]);
+
+        // Prepare template data
+        const templateData = {
+          template_id: newTemplateId,
+          template_name: importTemplate.template_name,
+          template_code: `${importTemplate.template_code}_imported_${Date.now()}`,
+          template_gender: importTemplate.template_gender,
+          description: importTemplate.description,
+          prompt: importTemplate.prompt,
+          faces_needed: importTemplate.faces_needed,
+          custom_text_input_fields: importTemplate.custom_text_input_fields,
+          credits: importTemplate.credits,
+          total_images_count: importTemplate.total_images_count || 0,
+          total_videos_count: importTemplate.total_videos_count || 0,
+          total_texts_count: importTemplate.total_texts_count || 0,
+          image_uploads_required: importTemplate.image_uploads_required || 0,
+          video_uploads_required: importTemplate.video_uploads_required || 0,
+          image_uploads_json: importTemplate.image_uploads_json,
+          video_uploads_json: importTemplate.video_uploads_json,
+          aspect_ratio: importTemplate.aspect_ratio,
+          orientation: importTemplate.orientation,
+          template_output_type: importTemplate.template_output_type,
+          template_clips_assets_type: importTemplate.template_clips_assets_type,
+          user_assets_layer: importTemplate.user_assets_layer,
+          additional_data: importTemplate.additional_data,
+
+          // Set asset fields from processed results
+          cf_r2_key: cf_r2?.key || null,
+          cf_r2_bucket: cf_r2?.bucket || null,
+          cf_r2_url: cf_r2?.url || null,
+          thumb_frame_asset_key: thumbFrame?.key || null,
+          thumb_frame_bucket: thumbFrame?.bucket || null,
+          color_video_key: colorVideo?.key || null,
+          color_video_bucket: colorVideo?.bucket || null,
+          mask_video_key: maskVideo?.key || null,
+          mask_video_bucket: maskVideo?.bucket || null,
+          bodymovin_json_key: bodymovinJson?.key || null,
+          bodymovin_json_bucket: bodymovinJson?.bucket || null
+        };
+
+        // Create template with clips
+        await TemplateModel.createTemplate(templateData, importTemplate.clips || []);
+
+        return {
+          status: 'success',
+          template_id: newTemplateId,
+          original_name: importTemplate.template_name
+        };
+      } catch (error) {
+        logger.error('Failed to import template', {
+          templateName: importTemplate.template_name,
+          error: error.message,
+          stack: error.stack
+        });
+        return {
+          status: 'failed',
+          original_name: importTemplate.template_name,
+          error: error.message
+        };
+      }
+    });
+
+    // Wait for all templates to be created
+    const results = await Promise.all(templateCreationPromises);
+
+    const summary = {
+      total: results.length,
+      successful: results.filter(r => r.status === 'success').length,
+      failed: results.filter(r => r.status === 'failed').length
+    };
+
+    // Publish activity log commands for successful imports
+    const successfulImports = results.filter(r => r.status === 'success');
+    if (successfulImports.length > 0) {
+      const activityLogCommands = successfulImports.map(result => ({
+        value: {
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'IMPORT_TEMPLATE',
+          entity_id: result.template_id
+        }
+      }));
+
+      await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        activityLogCommands,
+        'create_admin_activity_log'
+      );
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: `Import completed: ${summary.successful}/${summary.total} templates created`,
+      data: {
+        summary,
+        results
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error importing templates:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+}; 

@@ -80,4 +80,12 @@ module.exports = function(app) {
     TemplateValidator.validateExportTemplatesData,
     TemplateCtrl.exportTemplates
   );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/import'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateImportTemplatesData,
+    TemplateCtrl.importTemplates
+  );
 }; 
