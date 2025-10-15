@@ -2547,4 +2547,106 @@ exports.copyTemplate = async function(req, res) {
     logger.error('Error copying template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
-}; 
+};
+
+/**
+ * @api {post} /templates/export Export templates
+ * @apiVersion 1.0.0
+ * @apiName ExportTemplates
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {String[]} template_ids Array of template IDs to export (min: 1, max: 100)
+ */
+exports.exportTemplates = async function(req, res) {
+  try {
+    const { template_ids } = req.validatedBody;
+
+    // Fetch templates by IDs
+    const templates = await TemplateModel.getTemplatesByIdsForExport(template_ids);
+
+    if (!templates || templates.length === 0) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:NO_TEMPLATES_FOUND')
+      });
+    }
+
+    // Transform templates to export format
+    const exportData = {
+      meta: {
+        env: process.env.NODE_ENV || 'development',
+        exported_at: new Date().toISOString(),
+        total_templates: templates.length
+      },
+      templates: templates.map(template => transformTemplateForExport(template))
+    };
+
+    // Set response headers for file download
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="templates-export-${Date.now()}.json"`);
+
+    return res.status(HTTP_STATUS_CODES.OK).json(exportData);
+
+  } catch (error) {
+    logger.error('Error exporting templates:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * Transform template data to export format
+ * Converts URL fields to asset_key/asset_bucket objects
+ */
+function transformTemplateForExport(template) {
+  return {
+    template_id: template.template_id,
+    template_name: template.template_name,
+    template_code: template.template_code,
+    template_gender: template.template_gender,
+    description: template.description,
+    prompt: template.prompt,
+    faces_needed: template.faces_needed,
+    custom_text_input_fields: template.custom_text_input_fields,
+    credits: template.credits,
+    total_images_count: template.total_images_count,
+    total_videos_count: template.total_videos_count,
+    total_texts_count: template.total_texts_count,
+    image_uploads_required: template.image_uploads_required,
+    video_uploads_required: template.video_uploads_required,
+    image_uploads_json: template.image_uploads_json,
+    video_uploads_json: template.video_uploads_json,
+    aspect_ratio: template.aspect_ratio,
+    orientation: template.orientation,
+    template_output_type: template.template_output_type,
+    template_clips_assets_type: template.template_clips_assets_type,
+    user_assets_layer: template.user_assets_layer,
+    additional_data: template.additional_data,
+
+    // Transform asset URLs to key/bucket objects
+    cf_r2_asset: {
+      asset_key: template.cf_r2_key || null,
+      asset_bucket: template.cf_r2_bucket || null
+    },
+    thumb_frame_asset: {
+      asset_key: template.thumb_frame_asset_key || null,
+      asset_bucket: template.thumb_frame_bucket || null
+    },
+    color_video_asset: {
+      asset_key: template.color_video_key || null,
+      asset_bucket: template.color_video_bucket || null
+    },
+    mask_video_asset: {
+      asset_key: template.mask_video_key || null,
+      asset_bucket: template.mask_video_bucket || null
+    },
+    bodymovin_json_asset: {
+      asset_key: template.bodymovin_json_key || null,
+      asset_bucket: template.bodymovin_json_bucket || null
+    },
+
+    // Include clips data
+    clips: template.clips || [],
+
+    created_at: template.created_at
+  };
+} 

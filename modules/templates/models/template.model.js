@@ -466,7 +466,7 @@ exports.getTemplateByCode = async function(templateCode) {
  */
 exports.getTemplateByIdWithAssets = async function(templateId) {
   const template = await this.getTemplateById(templateId);
-  
+
   if (!template) {
     return null;
   }
@@ -475,6 +475,33 @@ exports.getTemplateByIdWithAssets = async function(templateId) {
   template.clips = await this.getTemplateAiClips(templateId);
 
   return template;
+};
+
+/**
+ * Get multiple templates by IDs with complete data for export
+ */
+exports.getTemplatesByIdsForExport = async function(templateIds) {
+  if (!templateIds || templateIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT *
+    FROM templates
+    WHERE template_id IN (${placeholders})
+    AND archived_at IS NULL
+    ORDER BY created_at DESC
+  `;
+
+  const templates = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+
+  // Get AI clips for each template
+  for (const template of templates) {
+    template.clips = await this.getTemplateAiClips(template.template_id);
+  }
+
+  return templates;
 };
 
 /**

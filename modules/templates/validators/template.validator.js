@@ -54,9 +54,25 @@ exports.validateBulkArchiveTemplatesData = function(req, res, next) {
 
 exports.validateBulkUnarchiveTemplatesData = function(req, res, next) {
   const payload = req.body;
-  
+
   const payloadValidation = validationCtrl.validate(templateSchema.bulkUnarchiveTemplatesSchema, payload);
-  
+
+  if(payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+
+  req.validatedBody = payloadValidation.value;
+  return next(null);
+};
+
+exports.validateExportTemplatesData = function(req, res, next) {
+  const payload = req.body;
+
+  const payloadValidation = validationCtrl.validate(templateSchema.exportTemplatesSchema, payload);
+
   if(payloadValidation.error && payloadValidation.error.length) {
     return res.status(HTTP_CODES.BAD_REQUEST).json({
       message: req.t('validation:VALIDATION_FAILED'),

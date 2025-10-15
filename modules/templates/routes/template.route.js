@@ -72,4 +72,12 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.copyTemplate
   );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/export'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateExportTemplatesData,
+    TemplateCtrl.exportTemplates
+  );
 }; 
