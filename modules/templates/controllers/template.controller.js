@@ -2723,11 +2723,21 @@ exports.importTemplates = async function(req, res) {
           processAsset(importTemplate.bodymovin_json_asset, 'bodymovin')
         ]);
 
+        // Generate unique template code (alphanumeric, 6 chars)
+        const generateTemplateCode = () => {
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+          let code = '';
+          for (let i = 0; i < 6; i++) {
+            code += chars.charAt(Math.floor(Math.random() * chars.length));
+          }
+          return code;
+        };
+
         // Prepare template data
         const templateData = {
           template_id: newTemplateId,
           template_name: importTemplate.template_name,
-          template_code: `${importTemplate.template_code}_imported_${Date.now()}`,
+          template_code: generateTemplateCode(),
           template_gender: importTemplate.template_gender,
           description: importTemplate.description,
           prompt: importTemplate.prompt,
