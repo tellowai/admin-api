@@ -186,6 +186,7 @@ const assetObjectSchema = Joi.object({
 
 // Import template schema
 const importTemplateObjectSchema = Joi.object({
+  template_id: Joi.string().optional(),
   template_name: Joi.string().required(),
   template_code: Joi.string().required(),
   template_gender: Joi.string().valid('male', 'female', 'couple', 'unisex').optional(),
@@ -194,9 +195,9 @@ const importTemplateObjectSchema = Joi.object({
   faces_needed: Joi.array().optional(),
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).optional(),
   credits: Joi.number().integer().min(0).optional(),
-  total_images_count: Joi.number().integer().min(0).optional(),
-  total_videos_count: Joi.number().integer().min(0).optional(),
-  total_texts_count: Joi.number().integer().min(0).optional(),
+  total_images_count: Joi.number().integer().min(0).allow(null).optional(),
+  total_videos_count: Joi.number().integer().min(0).allow(null).optional(),
+  total_texts_count: Joi.number().integer().min(0).allow(null).optional(),
   image_uploads_required: Joi.number().integer().min(0).optional(),
   video_uploads_required: Joi.number().integer().min(0).optional(),
   image_uploads_json: Joi.array().optional(),
@@ -212,8 +213,9 @@ const importTemplateObjectSchema = Joi.object({
   color_video_asset: assetObjectSchema,
   mask_video_asset: assetObjectSchema,
   bodymovin_json_asset: assetObjectSchema,
-  clips: Joi.array().items(clipSchema).optional()
-});
+  clips: Joi.array().items(clipSchema).optional(),
+  created_at: Joi.alternatives().try(Joi.date(), Joi.string()).optional()
+}).unknown(true);
 
 const importTemplatesSchema = Joi.object().keys({
   meta: Joi.object().optional(),
