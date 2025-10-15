@@ -496,9 +496,12 @@ exports.getTemplatesByIdsForExport = async function(templateIds) {
 
   const templates = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
 
-  // Get AI clips for each template
+  const TemplateTagsModel = require('./template.tags.model');
+
+  // Get AI clips and tags for each template
   for (const template of templates) {
     template.clips = await this.getTemplateAiClips(template.template_id);
+    template.tags = await TemplateTagsModel.getTemplateTags(template.template_id);
   }
 
   return templates;

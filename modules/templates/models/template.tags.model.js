@@ -4,10 +4,11 @@ const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 exports.getTemplateTags = async function(templateId) {
   const query = `
-    SELECT 
+    SELECT
       tt_id,
       template_id,
       ttd_id,
+      facet_id,
       created_at,
       updated_at
     FROM template_tags
@@ -27,16 +28,59 @@ exports.assignTagsToTemplate = async function(templateId, tagDefinitionIds) {
   // First, remove existing tags for this template
   await this.removeAllTagsFromTemplate(templateId);
 
-  // Insert new tag assignments
-  const values = tagDefinitionIds.map(ttdId => `(?, ?, NOW(), NOW())`).join(',');
+  // Fetch facet_id for each ttd_id from template_tag_definitions
+  const placeholders = tagDefinitionIds.map(() => '?').join(',');
+  const fetchFacetQuery = `
+    SELECT ttd_id, facet_id
+    FROM template_tag_definitions
+    WHERE ttd_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(fetchFacetQuery, tagDefinitionIds);
+
+  // Create a map of ttd_id to facet_id
+  const ttdToFacetMap = {};
+  tagDefinitions.forEach(def => {
+    ttdToFacetMap[def.ttd_id] = def.facet_id;
+  });
+
+  // Insert new tag assignments with facet_id
+  const values = tagDefinitionIds.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
   const query = `
-    INSERT INTO template_tags (template_id, ttd_id, created_at, updated_at)
+    INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
     VALUES ${values}
   `;
 
   const queryParams = [];
   tagDefinitionIds.forEach(ttdId => {
-    queryParams.push(templateId, ttdId);
+    queryParams.push(templateId, ttdId, ttdToFacetMap[ttdId]);
+  });
+
+  await mysqlQueryRunner.runQueryInMaster(query, queryParams);
+
+  // Return the assigned tags
+  return await this.getTemplateTags(templateId);
+};
+
+exports.importTagsToTemplate = async function(templateId, tags) {
+  if (!tags || tags.length === 0) {
+    return [];
+  }
+
+  // First, remove existing tags for this template
+  await this.removeAllTagsFromTemplate(templateId);
+
+  // Insert new tag assignments with both ttd_id and facet_id
+  const values = tags.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
+  const query = `
+    INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
+    VALUES ${values}
+  `;
+
+  const queryParams = [];
+  tags.forEach(tag => {
+    queryParams.push(templateId, tag.ttd_id, tag.facet_id);
   });
 
   await mysqlQueryRunner.runQueryInMaster(query, queryParams);
@@ -72,25 +116,41 @@ exports.removeTagFromTemplate = async function(templateId, tagDefinitionId) {
 exports.addTagToTemplate = async function(templateId, tagDefinitionId) {
   // Check if tag is already assigned
   const existingQuery = `
-    SELECT tt_id 
-    FROM template_tags 
+    SELECT tt_id
+    FROM template_tags
     WHERE template_id = ? AND ttd_id = ?
     AND deleted_at IS NULL
   `;
 
   const existing = await mysqlQueryRunner.runQueryInSlave(existingQuery, [templateId, tagDefinitionId]);
-  
+
   if (existing.length > 0) {
     return true; // Tag already assigned
   }
 
-  // Insert new tag assignment
-  const query = `
-    INSERT INTO template_tags (template_id, ttd_id, created_at, updated_at)
-    VALUES (?, ?, NOW(), NOW())
+  // Fetch facet_id from template_tag_definitions
+  const fetchFacetQuery = `
+    SELECT facet_id
+    FROM template_tag_definitions
+    WHERE ttd_id = ?
+    AND archived_at IS NULL
   `;
 
-  await mysqlQueryRunner.runQueryInMaster(query, [templateId, tagDefinitionId]);
+  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(fetchFacetQuery, [tagDefinitionId]);
+
+  if (tagDefinitions.length === 0) {
+    throw new Error(`Tag definition ${tagDefinitionId} not found`);
+  }
+
+  const facetId = tagDefinitions[0].facet_id;
+
+  // Insert new tag assignment with facet_id
+  const query = `
+    INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
+    VALUES (?, ?, ?, NOW(), NOW())
+  `;
+
+  await mysqlQueryRunner.runQueryInMaster(query, [templateId, tagDefinitionId, facetId]);
   return true;
 };
 

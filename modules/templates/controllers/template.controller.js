@@ -2646,8 +2646,9 @@ function transformTemplateForExport(template) {
       asset_bucket: template.bodymovin_json_bucket || null
     },
 
-    // Include clips data
+    // Include clips and tags data
     clips: template.clips || [],
+    tags: template.tags || [],
 
     created_at: template.created_at
   };
@@ -2714,14 +2715,26 @@ exports.importTemplates = async function(req, res) {
           }
         };
 
-        // Process all assets in parallel
-        const [cf_r2, thumbFrame, colorVideo, maskVideo, bodymovinJson] = await Promise.all([
-          processAsset(importTemplate.cf_r2_asset, 'cf_r2'),
-          processAsset(importTemplate.thumb_frame_asset, 'thumb'),
-          processAsset(importTemplate.color_video_asset, 'color_video'),
-          processAsset(importTemplate.mask_video_asset, 'mask_video'),
-          processAsset(importTemplate.bodymovin_json_asset, 'bodymovin')
-        ]);
+        // Process assets in batches to avoid rate limiting
+        const batchSize = 3;
+        const assetJobs = [
+          { data: importTemplate.cf_r2_asset, type: 'cf_r2' },
+          { data: importTemplate.thumb_frame_asset, type: 'thumb' },
+          { data: importTemplate.color_video_asset, type: 'color_video' },
+          { data: importTemplate.mask_video_asset, type: 'mask_video' },
+          { data: importTemplate.bodymovin_json_asset, type: 'bodymovin' }
+        ];
+
+        const results = [];
+        for (let i = 0; i < assetJobs.length; i += batchSize) {
+          const batch = assetJobs.slice(i, i + batchSize);
+          const batchResults = await Promise.all(
+            batch.map(job => processAsset(job.data, job.type))
+          );
+          results.push(...batchResults);
+        }
+
+        const [cf_r2, thumbFrame, colorVideo, maskVideo, bodymovinJson] = results;
 
         // Generate unique template code based on template name
         const generateTemplateCode = (name) => {
@@ -2820,6 +2833,51 @@ exports.importTemplates = async function(req, res) {
 
         // Create template with clips
         await TemplateModel.createTemplate(templateData, importTemplate.clips || []);
+
+        // Create tags if provided
+        if (importTemplate.tags && Array.isArray(importTemplate.tags) && importTemplate.tags.length > 0) {
+          const TemplateTagsModel = require('../models/template.tags.model');
+
+          logger.info('Importing tags for template', {
+            templateId: newTemplateId,
+            templateName: importTemplate.template_name,
+            tagsCount: importTemplate.tags.length,
+            tagsData: importTemplate.tags
+          });
+
+          // Check if tags have facet_id (new format) or just ttd_id (old format)
+          const hasFacetId = importTemplate.tags.some(tag => tag.facet_id !== undefined);
+
+          if (hasFacetId) {
+            // New format: tags with facet_id - use importTagsToTemplate
+            const validTags = importTemplate.tags.filter(tag => tag.ttd_id && tag.facet_id);
+            logger.info('Using importTagsToTemplate for new format tags', {
+              templateId: newTemplateId,
+              validTagsCount: validTags.length
+            });
+            if (validTags.length > 0) {
+              await TemplateTagsModel.importTagsToTemplate(newTemplateId, validTags);
+            }
+          } else {
+            // Old format: tags with only ttd_id - use assignTagsToTemplate which will fetch facet_id
+            const tagDefinitionIds = importTemplate.tags
+              .filter(tag => tag.ttd_id)
+              .map(tag => tag.ttd_id);
+            logger.info('Using assignTagsToTemplate for old format tags', {
+              templateId: newTemplateId,
+              tagIdsCount: tagDefinitionIds.length,
+              tagIds: tagDefinitionIds
+            });
+            if (tagDefinitionIds.length > 0) {
+              await TemplateTagsModel.assignTagsToTemplate(newTemplateId, tagDefinitionIds);
+            }
+          }
+
+          logger.info('Tags imported successfully', {
+            templateId: newTemplateId,
+            templateName: importTemplate.template_name
+          });
+        }
 
         return {
           status: 'success',
