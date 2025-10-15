@@ -2582,10 +2582,12 @@ exports.exportTemplates = async function(req, res) {
     };
 
     // Set response headers for file download
+    const filename = `templates-export-${Date.now()}.json`;
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="templates-export-${Date.now()}.json"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    return res.status(HTTP_STATUS_CODES.OK).json(exportData);
+    // Send as file download (not as JSON response)
+    return res.send(JSON.stringify(exportData, null, 2));
 
   } catch (error) {
     logger.error('Error exporting templates:', { error: error.message, stack: error.stack });
