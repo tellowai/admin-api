@@ -2723,21 +2723,67 @@ exports.importTemplates = async function(req, res) {
           processAsset(importTemplate.bodymovin_json_asset, 'bodymovin')
         ]);
 
-        // Generate unique template code (alphanumeric, 6 chars)
-        const generateTemplateCode = () => {
-          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        // Generate unique template code based on template name
+        const generateTemplateCode = (name) => {
+          if (!name) return '';
+
+          // Split into words and filter out empty strings
+          const words = name.toLowerCase().split(/[\s-_]+/).filter(word => word.length > 0);
           let code = '';
-          for (let i = 0; i < 6; i++) {
-            code += chars.charAt(Math.floor(Math.random() * chars.length));
+
+          if (words.length === 0) return '';
+
+          // If single word
+          if (words.length === 1) {
+            // Take first 4 letters if available, filtering non a-z
+            code = words[0].replace(/[^a-z]/g, '').slice(0, 4);
+          } else {
+            // Take first letter of each word if it's a-z
+            code = words.map(word => {
+              const firstChar = word[0];
+              return /[a-z]/.test(firstChar) ? firstChar : '';
+            }).join('');
+
+            // If we have less than 4 letters, add more from the last word
+            if (code.length < 4) {
+              const lastWord = words[words.length - 1].replace(/[^a-z]/g, '');
+              code += lastWord.slice(1, 4 - code.length + 1);
+            }
           }
-          return code;
+
+          // Ensure code is exactly 4 characters by either truncating or taking more characters from words
+          if (code.length > 4) {
+            code = code.slice(0, 4);
+          } else if (code.length < 4 && words.length > 0) {
+            // Try to get more characters from words until we have 4
+            let currentWordIndex = 0;
+            while (code.length < 4 && currentWordIndex < words.length) {
+              const currentWord = words[currentWordIndex].replace(/[^a-z]/g, '');
+              let charIndex = code.length === 1 ? 1 : 0; // Skip first char if we already took it
+              while (code.length < 4 && charIndex < currentWord.length) {
+                code += currentWord[charIndex];
+                charIndex++;
+              }
+              currentWordIndex++;
+            }
+          }
+
+          // If still less than 4 chars, pad with random letters
+          while (code.length < 4) {
+            code += String.fromCharCode(97 + Math.floor(Math.random() * 26)); // random a-z
+          }
+
+          // Generate random number between 01-99
+          const num = String(Math.floor(Math.random() * 99) + 1).padStart(2, '0');
+
+          return (code + num).toUpperCase();
         };
 
         // Prepare template data
         const templateData = {
           template_id: newTemplateId,
           template_name: importTemplate.template_name,
-          template_code: generateTemplateCode(),
+          template_code: generateTemplateCode(importTemplate.template_name),
           template_gender: importTemplate.template_gender,
           description: importTemplate.description,
           prompt: importTemplate.prompt,
