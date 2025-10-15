@@ -2666,7 +2666,7 @@ function transformTemplateForExport(template) {
  */
 exports.importTemplates = async function(req, res) {
   try {
-    const { templates: importTemplates } = req.validatedBody;
+    const { templates: importTemplates, meta } = req.validatedBody;
 
     if (!importTemplates || importTemplates.length === 0) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
@@ -2677,6 +2677,9 @@ exports.importTemplates = async function(req, res) {
     const storage = StorageFactory.getProvider();
     const targetBucket = config.os2.r2.bucket; // Current environment bucket
     const targetPublicBucket = config.os2.r2.public.bucket;
+
+    // Extract source environment from meta
+    const sourceEnv = meta?.env || null;
 
     // Process all templates in parallel
     const templateCreationPromises = importTemplates.map(async (importTemplate) => {
@@ -2699,7 +2702,7 @@ exports.importTemplates = async function(req, res) {
               sourceKey,
               sourceBucket,
               targetBkt,
-              { keyPrefix: `templates/${assetType}` }
+              { keyPrefix: `templates/${assetType}`, sourceEnv }
             );
             return {
               key: result.key,
@@ -2711,12 +2714,27 @@ exports.importTemplates = async function(req, res) {
               templateName: importTemplate.template_name,
               error: error.message
             });
+
+            // For cross-environment imports, log more details and guidance
+            if (sourceEnv) {
+              logger.warn(`Cross-environment asset import failed for ${assetType}`, {
+                templateName: importTemplate.template_name,
+                sourceEnv,
+                sourceKey,
+                sourceBucket,
+                targetBucket: targetBkt,
+                errorType: error.code || 'SSL_ERROR',
+                guidance: 'Asset could not be imported due to SSL/access restrictions. Template created without this asset.'
+              });
+            }
+
             return null;
           }
         };
 
         // Process assets in batches to avoid rate limiting
-        const batchSize = 3;
+        // Use smaller batch size for cross-environment imports to avoid connection issues
+        const batchSize = sourceEnv ? 1 : 3;
         const assetJobs = [
           { data: importTemplate.cf_r2_asset, type: 'cf_r2' },
           { data: importTemplate.thumb_frame_asset, type: 'thumb' },
@@ -2732,6 +2750,11 @@ exports.importTemplates = async function(req, res) {
             batch.map(job => processAsset(job.data, job.type))
           );
           results.push(...batchResults);
+
+          // Add delay between batches for cross-environment imports
+          if (sourceEnv && i + batchSize < assetJobs.length) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
 
         const [cf_r2, thumbFrame, colorVideo, maskVideo, bodymovinJson] = results;
@@ -2879,10 +2902,28 @@ exports.importTemplates = async function(req, res) {
           });
         }
 
+        // Count successful asset imports
+        const assetImportSummary = {
+          cf_r2: cf_r2 ? 'success' : 'failed',
+          thumb_frame: thumbFrame ? 'success' : 'failed',
+          color_video: colorVideo ? 'success' : 'failed',
+          mask_video: maskVideo ? 'success' : 'failed',
+          bodymovin_json: bodymovinJson ? 'success' : 'failed'
+        };
+
+        const successfulAssets = Object.values(assetImportSummary).filter(s => s === 'success').length;
+        const failedAssets = Object.values(assetImportSummary).filter(s => s === 'failed').length;
+
         return {
           status: 'success',
           template_id: newTemplateId,
-          original_name: importTemplate.template_name
+          original_name: importTemplate.template_name,
+          assets: assetImportSummary,
+          assets_summary: {
+            successful: successfulAssets,
+            failed: failedAssets,
+            total: 5
+          }
         };
       } catch (error) {
         logger.error('Failed to import template', {
@@ -2901,10 +2942,21 @@ exports.importTemplates = async function(req, res) {
     // Wait for all templates to be created
     const results = await Promise.all(templateCreationPromises);
 
+    // Check if there were asset import failures
+    const templatesWithAssetFailures = results.filter(r =>
+      r.status === 'success' && r.assets_summary && r.assets_summary.failed > 0
+    );
+
     const summary = {
       total: results.length,
       successful: results.filter(r => r.status === 'success').length,
-      failed: results.filter(r => r.status === 'failed').length
+      failed: results.filter(r => r.status === 'failed').length,
+      ...(templatesWithAssetFailures.length > 0 && {
+        templates_with_asset_failures: templatesWithAssetFailures.length,
+        asset_import_note: sourceEnv
+          ? `Cross-environment import from '${sourceEnv}' encountered SSL/access issues. Templates created without some assets.`
+          : 'Some assets could not be imported.'
+      })
     };
 
     // Publish activity log commands for successful imports

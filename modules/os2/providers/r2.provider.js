@@ -15,6 +15,8 @@ const { createId } = require('@paralleldrive/cuid2');
 const path = require('path');
 const axios = require('axios');
 const https = require('https');
+const http = require('http');
+const { Readable } = require('stream');
 const log = require('../../../config/lib/logger');
 
 class R2StorageProvider extends StorageProvider {
@@ -215,6 +217,40 @@ class R2StorageProvider extends StorageProvider {
   }
 
   /**
+   * Resolve bucket name based on environment and bucket type
+   */
+  resolveBucketName(bucketIdentifier, sourceEnv = null) {
+    // If source environment is specified, resolve from cross-env config first
+    if (sourceEnv && config.os2.r2.environments && config.os2.r2.environments[sourceEnv]) {
+      const envConfig = config.os2.r2.environments[sourceEnv];
+
+      // Check if bucketIdentifier matches a generic type or specific bucket name
+      if (bucketIdentifier === 'public') {
+        return envConfig.publicBucket;
+      }
+      if (bucketIdentifier === 'private') {
+        return envConfig.privateBucket;
+      }
+
+      // Check if it matches the specific bucket names
+      if (bucketIdentifier === envConfig.publicBucket) {
+        return envConfig.publicBucket;
+      }
+      if (bucketIdentifier === envConfig.privateBucket) {
+        return envConfig.privateBucket;
+      }
+    }
+
+    // If no source environment, use current environment's bucket
+    if (bucketIdentifier === 'public') {
+      return this.publicBucket;
+    }
+
+    // Otherwise use the bucket identifier as-is (specific bucket name)
+    return bucketIdentifier;
+  }
+
+  /**
    * Copy object within R2 (same account, different buckets)
    */
   async copyWithinR2(sourceKey, sourceBucket, targetBucket, options = {}) {
@@ -222,22 +258,17 @@ class R2StorageProvider extends StorageProvider {
     const maxRetries = 3;
     let lastError;
 
+    // Resolve source bucket name once outside the loop
+    const sourceEnv = options.sourceEnv || null;
+    const sourceBucketName = this.resolveBucketName(sourceBucket, sourceEnv);
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         if (attempt > 1) {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
         }
 
-        // Map source bucket identifier to actual bucket name
-        // Handle both same-env and cross-env scenarios
-        let sourceBucketName;
-        if (sourceBucket === 'public') {
-          // Generic "public" identifier - use current environment's public bucket
-          sourceBucketName = this.publicBucket;
-        } else {
-          // Specific bucket name (for cross-environment) - use as-is
-          sourceBucketName = sourceBucket;
-        }
+        console.log(`[R2 Copy] sourceEnv: ${sourceEnv}, sourceBucket: ${sourceBucket}, resolved: ${sourceBucketName}`);
 
         // Get source object metadata
         const headCommand = new HeadObjectCommand({
@@ -245,6 +276,8 @@ class R2StorageProvider extends StorageProvider {
           Key: sourceKey
         });
         const metadata = await this.client.send(headCommand);
+
+        console.log(`[R2 Copy Success] Found object in ${sourceBucketName}/${sourceKey}`);
 
         // Generate unique filename for target
         const uniqueId = createId();
@@ -282,14 +315,22 @@ class R2StorageProvider extends StorageProvider {
         };
       } catch (error) {
         lastError = error;
+        console.log(`[R2 Copy Error] Attempt ${attempt}/${maxRetries} failed:`, {
+          errorName: error.name,
+          errorMessage: error.message,
+          errorCode: error.$metadata?.httpStatusCode,
+          sourceBucket: sourceBucketName,
+          sourceKey
+        });
       }
     }
 
     log.error('Error copying within R2 after all retries', {
       error: lastError.message,
       sourceKey,
-      sourceBucket,
-      targetBucket
+      sourceBucket: `${sourceBucket} (resolved: ${sourceBucketName})`,
+      targetBucket,
+      sourceEnv
     });
     throw lastError;
   }
@@ -302,8 +343,24 @@ class R2StorageProvider extends StorageProvider {
       // Check if this is an intra-R2 copy (same account, different buckets)
       const isIntraR2Copy = !(/^https?:\/\//i.test(sourceUrl));
 
-      if (isIntraR2Copy) {
+      // For cross-environment imports with sourceEnv specified, use HTTP download instead of S3 copy
+      // to avoid permission issues
+      const sourceEnv = options.sourceEnv || null;
+      const isCrossEnvironmentImport = sourceEnv && config.os2.r2.environments && config.os2.r2.environments[sourceEnv];
+
+      if (isIntraR2Copy && !isCrossEnvironmentImport) {
+        // Same environment R2 copy - use S3 CopyObject
         return await this.copyWithinR2(sourceUrl, sourceBucket, targetBucket, options);
+      } else if (isIntraR2Copy && isCrossEnvironmentImport) {
+        // Cross-environment import - convert to public URL and download
+        const envConfig = config.os2.r2.environments[sourceEnv];
+        if (sourceBucket === 'public' && envConfig.publicBucketUrl) {
+          sourceUrl = `${envConfig.publicBucketUrl}/${sourceUrl}`;
+          console.log(`[Cross-Env Import] Converting to public URL: ${sourceUrl}`);
+        } else {
+          // Fallback to S3 copy (will likely fail with 403)
+          return await this.copyWithinR2(sourceUrl, sourceBucket, targetBucket, options);
+        }
       }
 
       const fileName = path.basename(sourceUrl.split('?')[0]);
@@ -333,36 +390,78 @@ class R2StorageProvider extends StorageProvider {
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const response = await axios.get(downloadUrl, {
-            responseType: 'arraybuffer',
-            timeout: 60000,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': '*/*',
-              'Accept-Encoding': 'gzip, deflate, br',
-              'Accept-Language': 'en-US,en;q=0.9',
-              'Cache-Control': 'no-cache',
-              'Connection': 'keep-alive',
-              'Pragma': 'no-cache',
-              'Sec-Fetch-Dest': 'empty',
-              'Sec-Fetch-Mode': 'cors',
-              'Sec-Fetch-Site': 'same-origin'
-            },
-            httpsAgent: new https.Agent({
-              rejectUnauthorized: false,
-              keepAlive: false,
-              minVersion: 'TLSv1.2',
-              maxVersion: 'TLSv1.3'
-            }),
-            maxRedirects: 5,
-            validateStatus: (status) => status >= 200 && status < 300
-          });
+          // For cross-environment imports, use native https.get with custom agent
+          if (isCrossEnvironmentImport) {
+            buffer = await new Promise((resolve, reject) => {
+              const requestOptions = {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                  'Accept': '*/*'
+                },
+                rejectUnauthorized: false,
+                timeout: 120000
+              };
 
-          buffer = Buffer.from(response.data);
-          contentType = response.headers['content-type'];
+              https.get(downloadUrl, requestOptions, (response) => {
+                // Handle redirects
+                if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                  https.get(response.headers.location, requestOptions, (redirectResponse) => {
+                    if (redirectResponse.statusCode !== 200) {
+                      reject(new Error(`HTTP ${redirectResponse.statusCode}: ${redirectResponse.statusMessage}`));
+                      return;
+                    }
+                    contentType = redirectResponse.headers['content-type'];
+                    const chunks = [];
+                    redirectResponse.on('data', chunk => chunks.push(chunk));
+                    redirectResponse.on('end', () => resolve(Buffer.concat(chunks)));
+                    redirectResponse.on('error', reject);
+                  }).on('error', reject);
+                  return;
+                }
+
+                if (response.statusCode !== 200) {
+                  reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+                  return;
+                }
+
+                contentType = response.headers['content-type'];
+                const chunks = [];
+                response.on('data', chunk => chunks.push(chunk));
+                response.on('end', () => resolve(Buffer.concat(chunks)));
+                response.on('error', reject);
+              }).on('error', reject);
+            });
+          } else {
+            // Use axios for same-environment downloads
+            const response = await axios.get(downloadUrl, {
+              responseType: 'arraybuffer',
+              timeout: 120000,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Accept': '*/*'
+              },
+              httpsAgent: new https.Agent({
+                keepAlive: true,
+                keepAliveMsecs: 1000,
+                maxSockets: 50
+              }),
+              maxRedirects: 5
+            });
+
+            buffer = Buffer.from(response.data);
+            contentType = response.headers['content-type'];
+          }
+
           break; // Success, exit retry loop
         } catch (err) {
           lastError = err;
+          console.log(`[Download Error] Attempt ${attempt}/${maxRetries}:`, {
+            errorName: err.name,
+            errorMessage: err.message,
+            errorCode: err.code,
+            statusCode: err.response?.status,
+            downloadUrl: downloadUrl.substring(0, 100) + '...'
+          });
           if (attempt < maxRetries) {
             const delay = 2000 * attempt;
             await new Promise(resolve => setTimeout(resolve, delay));
