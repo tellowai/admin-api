@@ -9,6 +9,7 @@ const config = require('../../../config/config');
 const coreUtils = require('../../core/controllers/utils.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 
 
@@ -92,7 +93,7 @@ exports.createNewAdminUserWithSelectRoles = async function (req, res, next) {
 exports.deleteAdminUser = async function (req, res, next) {
   try {
     const { userId } = req.params;
-    const { userId: adminUserId } = req.adminUser;
+    const { userId: adminUserId } = req.user;
 
     if(userId === adminUserId) {
       throw {
@@ -106,7 +107,7 @@ exports.deleteAdminUser = async function (req, res, next) {
 
     // publish an event to kafka - activitylog
     const activityLogObj =  { 
-      adminUserId: req.adminUser.userId,
+      adminUserId: req.user.userId,
       entityType: 'ADMIN_USER',
       actionName: 'DELETE_ADMIN_USER', 
       entityId: userId,
@@ -164,7 +165,7 @@ exports.getAdminUsersList = async function (req, res) {
 exports.bulkRemoveAdminUsers = async function (req, res, next) {
   try {
     const { user_ids: userIds } = req.validatedBody;
-    const { userId: adminUserId } = req.adminUser;
+    const { userId: adminUserId } = req.user;
     let finalUserIds = userIds;
 
     if(userIds.length && userIds.includes(adminUserId)) {
@@ -176,7 +177,7 @@ exports.bulkRemoveAdminUsers = async function (req, res, next) {
 
       // publish an event to kafka - activitylog
       const activityLogObj =  { 
-        adminUserId: req.adminUser.userId,
+        adminUserId: req.user.userId,
         entityType: 'ADMIN_USER',
         actionName: 'BULK_DELETE_ADMIN_USERS', 
         entityId: 'BULK',
