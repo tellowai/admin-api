@@ -1,5 +1,5 @@
 const kafkaCtrl = require('./kafka.controller');
-const config = require('../../../config/config');
+const { TOPICS } = require('../constants/kafka.events.config');
 
 
 exports.publishNewAdminActivityLog = async function (data) {
@@ -14,11 +14,12 @@ exports.publishNewAdminActivityLog = async function (data) {
         action_name: actionName,
         additional_data: additionalData
     };
-    const messages = [{ value: JSON.stringify(activityLogObj) }];
+    const messages = [{ value: activityLogObj }];
 
-    kafkaCtrl.sendMessage(
-        config.kafka.topicNames.adminEventsTopic,
-        messages
+    await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        messages,
+        'create_admin_activity_log'
     );
 
     return 1;
