@@ -51,6 +51,16 @@ exports.getAllLogs = async function (req, res) {
         .filter(log => log.entity_type === 'PHOTO_TUNING_SESSIONS')
         .map(log => log.entity_id);
       
+      const nicheEntityIds = allLogs
+        .filter(log => log.entity_type === 'NICHES')
+        .map(log => log.entity_id);
+      
+      const nicheDataFieldDefinitionEntityIds = allLogs
+        .filter(log => log.entity_type === 'NICHE_DATA_FIELD_DEFINITIONS')
+        .map(log => log.entity_id);
+      
+      const allNicheIds = [...new Set([...nicheEntityIds, ...nicheDataFieldDefinitionEntityIds])];
+      
       const allCharacterIds = [...new Set([...characterEntityIds, ...photoTuningSessionEntityIds])];
       
       const allUserIds = [...new Set([...userIds, ...adminUserEntityIds])];
@@ -62,6 +72,7 @@ exports.getAllLogs = async function (req, res) {
       let exploreSectionItemDetailsArr = [];
       let packDetailsArr = [];
       let characterDetailsArr = [];
+      let nicheDetailsArr = [];
 
       if (allUserIds.length > 0) {
         userDetailsArr = await ActivitylogDbo.getUserDetailsByIds(allUserIds);
@@ -89,6 +100,10 @@ exports.getAllLogs = async function (req, res) {
 
       if (allCharacterIds.length > 0) {
         characterDetailsArr = await ActivitylogDbo.getCharacterDetailsByIds(allCharacterIds);
+      }
+
+      if (allNicheIds.length > 0) {
+        nicheDetailsArr = await ActivitylogDbo.getNicheDetailsByIds(allNicheIds);
       }
       
       allLogs.forEach(log => {
@@ -150,6 +165,21 @@ exports.getAllLogs = async function (req, res) {
           const photoTuningSession = characterDetailsArr.find(character => character.user_character_id == log.entity_id);
           if (photoTuningSession) {
             log.photoTuningSession = photoTuningSession;
+          }
+        }
+
+        if (log.entity_type === 'NICHES') {
+          const niche = nicheDetailsArr.find(niche => niche.niche_id == log.entity_id);
+          if (niche) {
+            log.niche = niche;
+          }
+        }
+
+        if (log.entity_type === 'NICHE_DATA_FIELD_DEFINITIONS') {
+          // For field definitions, entity_id is the niche_id
+          const niche = nicheDetailsArr.find(niche => niche.niche_id == log.entity_id);
+          if (niche) {
+            log.niche = niche;
           }
         }
       });

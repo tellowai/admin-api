@@ -130,3 +130,21 @@ exports.getCharacterDetailsByIds = async function(characterIds) {
     
     return await mysqlQueryRunner.runQueryInMaster(query, values);
 };
+
+exports.getNicheDetailsByIds = async function(nicheIds) {
+    const query = `
+        SELECT 
+            niche_id,
+            niche_name,
+            slug,
+            display_order,
+            is_active,
+            created_at,
+            updated_at
+        FROM template_niches 
+        WHERE niche_id IN (?)
+    `;
+    const values = [nicheIds];
+    
+    return await mysqlQueryRunner.runQueryInMaster(query, values);
+};
