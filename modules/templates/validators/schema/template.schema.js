@@ -43,10 +43,16 @@ const clipSchema = Joi.object({
 const customTextInputFieldSchema = Joi.object({
   layer_name: Joi.string().required(),
   user_input_field_name: Joi.string().required(),
-  input_field_type: Joi.string().valid('text', 'long_text', 'date', 'datetime', 'time').required(),
+  input_field_type: Joi.string().valid('text', 'short_text', 'long_text', 'date', 'datetime', 'time').required(),
   default_text: Joi.string().allow('', null).optional(),
   linked_layer_names: Joi.array().items(Joi.string()).default([]).optional(),
-  format: Joi.string().allow(null).optional()
+  format: Joi.string().allow(null).optional(),
+  nfd_field_code: Joi.string().allow(null).optional(), // Matched field code from niche data field definitions
+  new_field: Joi.object({
+    field_code: Joi.string().required(),
+    field_label: Joi.string().required(),
+    field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
+  }).allow(null).optional() // New field definition (will be removed before storing)
 });
 
 // Template tag schema
@@ -91,6 +97,7 @@ const createTemplateSchema = Joi.object().keys({
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
+  niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_json: Joi.array().items(
     Joi.object({
@@ -147,6 +154,7 @@ const updateTemplateSchema = Joi.object().keys({
   credits: Joi.number().integer().min(1).optional(),
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
+  niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   additional_data: Joi.object().allow(null).optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_json: Joi.array().items(

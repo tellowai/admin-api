@@ -4,6 +4,7 @@ const versionConfig = require('../../version');
 const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const NicheCtrl = require('../controllers/niche.controller');
 const NicheFieldDefinitionCtrl = require('../controllers/niche.data.field.definition.controller');
+const NicheFieldMatchingCtrl = require('../controllers/niche.field.matching.controller');
 const NicheValidator = require('../validators/niche.validator');
 
 module.exports = function(app) {
@@ -90,6 +91,15 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     NicheValidator.validateBulkArchiveFieldDefinitionsData,
     NicheFieldDefinitionCtrl.bulkArchiveNicheDataFieldDefinitions
+  );
+
+  // Match custom text input fields with niche field definitions
+  app.route(
+    versionConfig.routePrefix + '/niches/match-fields'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    NicheValidator.validateMatchCustomTextInputFieldsData,
+    NicheFieldMatchingCtrl.matchCustomTextInputFields
   );
 };
 

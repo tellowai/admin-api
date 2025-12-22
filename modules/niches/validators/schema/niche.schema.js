@@ -49,9 +49,23 @@ const bulkArchiveFieldDefinitionsSchema = Joi.object().keys({
   ndfd_ids: Joi.array().items(Joi.number().integer().positive()).min(1).required()
 });
 
+const matchCustomTextInputFieldsSchema = Joi.object().keys({
+  niche_slug: Joi.string().max(50).required(),
+  custom_text_input_fields: Joi.array().items(
+    Joi.object().keys({
+      layer_name: Joi.string().required(),
+      default_text: Joi.string().required(),
+      input_field_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
+      linked_layer_names: Joi.array().items(Joi.string()).optional(),
+      user_input_field_name: Joi.string().required()
+    })
+  ).min(1).required()
+});
+
 exports.createNicheSchema = createNicheSchema;
 exports.updateNicheSchema = updateNicheSchema;
 exports.bulkCreateFieldDefinitionsSchema = bulkCreateFieldDefinitionsSchema;
 exports.bulkUpdateFieldDefinitionsSchema = bulkUpdateFieldDefinitionsSchema;
 exports.bulkArchiveFieldDefinitionsSchema = bulkArchiveFieldDefinitionsSchema;
+exports.matchCustomTextInputFieldsSchema = matchCustomTextInputFieldsSchema;
 

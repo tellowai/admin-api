@@ -17,6 +17,8 @@ const config = require('../../../config/config');
 const fetch = require('node-fetch');
 const AiModelModel = require('../../ai-models/models/ai-model.model');
 const TemplateRedisService = require('../services/template.redis.service');
+const NicheModel = require('../../niches/models/niche.model');
+const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.field.definition.model');
 
 // Timeout for fetching Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -942,6 +944,153 @@ exports.searchTemplates = async function(req, res) {
 }; 
 
 /**
+ * Process custom_text_input_fields to create new niche data field definitions
+ * and remove new_field from the data before storing
+ * @param {Array} customTextInputFields - Array of custom text input field objects
+ */
+async function processNewFieldsInCustomTextInputFields(customTextInputFields) {
+  if (!Array.isArray(customTextInputFields)) {
+    return;
+  }
+
+  // Group fields by niche_slug (we'll need to get niche_id from slug)
+  const fieldsByNiche = {};
+  
+  for (const field of customTextInputFields) {
+    if (field.new_field) {
+      // Extract niche_slug from the field or use a default
+      // Note: In the current implementation, niche_slug is not in the field object
+      // We'll need to get it from the template or pass it separately
+      // For now, we'll skip this and handle it differently
+      // This function will be called with niche_slug context
+    }
+  }
+
+  // Process each field with new_field
+  for (let i = 0; i < customTextInputFields.length; i++) {
+    const field = customTextInputFields[i];
+    if (field.new_field) {
+      try {
+        // Get niche_id from niche_slug (we need to pass niche_slug to this function)
+        // For now, we'll need to modify the function signature
+        // This is a placeholder - we'll need to get niche_slug from the template data
+        logger.warn('processNewFieldsInCustomTextInputFields: new_field found but niche_slug not available in field object', {
+          fieldIndex: i,
+          newField: field.new_field
+        });
+        
+        // Remove new_field from the field object before storing
+        delete field.new_field;
+      } catch (error) {
+        logger.error('Error processing new field:', {
+          error: error.message,
+          fieldIndex: i,
+          newField: field.new_field
+        });
+        // Remove new_field even on error to prevent storing it
+        delete field.new_field;
+      }
+    }
+  }
+}
+
+/**
+ * Process new fields in custom_text_input_fields with niche_slug context
+ * @param {Array} customTextInputFields - Array of custom text input field objects
+ * @param {String} nicheSlug - Niche slug to create fields for
+ */
+async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
+  if (!Array.isArray(customTextInputFields) || !nicheSlug) {
+    return;
+  }
+
+  try {
+    // Get niche by slug
+    const niche = await NicheModel.getNicheBySlug(nicheSlug);
+    if (!niche) {
+      logger.warn('Niche not found for slug:', { nicheSlug });
+      // Remove new_field from all fields
+      customTextInputFields.forEach(field => {
+        if (field.new_field) {
+          delete field.new_field;
+        }
+      });
+      return;
+    }
+
+    const nicheId = niche.niche_id;
+    const newFieldsToCreate = [];
+
+    // Collect all new fields
+    for (let i = 0; i < customTextInputFields.length; i++) {
+      const field = customTextInputFields[i];
+      if (field.new_field) {
+        newFieldsToCreate.push({
+          niche_id: nicheId,
+          field_code: field.new_field.field_code,
+          field_label: field.new_field.field_label,
+          field_data_type: field.new_field.field_data_type,
+          is_visible_in_first_time_flow: 0,
+          display_order: i + 1
+        });
+        
+        // Replace new_field with nfd_field_code after creation
+        // We'll update this after bulk create
+      }
+    }
+
+    // Bulk create new field definitions
+    if (newFieldsToCreate.length > 0) {
+      const createResult = await NicheDataFieldDefinitionModel.bulkCreateNicheDataFieldDefinitions(newFieldsToCreate);
+      
+      // Fetch created fields by their IDs to get field_codes
+      const createdFieldIds = createResult.insertIds || [];
+      const createdFields = [];
+      for (const fieldId of createdFieldIds) {
+        const createdField = await NicheDataFieldDefinitionModel.getNicheDataFieldDefinitionById(fieldId);
+        if (createdField) {
+          createdFields.push(createdField);
+        }
+      }
+      
+      // Update custom_text_input_fields to use nfd_field_code instead of new_field
+      let createdIndex = 0;
+      for (let i = 0; i < customTextInputFields.length; i++) {
+        const field = customTextInputFields[i];
+        if (field.new_field) {
+          // Get the created field's field_code
+          const createdField = createdFields[createdIndex];
+          if (createdField) {
+            field.nfd_field_code = createdField.field_code;
+          }
+          // Remove new_field
+          delete field.new_field;
+          createdIndex++;
+        }
+      }
+      
+      logger.info('Created new niche data field definitions', {
+        nicheSlug,
+        nicheId,
+        count: createdFields.length
+      });
+    }
+  } catch (error) {
+    logger.error('Error processing new fields with niche slug:', {
+      error: error.message,
+      nicheSlug,
+      stack: error.stack
+    });
+    // Remove new_field from all fields on error
+    customTextInputFields.forEach(field => {
+      if (field.new_field) {
+        delete field.new_field;
+      }
+    });
+  }
+}
+
+/**
  * @api {post} /templates Create template
  * @apiVersion 1.0.0
  * @apiName CreateTemplate
@@ -1119,8 +1268,22 @@ exports.createTemplate = async function(req, res) {
     // Extract clips data and template_tag_ids for transaction
     const clips = templateData.clips;
     const templateTagIds = templateData.template_tag_ids;
+    const nicheSlug = templateData.niche_slug; // Extract niche_slug if provided
     delete templateData.clips;
     delete templateData.template_tag_ids;
+    delete templateData.niche_slug; // Don't store niche_slug in template
+
+    // Process custom_text_input_fields to handle new fields
+    if (templateData.custom_text_input_fields && Array.isArray(templateData.custom_text_input_fields) && nicheSlug) {
+      await processNewFieldsWithNicheSlug(templateData.custom_text_input_fields, nicheSlug);
+    } else if (templateData.custom_text_input_fields && Array.isArray(templateData.custom_text_input_fields)) {
+      // Remove new_field even if no niche_slug (to prevent storing it)
+      templateData.custom_text_input_fields.forEach(field => {
+        if (field.new_field) {
+          delete field.new_field;
+        }
+      });
+    }
 
     await TemplateModel.createTemplate(templateData, clips);
 
@@ -2232,7 +2395,21 @@ exports.updateTemplate = async function(req, res) {
 
     // Extract template_tag_ids for separate handling
     const templateTagIds = templateData.template_tag_ids;
+    const nicheSlug = templateData.niche_slug; // Extract niche_slug if provided
     delete templateData.template_tag_ids;
+    delete templateData.niche_slug; // Don't store niche_slug in template
+
+    // Process custom_text_input_fields to handle new fields
+    if (templateData.custom_text_input_fields && Array.isArray(templateData.custom_text_input_fields) && nicheSlug) {
+      await processNewFieldsWithNicheSlug(templateData.custom_text_input_fields, nicheSlug);
+    } else if (templateData.custom_text_input_fields && Array.isArray(templateData.custom_text_input_fields)) {
+      // Remove new_field even if no niche_slug (to prevent storing it)
+      templateData.custom_text_input_fields.forEach(field => {
+        if (field.new_field) {
+          delete field.new_field;
+        }
+      });
+    }
     
     let updated;
     if (hasClips) {
