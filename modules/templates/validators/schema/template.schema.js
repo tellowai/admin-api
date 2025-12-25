@@ -66,6 +66,7 @@ const createTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(9).required(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').required(),
+  template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation),
   prompt: Joi.string().allow('').when('template_output_type', {
@@ -128,6 +129,7 @@ const updateTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(255).optional(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
+  template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation).optional(),
   prompt: Joi.string().allow('').optional(),

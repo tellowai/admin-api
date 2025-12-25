@@ -10,7 +10,7 @@ module.exports = {
   DEFAULT_MODEL_INVOCATION_USD: 0.02,
   // Non-AI template base prices
   NON_AI_IMAGE_BASE_CREDITS: 1,
-  NON_AI_VIDEO_BASE_CREDITS: 285,
+  NON_AI_VIDEO_BASE_CREDITS: 50,
   // Heuristics for estimating resource usage
   DEFAULT_IMAGE_MEGAPIXELS: 1,
   DEFAULT_VIDEO_SEGMENT_SECONDS: 5
