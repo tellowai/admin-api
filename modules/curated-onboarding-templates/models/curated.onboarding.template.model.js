@@ -92,6 +92,7 @@ exports.getTemplatesByIds = async function(templateIds) {
       template_code,
       template_gender,
       template_output_type,
+      cf_r2_key,
       cf_r2_url,
       credits
     FROM templates
@@ -212,6 +213,23 @@ exports.bulkArchiveByTemplateIds = async function(templateIds) {
   `;
   
   const result = await mysqlQueryRunner.runQueryInMaster(query, templateIds);
+  return result.affectedRows;
+};
+
+exports.bulkUpdateCuratedOnboardingTemplates = async function(cotIds, isActive) {
+  if (!cotIds || cotIds.length === 0) {
+    return 0;
+  }
+  
+  const placeholders = cotIds.map(() => '?').join(',');
+  const query = `
+    UPDATE curated_onboarding_templates
+    SET is_active = ?, updated_at = CURRENT_TIMESTAMP(3)
+    WHERE cot_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+  
+  const result = await mysqlQueryRunner.runQueryInMaster(query, [isActive, ...cotIds]);
   return result.affectedRows;
 };
 

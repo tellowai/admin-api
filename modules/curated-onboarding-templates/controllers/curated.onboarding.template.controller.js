@@ -5,6 +5,7 @@ const CuratedOnboardingTemplateModel = require('../models/curated.onboarding.tem
 const CuratedOnboardingTemplateErrorHandler = require('../middlewares/curated.onboarding.template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
+const config = require('../../../config/config');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 
@@ -50,6 +51,16 @@ class CuratedOnboardingTemplateController {
           return null;
         }
         
+        // Generate R2 URL for template thumbnail (same logic as templates controller)
+        let r2_url = null;
+        if (template) {
+          if (template.cf_r2_key) {
+            r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+          } else {
+            r2_url = template.cf_r2_url;
+          }
+        }
+        
         return {
           cot_id: curatedTemplate.cot_id,
           template_id: curatedTemplate.template_id,
@@ -60,6 +71,7 @@ class CuratedOnboardingTemplateController {
           template_code: template?.template_code || null,
           template_gender: template?.template_gender || null,
           template_output_type: template?.template_output_type || null,
+          r2_url: r2_url,
           cf_r2_url: template?.cf_r2_url || null,
           credits: template?.credits || null
         };
@@ -359,6 +371,50 @@ class CuratedOnboardingTemplateController {
       });
     } catch (error) {
       logger.error('Error bulk archiving curated onboarding templates by template IDs:', { 
+        error: error.message, 
+        stack: error.stack 
+      });
+      CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
+    }
+  }
+
+  static async bulkUpdateCuratedOnboardingTemplates(req, res) {
+    try {
+      const { cot_ids, is_active } = req.validatedBody;
+      
+      if (!cot_ids || cot_ids.length === 0) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'cot_ids array is required and cannot be empty'
+        });
+      }
+      
+      const updatedCount = await CuratedOnboardingTemplateModel.bulkUpdateCuratedOnboardingTemplates(
+        cot_ids,
+        is_active
+      );
+      
+      // Publish activity log command
+      await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        [{
+          value: { 
+            admin_user_id: req.user.userId,
+            entity_type: 'CURATED_ONBOARDING_TEMPLATES',
+            action_name: 'BULK_UPDATE_CURATED_ONBOARDING_TEMPLATES', 
+            entity_id: cot_ids.join(',')
+          }
+        }],
+        'create_admin_activity_log'
+      );
+      
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        message: `Curated onboarding templates ${is_active === 1 ? 'activated' : 'deactivated'} successfully`,
+        data: {
+          updated_count: updatedCount
+        }
+      });
+    } catch (error) {
+      logger.error('Error bulk updating curated onboarding templates:', { 
         error: error.message, 
         stack: error.stack 
       });

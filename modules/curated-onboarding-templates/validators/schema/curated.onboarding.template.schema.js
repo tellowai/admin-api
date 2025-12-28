@@ -25,9 +25,15 @@ const bulkArchiveByTemplateIdsSchema = Joi.object().keys({
   template_ids: Joi.array().items(Joi.string().uuid()).min(1).max(100).required()
 });
 
+const bulkUpdateCuratedOnboardingTemplatesSchema = Joi.object().keys({
+  cot_ids: Joi.array().items(Joi.number().integer().positive()).min(1).max(100).required(),
+  is_active: Joi.number().integer().valid(0, 1).required()
+});
+
 exports.createCuratedOnboardingTemplateSchema = createCuratedOnboardingTemplateSchema;
 exports.updateCuratedOnboardingTemplateSchema = updateCuratedOnboardingTemplateSchema;
 exports.bulkCreateCuratedOnboardingTemplatesSchema = bulkCreateCuratedOnboardingTemplatesSchema;
 exports.bulkArchiveCuratedOnboardingTemplatesSchema = bulkArchiveCuratedOnboardingTemplatesSchema;
 exports.bulkArchiveByTemplateIdsSchema = bulkArchiveByTemplateIdsSchema;
+exports.bulkUpdateCuratedOnboardingTemplatesSchema = bulkUpdateCuratedOnboardingTemplatesSchema;
 

@@ -74,5 +74,14 @@ module.exports = function(app) {
     CuratedOnboardingTemplateValidator.validateBulkArchiveByTemplateIdsData,
     CuratedOnboardingTemplateCtrl.bulkArchiveByTemplateIds
   );
+
+  // Bulk update curated onboarding templates (active/inactive)
+  app.route(
+    versionConfig.routePrefix + '/curated-onboarding-templates/bulk/update'
+  ).patch(
+    AuthMiddleware.isAdminUser,
+    CuratedOnboardingTemplateValidator.validateBulkUpdateCuratedOnboardingTemplatesData,
+    CuratedOnboardingTemplateCtrl.bulkUpdateCuratedOnboardingTemplates
+  );
 };
 
