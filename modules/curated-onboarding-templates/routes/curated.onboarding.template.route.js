@@ -23,32 +23,7 @@ module.exports = function(app) {
     CuratedOnboardingTemplateCtrl.createCuratedOnboardingTemplate
   );
 
-  // Get curated onboarding template by ID
-  app.route(
-    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId'
-  ).get(
-    AuthMiddleware.isAdminUser,
-    CuratedOnboardingTemplateCtrl.getCuratedOnboardingTemplate
-  );
-
-  // Update curated onboarding template by ID
-  app.route(
-    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId'
-  ).patch(
-    AuthMiddleware.isAdminUser,
-    CuratedOnboardingTemplateValidator.validateUpdateCuratedOnboardingTemplateData,
-    CuratedOnboardingTemplateCtrl.updateCuratedOnboardingTemplate
-  );
-
-  // Archive curated onboarding template by ID
-  app.route(
-    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId/archive'
-  ).post(
-    AuthMiddleware.isAdminUser,
-    CuratedOnboardingTemplateCtrl.archiveCuratedOnboardingTemplate
-  );
-
-  // Bulk create curated onboarding templates
+  // Bulk create curated onboarding templates (must come before :cotId routes)
   app.route(
     versionConfig.routePrefix + '/curated-onboarding-templates/bulk'
   ).post(
@@ -57,7 +32,7 @@ module.exports = function(app) {
     CuratedOnboardingTemplateCtrl.bulkCreateCuratedOnboardingTemplates
   );
 
-  // Bulk archive curated onboarding templates by cot_ids
+  // Bulk archive curated onboarding templates by cot_ids (must come before :cotId/archive)
   app.route(
     versionConfig.routePrefix + '/curated-onboarding-templates/bulk/archive'
   ).post(
@@ -82,6 +57,31 @@ module.exports = function(app) {
     AuthMiddleware.isAdminUser,
     CuratedOnboardingTemplateValidator.validateBulkUpdateCuratedOnboardingTemplatesData,
     CuratedOnboardingTemplateCtrl.bulkUpdateCuratedOnboardingTemplates
+  );
+
+  // Get curated onboarding template by ID
+  app.route(
+    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId'
+  ).get(
+    AuthMiddleware.isAdminUser,
+    CuratedOnboardingTemplateCtrl.getCuratedOnboardingTemplate
+  );
+
+  // Update curated onboarding template by ID
+  app.route(
+    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId'
+  ).patch(
+    AuthMiddleware.isAdminUser,
+    CuratedOnboardingTemplateValidator.validateUpdateCuratedOnboardingTemplateData,
+    CuratedOnboardingTemplateCtrl.updateCuratedOnboardingTemplate
+  );
+
+  // Archive curated onboarding template by ID
+  app.route(
+    versionConfig.routePrefix + '/curated-onboarding-templates/:cotId/archive'
+  ).post(
+    AuthMiddleware.isAdminUser,
+    CuratedOnboardingTemplateCtrl.archiveCuratedOnboardingTemplate
   );
 };
 
