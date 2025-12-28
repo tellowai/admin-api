@@ -23,6 +23,8 @@ exports.listTemplates = async function(pagination) {
       video_uploads_required,
       image_uploads_json,
       video_uploads_json,
+      image_input_fields_json,
+      niche_id,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -93,6 +95,8 @@ exports.listArchivedTemplates = async function(pagination) {
       video_uploads_required,
       image_uploads_json,
       video_uploads_json,
+      image_input_fields_json,
+      niche_id,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -220,7 +224,7 @@ exports.createTemplate = async function(templateData, clips = null) {
         if (value !== undefined) {
           fields.push(key);
           values.push(value === null ? null : 
-            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
+            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ? 
             JSON.stringify(value) : value);
           placeholders.push('?');
         }
@@ -290,7 +294,7 @@ exports.updateTemplate = async function(templateId, templateData) {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
       values.push(value === null ? null : 
-        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
+        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ? 
         JSON.stringify(value) : value);
     }
   });
@@ -396,6 +400,8 @@ exports.getTemplateById = async function(templateId) {
       video_uploads_required,
       image_uploads_json,
       video_uploads_json,
+      image_input_fields_json,
+      niche_id,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -444,6 +450,8 @@ exports.getTemplateByCode = async function(templateCode) {
       video_uploads_required,
       image_uploads_json,
       video_uploads_json,
+      image_input_fields_json,
+      niche_id,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,

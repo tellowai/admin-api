@@ -114,6 +114,15 @@ const createTemplateSchema = Joi.object().keys({
       gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
     })
   ).allow(null).optional(),
+  image_input_fields_json: Joi.array().items(
+    Joi.object({
+      image_id: Joi.string().required(),
+      layer_name: Joi.string().required(),
+      field_code: Joi.string().required(),
+      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
+    })
+  ).allow(null).optional(),
+  niche_id: Joi.number().integer().positive().allow(null).optional(),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
   clips: Joi.array()
     .items(clipSchema)
@@ -173,6 +182,15 @@ const updateTemplateSchema = Joi.object().keys({
       gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
     })
   ).allow(null).optional(),
+  image_input_fields_json: Joi.array().items(
+    Joi.object({
+      image_id: Joi.string().required(),
+      layer_name: Joi.string().required(),
+      field_code: Joi.string().required(),
+      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
+    })
+  ).allow(null).optional(),
+  niche_id: Joi.number().integer().positive().allow(null).optional(),
   clips: Joi.array().items(clipSchema).optional()
 });
 
