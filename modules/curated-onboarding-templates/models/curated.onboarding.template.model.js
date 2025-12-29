@@ -147,38 +147,62 @@ exports.archiveCuratedOnboardingTemplate = async function(cotId) {
 
 exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isActive = 1) {
   if (!templateIds || templateIds.length === 0) {
-    return [];
+    return {
+      inserted: 0,
+      skipped: 0,
+      unarchived: 0,
+      existingIds: []
+    };
   }
   
-  // Check for existing templates to avoid duplicates
+  // Check for existing templates (including archived ones) to avoid duplicates
   const placeholders = templateIds.map(() => '?').join(',');
   const checkQuery = `
-    SELECT template_id
+    SELECT template_id, archived_at
     FROM curated_onboarding_templates
     WHERE template_id IN (${placeholders})
-    AND archived_at IS NULL
   `;
   
   const existing = await mysqlQueryRunner.runQueryInSlave(checkQuery, templateIds);
   const existingIds = existing.map(e => e.template_id);
-  const newIds = templateIds.filter(id => !existingIds.includes(id));
+  const archivedIds = existing.filter(e => e.archived_at !== null).map(e => e.template_id);
+  const activeIds = existing.filter(e => e.archived_at === null).map(e => e.template_id);
   
-  if (newIds.length === 0) {
-    return [];
+  // Unarchive archived templates and update is_active
+  let unarchivedCount = 0;
+  if (archivedIds.length > 0) {
+    const unarchivePlaceholders = archivedIds.map(() => '?').join(',');
+    const unarchiveQuery = `
+      UPDATE curated_onboarding_templates
+      SET archived_at = NULL, is_active = ?, updated_at = CURRENT_TIMESTAMP(3)
+      WHERE template_id IN (${unarchivePlaceholders})
+      AND archived_at IS NOT NULL
+    `;
+    const unarchiveResult = await mysqlQueryRunner.runQueryInMaster(unarchiveQuery, [isActive, ...archivedIds]);
+    unarchivedCount = unarchiveResult.affectedRows;
   }
   
-  // Bulk insert
-  const values = newIds.map(id => [id, isActive]);
-  const insertQuery = `
-    INSERT INTO curated_onboarding_templates (template_id, is_active)
-    VALUES ?
-  `;
+  // Filter out all existing templates (both active and archived)
+  const newIds = templateIds.filter(id => !existingIds.includes(id));
   
-  const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, [values]);
+  // Bulk insert only new templates
+  let insertedCount = 0;
+  if (newIds.length > 0) {
+    const values = newIds.map(id => [id, isActive]);
+    const insertQuery = `
+      INSERT INTO curated_onboarding_templates (template_id, is_active)
+      VALUES ?
+    `;
+    
+    const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, [values]);
+    insertedCount = newIds.length;
+  }
+  
   return {
-    inserted: newIds.length,
-    skipped: existingIds.length,
-    existingIds: existingIds
+    inserted: insertedCount,
+    skipped: activeIds.length, // Already active templates
+    unarchived: unarchivedCount, // Templates that were archived and unarchived
+    existingIds: activeIds
   };
 };
 

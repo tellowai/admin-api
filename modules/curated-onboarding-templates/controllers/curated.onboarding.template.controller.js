@@ -111,6 +111,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'ADD_NEW_CURATED_ONBOARDING_TEMPLATE', 
             entity_id: cotId.toString()
@@ -196,6 +197,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'UPDATE_CURATED_ONBOARDING_TEMPLATE', 
             entity_id: cotId.toString()
@@ -233,6 +235,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'ARCHIVE_CURATED_ONBOARDING_TEMPLATE', 
             entity_id: cotId.toString()
@@ -273,6 +276,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'BULK_ADD_CURATED_ONBOARDING_TEMPLATES', 
             entity_id: template_ids.join(',')
@@ -284,9 +288,10 @@ class CuratedOnboardingTemplateController {
       return res.status(HTTP_STATUS_CODES.CREATED).json({
         message: 'Curated onboarding templates created successfully',
         data: {
-          inserted: result.inserted,
-          skipped: result.skipped,
-          existing_template_ids: result.existingIds
+          inserted: result.inserted || 0,
+          skipped: result.skipped || 0,
+          unarchived: result.unarchived || 0,
+          existing_template_ids: result.existingIds || []
         }
       });
     } catch (error) {
@@ -315,6 +320,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES', 
             entity_id: cot_ids.join(',')
@@ -355,6 +361,7 @@ class CuratedOnboardingTemplateController {
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
           value: { 
+            admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
             action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES_BY_TEMPLATE_IDS', 
             entity_id: template_ids.join(',')
