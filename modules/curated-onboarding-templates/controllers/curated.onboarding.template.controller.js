@@ -17,40 +17,40 @@ class CuratedOnboardingTemplateController {
         is_active: req.query.is_active !== undefined ? parseInt(req.query.is_active) : undefined,
         template_output_type: req.query.template_output_type || undefined
       };
-      
+
       // Get curated onboarding templates
       const curatedTemplates = await CuratedOnboardingTemplateModel.listCuratedOnboardingTemplates(
         paginationParams,
         filters
       );
-      
+
       if (curatedTemplates.length === 0) {
         return res.status(HTTP_STATUS_CODES.OK).json({
           data: []
         });
       }
-      
+
       // Get template IDs
       const templateIds = curatedTemplates.map(ct => ct.template_id);
-      
+
       // Get template details
       const templates = await CuratedOnboardingTemplateModel.getTemplatesByIds(templateIds);
-      
+
       // Create a map of template_id to template data
       const templateMap = new Map();
       templates.forEach(template => {
         templateMap.set(template.template_id, template);
       });
-      
+
       // Stitch data together
       const result = curatedTemplates.map(curatedTemplate => {
         const template = templateMap.get(curatedTemplate.template_id);
-        
+
         // Apply template_output_type filter if specified
         if (filters.template_output_type && template && template.template_output_type !== filters.template_output_type) {
           return null;
         }
-        
+
         // Generate R2 URL for template thumbnail (same logic as templates controller)
         let r2_url = null;
         if (template) {
@@ -60,7 +60,7 @@ class CuratedOnboardingTemplateController {
             r2_url = template.cf_r2_url;
           }
         }
-        
+
         return {
           cot_id: curatedTemplate.cot_id,
           template_id: curatedTemplate.template_id,
@@ -71,19 +71,20 @@ class CuratedOnboardingTemplateController {
           template_code: template?.template_code || null,
           template_gender: template?.template_gender || null,
           template_output_type: template?.template_output_type || null,
+          template_type: template?.template_type || null,
           r2_url: r2_url,
           cf_r2_url: template?.cf_r2_url || null,
           credits: template?.credits || null
         };
       }).filter(item => item !== null); // Remove items that don't match template_output_type filter
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: result
       });
     } catch (error) {
-      logger.error('Error listing curated onboarding templates:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error listing curated onboarding templates:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -92,42 +93,42 @@ class CuratedOnboardingTemplateController {
   static async createCuratedOnboardingTemplate(req, res) {
     try {
       const templateData = req.validatedBody;
-      
+
       // Check if template_id already exists
       const existing = await CuratedOnboardingTemplateModel.getCuratedOnboardingTemplateByTemplateId(
         templateData.template_id
       );
-      
+
       if (existing) {
         return res.status(HTTP_STATUS_CODES.CONFLICT).json({
           message: 'Template already exists in curated onboarding templates'
         });
       }
-      
+
       const cotId = await CuratedOnboardingTemplateModel.createCuratedOnboardingTemplate(templateData);
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'ADD_NEW_CURATED_ONBOARDING_TEMPLATE', 
+            action_name: 'ADD_NEW_CURATED_ONBOARDING_TEMPLATE',
             entity_id: cotId.toString()
           }
         }],
         'create_admin_activity_log'
       );
-    
+
       return res.status(HTTP_STATUS_CODES.CREATED).json({
         message: 'Curated onboarding template created successfully',
         data: { cot_id: cotId }
       });
     } catch (error) {
-      logger.error('Error creating curated onboarding template:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error creating curated onboarding template:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -137,7 +138,7 @@ class CuratedOnboardingTemplateController {
     try {
       const { cotId } = req.params;
       const template = await CuratedOnboardingTemplateModel.getCuratedOnboardingTemplate(cotId);
-      
+
       if (!template) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
           message: 'Curated onboarding template not found'
@@ -148,9 +149,9 @@ class CuratedOnboardingTemplateController {
         data: template
       });
     } catch (error) {
-      logger.error('Error getting curated onboarding template:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error getting curated onboarding template:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -160,7 +161,7 @@ class CuratedOnboardingTemplateController {
     try {
       const { cotId } = req.params;
       const updateData = req.validatedBody;
-      
+
       // Check if template exists
       const existing = await CuratedOnboardingTemplateModel.getCuratedOnboardingTemplate(cotId);
       if (!existing) {
@@ -168,7 +169,7 @@ class CuratedOnboardingTemplateController {
           message: 'Curated onboarding template not found'
         });
       }
-      
+
       // If updating template_id, check for duplicates
       if (updateData.template_id && updateData.template_id !== existing.template_id) {
         const duplicate = await CuratedOnboardingTemplateModel.getCuratedOnboardingTemplateByTemplateId(
@@ -180,39 +181,39 @@ class CuratedOnboardingTemplateController {
           });
         }
       }
-      
+
       const updated = await CuratedOnboardingTemplateModel.updateCuratedOnboardingTemplate(
         cotId,
         updateData
       );
-      
+
       if (!updated) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: 'Failed to update curated onboarding template'
         });
       }
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'UPDATE_CURATED_ONBOARDING_TEMPLATE', 
+            action_name: 'UPDATE_CURATED_ONBOARDING_TEMPLATE',
             entity_id: cotId.toString()
           }
         }],
         'create_admin_activity_log'
       );
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: 'Curated onboarding template updated successfully'
       });
     } catch (error) {
-      logger.error('Error updating curated onboarding template:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error updating curated onboarding template:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -221,36 +222,36 @@ class CuratedOnboardingTemplateController {
   static async archiveCuratedOnboardingTemplate(req, res) {
     try {
       const { cotId } = req.params;
-      
+
       const archived = await CuratedOnboardingTemplateModel.archiveCuratedOnboardingTemplate(cotId);
-      
+
       if (!archived) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
           message: 'Curated onboarding template not found'
         });
       }
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'ARCHIVE_CURATED_ONBOARDING_TEMPLATE', 
+            action_name: 'ARCHIVE_CURATED_ONBOARDING_TEMPLATE',
             entity_id: cotId.toString()
           }
         }],
         'create_admin_activity_log'
       );
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: 'Curated onboarding template archived successfully'
       });
     } catch (error) {
-      logger.error('Error archiving curated onboarding template:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error archiving curated onboarding template:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -259,45 +260,67 @@ class CuratedOnboardingTemplateController {
   static async bulkCreateCuratedOnboardingTemplates(req, res) {
     try {
       const { template_ids, is_active } = req.validatedBody;
-      
+
       if (!template_ids || template_ids.length === 0) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: 'template_ids array is required and cannot be empty'
         });
       }
-      
-      const result = await CuratedOnboardingTemplateModel.bulkCreateCuratedOnboardingTemplates(
-        template_ids,
-        is_active !== undefined ? is_active : 1
-      );
-      
-      // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            admin_user_id: req.user.userId,
-            entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'BULK_ADD_CURATED_ONBOARDING_TEMPLATES', 
-            entity_id: template_ids.join(',')
-          }
-        }],
-        'create_admin_activity_log'
-      );
-    
+
+      // Check template details to filter only free templates
+      const templates = await CuratedOnboardingTemplateModel.getTemplatesByIds(template_ids);
+
+      const freeTemplates = templates.filter(t => t.template_type && t.template_type.toLowerCase() === 'free');
+      const nonFreeTemplates = templates.filter(t => !t.template_type || t.template_type.toLowerCase() !== 'free');
+      const nonFreeTemplateIds = nonFreeTemplates.map(t => t.template_id);
+
+      const idsToAdd = freeTemplates.map(t => t.template_id);
+
+      let result = {
+        inserted: 0,
+        skipped: 0,
+        unarchived: 0,
+        existingIds: []
+      };
+
+      if (idsToAdd.length > 0) {
+        result = await CuratedOnboardingTemplateModel.bulkCreateCuratedOnboardingTemplates(
+          idsToAdd,
+          is_active !== undefined ? is_active : 1
+        );
+      }
+
+      // Publish activity log command if any templates were added
+      if (idsToAdd.length > 0) {
+        await kafkaCtrl.sendMessage(
+          TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+          [{
+            value: {
+              admin_user_id: req.user.userId,
+              entity_type: 'CURATED_ONBOARDING_TEMPLATES',
+              action_name: 'BULK_ADD_CURATED_ONBOARDING_TEMPLATES',
+              entity_id: idsToAdd.join(',')
+            }
+          }],
+          'create_admin_activity_log'
+        );
+      }
+
       return res.status(HTTP_STATUS_CODES.CREATED).json({
-        message: 'Curated onboarding templates created successfully',
+        message: 'Curated onboarding templates processed',
         data: {
           inserted: result.inserted || 0,
-          skipped: result.skipped || 0,
+          skipped: (result.skipped || 0),
           unarchived: result.unarchived || 0,
-          existing_template_ids: result.existingIds || []
+          existing_template_ids: result.existingIds || [],
+          non_free_skipped_count: nonFreeTemplates.length,
+          non_free_skipped_ids: nonFreeTemplateIds
         }
       });
     } catch (error) {
-      logger.error('Error bulk creating curated onboarding templates:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error bulk creating curated onboarding templates:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -306,29 +329,29 @@ class CuratedOnboardingTemplateController {
   static async bulkArchiveCuratedOnboardingTemplates(req, res) {
     try {
       const { cot_ids } = req.validatedBody;
-      
+
       if (!cot_ids || cot_ids.length === 0) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: 'cot_ids array is required and cannot be empty'
         });
       }
-      
+
       const archivedCount = await CuratedOnboardingTemplateModel.bulkArchiveCuratedOnboardingTemplates(cot_ids);
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES', 
+            action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES',
             entity_id: cot_ids.join(',')
           }
         }],
         'create_admin_activity_log'
       );
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: 'Curated onboarding templates archived successfully',
         data: {
@@ -336,9 +359,9 @@ class CuratedOnboardingTemplateController {
         }
       });
     } catch (error) {
-      logger.error('Error bulk archiving curated onboarding templates:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error bulk archiving curated onboarding templates:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -347,29 +370,29 @@ class CuratedOnboardingTemplateController {
   static async bulkArchiveByTemplateIds(req, res) {
     try {
       const { template_ids } = req.validatedBody;
-      
+
       if (!template_ids || template_ids.length === 0) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: 'template_ids array is required and cannot be empty'
         });
       }
-      
+
       const archivedCount = await CuratedOnboardingTemplateModel.bulkArchiveByTemplateIds(template_ids);
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES_BY_TEMPLATE_IDS', 
+            action_name: 'BULK_ARCHIVE_CURATED_ONBOARDING_TEMPLATES_BY_TEMPLATE_IDS',
             entity_id: template_ids.join(',')
           }
         }],
         'create_admin_activity_log'
       );
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: 'Curated onboarding templates archived successfully',
         data: {
@@ -377,9 +400,9 @@ class CuratedOnboardingTemplateController {
         }
       });
     } catch (error) {
-      logger.error('Error bulk archiving curated onboarding templates by template IDs:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error bulk archiving curated onboarding templates by template IDs:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }
@@ -388,32 +411,32 @@ class CuratedOnboardingTemplateController {
   static async bulkUpdateCuratedOnboardingTemplates(req, res) {
     try {
       const { cot_ids, is_active } = req.validatedBody;
-      
+
       if (!cot_ids || cot_ids.length === 0) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: 'cot_ids array is required and cannot be empty'
         });
       }
-      
+
       const updatedCount = await CuratedOnboardingTemplateModel.bulkUpdateCuratedOnboardingTemplates(
         cot_ids,
         is_active
       );
-      
+
       // Publish activity log command
       await kafkaCtrl.sendMessage(
         TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
         [{
-          value: { 
+          value: {
             admin_user_id: req.user.userId,
             entity_type: 'CURATED_ONBOARDING_TEMPLATES',
-            action_name: 'BULK_UPDATE_CURATED_ONBOARDING_TEMPLATES', 
+            action_name: 'BULK_UPDATE_CURATED_ONBOARDING_TEMPLATES',
             entity_id: cot_ids.join(',')
           }
         }],
         'create_admin_activity_log'
       );
-      
+
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: `Curated onboarding templates ${is_active === 1 ? 'activated' : 'deactivated'} successfully`,
         data: {
@@ -421,9 +444,9 @@ class CuratedOnboardingTemplateController {
         }
       });
     } catch (error) {
-      logger.error('Error bulk updating curated onboarding templates:', { 
-        error: error.message, 
-        stack: error.stack 
+      logger.error('Error bulk updating curated onboarding templates:', {
+        error: error.message,
+        stack: error.stack
       });
       CuratedOnboardingTemplateErrorHandler.handleCuratedOnboardingTemplateErrors(error, res);
     }

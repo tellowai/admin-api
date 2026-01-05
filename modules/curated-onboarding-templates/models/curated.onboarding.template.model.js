@@ -2,14 +2,14 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
-exports.createCuratedOnboardingTemplate = async function(templateData) {
+exports.createCuratedOnboardingTemplate = async function (templateData) {
   const query = `
     INSERT INTO curated_onboarding_templates (
       template_id,
       is_active
     ) VALUES (?, ?)
   `;
-  
+
   const values = [
     templateData.template_id,
     templateData.is_active !== undefined ? templateData.is_active : 1
@@ -19,7 +19,7 @@ exports.createCuratedOnboardingTemplate = async function(templateData) {
   return result.insertId;
 };
 
-exports.getCuratedOnboardingTemplate = async function(cotId) {
+exports.getCuratedOnboardingTemplate = async function (cotId) {
   const query = `
     SELECT 
       cot_id,
@@ -31,12 +31,12 @@ exports.getCuratedOnboardingTemplate = async function(cotId) {
     WHERE cot_id = ?
     AND archived_at IS NULL
   `;
-  
+
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [cotId]);
   return template;
 };
 
-exports.getCuratedOnboardingTemplateByTemplateId = async function(templateId) {
+exports.getCuratedOnboardingTemplateByTemplateId = async function (templateId) {
   const query = `
     SELECT 
       cot_id,
@@ -48,12 +48,12 @@ exports.getCuratedOnboardingTemplateByTemplateId = async function(templateId) {
     WHERE template_id = ?
     AND archived_at IS NULL
   `;
-  
+
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
   return template;
 };
 
-exports.listCuratedOnboardingTemplates = async function(paginationParams, filters = {}) {
+exports.listCuratedOnboardingTemplates = async function (paginationParams, filters = {}) {
   let query = `
     SELECT 
       cot_id,
@@ -64,26 +64,26 @@ exports.listCuratedOnboardingTemplates = async function(paginationParams, filter
     FROM curated_onboarding_templates
     WHERE archived_at IS NULL
   `;
-  
+
   const values = [];
-  
+
   // Apply filters
   if (filters.is_active !== undefined) {
     query += ` AND is_active = ?`;
     values.push(filters.is_active);
   }
-  
+
   query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
   values.push(paginationParams.limit, paginationParams.offset);
-  
+
   return await mysqlQueryRunner.runQueryInSlave(query, values);
 };
 
-exports.getTemplatesByIds = async function(templateIds) {
+exports.getTemplatesByIds = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) {
     return [];
   }
-  
+
   const placeholders = templateIds.map(() => '?').join(',');
   const query = `
     SELECT 
@@ -92,6 +92,7 @@ exports.getTemplatesByIds = async function(templateIds) {
       template_code,
       template_gender,
       template_output_type,
+      template_type,
       cf_r2_key,
       cf_r2_url,
       credits
@@ -99,11 +100,11 @@ exports.getTemplatesByIds = async function(templateIds) {
     WHERE template_id IN (${placeholders})
     AND archived_at IS NULL
   `;
-  
+
   return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
 };
 
-exports.updateCuratedOnboardingTemplate = async function(cotId, updateData) {
+exports.updateCuratedOnboardingTemplate = async function (cotId, updateData) {
   // Filter out undefined values and prepare set clause
   const setClause = [];
   const values = [];
@@ -128,24 +129,24 @@ exports.updateCuratedOnboardingTemplate = async function(cotId, updateData) {
     WHERE cot_id = ?
     AND archived_at IS NULL
   `;
-  
+
   const result = await mysqlQueryRunner.runQueryInMaster(query, values);
   return result.affectedRows > 0;
 };
 
-exports.archiveCuratedOnboardingTemplate = async function(cotId) {
+exports.archiveCuratedOnboardingTemplate = async function (cotId) {
   const query = `
     UPDATE curated_onboarding_templates
     SET archived_at = CURRENT_TIMESTAMP(3)
     WHERE cot_id = ?
     AND archived_at IS NULL
   `;
-  
+
   const result = await mysqlQueryRunner.runQueryInMaster(query, [cotId]);
   return result.affectedRows > 0;
 };
 
-exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isActive = 1) {
+exports.bulkCreateCuratedOnboardingTemplates = async function (templateIds, isActive = 1) {
   if (!templateIds || templateIds.length === 0) {
     return {
       inserted: 0,
@@ -154,7 +155,7 @@ exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isAct
       existingIds: []
     };
   }
-  
+
   // Check for existing templates (including archived ones) to avoid duplicates
   const placeholders = templateIds.map(() => '?').join(',');
   const checkQuery = `
@@ -162,12 +163,12 @@ exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isAct
     FROM curated_onboarding_templates
     WHERE template_id IN (${placeholders})
   `;
-  
+
   const existing = await mysqlQueryRunner.runQueryInSlave(checkQuery, templateIds);
   const existingIds = existing.map(e => e.template_id);
   const archivedIds = existing.filter(e => e.archived_at !== null).map(e => e.template_id);
   const activeIds = existing.filter(e => e.archived_at === null).map(e => e.template_id);
-  
+
   // Unarchive archived templates and update is_active
   let unarchivedCount = 0;
   if (archivedIds.length > 0) {
@@ -181,10 +182,10 @@ exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isAct
     const unarchiveResult = await mysqlQueryRunner.runQueryInMaster(unarchiveQuery, [isActive, ...archivedIds]);
     unarchivedCount = unarchiveResult.affectedRows;
   }
-  
+
   // Filter out all existing templates (both active and archived)
   const newIds = templateIds.filter(id => !existingIds.includes(id));
-  
+
   // Bulk insert only new templates
   let insertedCount = 0;
   if (newIds.length > 0) {
@@ -193,11 +194,11 @@ exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isAct
       INSERT INTO curated_onboarding_templates (template_id, is_active)
       VALUES ?
     `;
-    
+
     const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, [values]);
     insertedCount = newIds.length;
   }
-  
+
   return {
     inserted: insertedCount,
     skipped: activeIds.length, // Already active templates
@@ -206,11 +207,11 @@ exports.bulkCreateCuratedOnboardingTemplates = async function(templateIds, isAct
   };
 };
 
-exports.bulkArchiveCuratedOnboardingTemplates = async function(cotIds) {
+exports.bulkArchiveCuratedOnboardingTemplates = async function (cotIds) {
   if (!cotIds || cotIds.length === 0) {
     return 0;
   }
-  
+
   const placeholders = cotIds.map(() => '?').join(',');
   const query = `
     UPDATE curated_onboarding_templates
@@ -218,16 +219,16 @@ exports.bulkArchiveCuratedOnboardingTemplates = async function(cotIds) {
     WHERE cot_id IN (${placeholders})
     AND archived_at IS NULL
   `;
-  
+
   const result = await mysqlQueryRunner.runQueryInMaster(query, cotIds);
   return result.affectedRows;
 };
 
-exports.bulkArchiveByTemplateIds = async function(templateIds) {
+exports.bulkArchiveByTemplateIds = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) {
     return 0;
   }
-  
+
   const placeholders = templateIds.map(() => '?').join(',');
   const query = `
     UPDATE curated_onboarding_templates
@@ -235,16 +236,16 @@ exports.bulkArchiveByTemplateIds = async function(templateIds) {
     WHERE template_id IN (${placeholders})
     AND archived_at IS NULL
   `;
-  
+
   const result = await mysqlQueryRunner.runQueryInMaster(query, templateIds);
   return result.affectedRows;
 };
 
-exports.bulkUpdateCuratedOnboardingTemplates = async function(cotIds, isActive) {
+exports.bulkUpdateCuratedOnboardingTemplates = async function (cotIds, isActive) {
   if (!cotIds || cotIds.length === 0) {
     return 0;
   }
-  
+
   const placeholders = cotIds.map(() => '?').join(',');
   const query = `
     UPDATE curated_onboarding_templates
@@ -252,7 +253,7 @@ exports.bulkUpdateCuratedOnboardingTemplates = async function(cotIds, isActive) 
     WHERE cot_id IN (${placeholders})
     AND archived_at IS NULL
   `;
-  
+
   const result = await mysqlQueryRunner.runQueryInMaster(query, [isActive, ...cotIds]);
   return result.affectedRows;
 };
