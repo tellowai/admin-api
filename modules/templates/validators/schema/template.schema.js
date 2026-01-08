@@ -7,15 +7,15 @@ const wordCountValidation = (value, helpers) => {
   if (!value || value.trim() === '') {
     return value; // Allow empty values
   }
-  
+
   const wordCount = value.trim().split(/\s+/).filter(word => word.length > 0).length;
-  
+
   if (wordCount > 50) {
-    return helpers.error('any.invalid', { 
-      message: `Description must not exceed 50 words. Current word count: ${wordCount}` 
+    return helpers.error('any.invalid', {
+      message: `Description must not exceed 50 words. Current word count: ${wordCount}`
     });
   }
-  
+
   return value;
 };
 
@@ -119,6 +119,7 @@ const createTemplateSchema = Joi.object().keys({
       image_id: Joi.string().required(),
       layer_name: Joi.string().required(),
       field_code: Joi.string().required(),
+      user_input_field_name: Joi.string().allow(null, '').optional(),
       field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
     })
   ).allow(null).optional(),
@@ -187,6 +188,7 @@ const updateTemplateSchema = Joi.object().keys({
       image_id: Joi.string().required(),
       layer_name: Joi.string().required(),
       field_code: Joi.string().required(),
+      user_input_field_name: Joi.string().allow(null, '').optional(),
       field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
     })
   ).allow(null).optional(),
