@@ -163,12 +163,12 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
           if(err) {
 
-            callback({
+            return callback({
               message : err
             });
           }
           
-          callback(null, finalTokenObj);
+          return callback(null, finalTokenObj);
         });
     }
   ], function (err, finalResultObj) {

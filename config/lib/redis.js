@@ -54,7 +54,7 @@ exports.saveRefreshToken = function (refreshTokenObj, done) {
     function (err, res) {
 
       if (err) {
-        done(err);
+        return done(err);
       }
 
       redisClient.expire(
@@ -63,10 +63,10 @@ exports.saveRefreshToken = function (refreshTokenObj, done) {
         function (err, res) {
 
           if (err) {
-            done(err);
+            return done(err);
           }
 
-          done(null, res)
+          return done(null, res)
         });
     });
 };
@@ -80,7 +80,7 @@ exports.updateRefreshTokenData = function (data, done) {
       function (err, results) {
 
         if (err) {
-          done(err);
+          return done(err);
         }
 
         var remainingTtl = (results[0] && results[0] > 0) ?
@@ -108,7 +108,7 @@ exports.updateRefreshTokenData = function (data, done) {
           function (err, res) {
 
             if (err) {
-              done(err);
+              return done(err);
             }
 
             redisClient.expire(
@@ -121,7 +121,7 @@ exports.updateRefreshTokenData = function (data, done) {
                 }
               });
 
-            done(null, res)
+            return done(null, res)
           });
       });
 };
