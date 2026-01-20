@@ -334,7 +334,7 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
       if (value !== undefined) {
         setClause.push(`${key} = ?`);
         values.push(value === null ? null :
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ?
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
             JSON.stringify(value) : value);
       }
     });
