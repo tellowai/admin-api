@@ -12,7 +12,7 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const TEMPLATE_CONSTANTS = require('../constants/template.constants');
-const { v4: uuidv4 } = require('uuid');
+const { v7: uuidv7 } = require('uuid');
 const config = require('../../../config/config');
 const fetch = require('node-fetch');
 const AiModelModel = require('../../ai-models/models/ai-model.model');
@@ -49,16 +49,16 @@ async function fetchBodymovinDimensions(bodymovinUrl) {
       logger.warn('Failed to fetch Bodymovin JSON', { url: bodymovinUrl, status: response.status });
       return null;
     }
-    
+
     const bodymovinJson = await response.json();
     const width = bodymovinJson.w;
     const height = bodymovinJson.h;
-    
+
     if (!width || !height) {
       logger.warn('Bodymovin JSON missing width or height', { url: bodymovinUrl, width, height });
       return null;
     }
-    
+
     return { width, height };
   } catch (error) {
     logger.error('Error fetching Bodymovin JSON dimensions', { url: bodymovinUrl, error: error.message });
@@ -76,9 +76,9 @@ function calculateAspectRatioAndOrientation(width, height) {
   if (!width || !height || width <= 0 || height <= 0) {
     return { aspectRatio: null, orientation: null };
   }
-  
+
   const ratio = width / height;
-  
+
   // Determine aspect ratio
   let aspectRatio;
   if (Math.abs(ratio - 1) < 0.01) {
@@ -100,13 +100,13 @@ function calculateAspectRatioAndOrientation(width, height) {
       { value: 0.5625, name: '9:16' },
       { value: 1.78, name: '16:9' }
     ];
-    
-    const closest = ratios.reduce((prev, curr) => 
+
+    const closest = ratios.reduce((prev, curr) =>
       Math.abs(curr.value - ratio) < Math.abs(prev.value - ratio) ? curr : prev
     );
     aspectRatio = closest.name;
   }
-  
+
   // Determine orientation
   let orientation;
   if (aspectRatio === '1:1') {
@@ -116,7 +116,7 @@ function calculateAspectRatioAndOrientation(width, height) {
   } else {
     orientation = 'vertical';
   }
-  
+
   return { aspectRatio, orientation };
 }
 
@@ -129,15 +129,15 @@ function extractAssetTypesFromClips(clips) {
   if (!clips || !Array.isArray(clips) || clips.length === 0) {
     return [];
   }
-  
+
   const assetTypes = new Set();
-  
+
   clips.forEach(clip => {
     if (clip && clip.asset_type) {
       assetTypes.add(clip.asset_type);
     }
   });
-  
+
   return Array.from(assetTypes);
 }
 
@@ -161,11 +161,11 @@ function convertSpecialCharsToUnderscore(code) {
  */
 function getTemplateTagsWithDetailsFromPrefetched(templateId, templateTagsMap, tagDefinitionMap) {
   const templateTags = templateTagsMap.get(templateId) || [];
-  
+
   if (templateTags.length === 0) {
     return [];
   }
-  
+
   // Stitch the data together using pre-fetched maps
   const tagsWithDetails = templateTags.map(tt => {
     const tagDefinition = tagDefinitionMap.get(tt.ttd_id);
@@ -182,7 +182,7 @@ function getTemplateTagsWithDetailsFromPrefetched(templateId, templateTagsMap, t
       updated_at: tt.updated_at
     };
   });
-  
+
   return tagsWithDetails;
 }
 
@@ -195,23 +195,23 @@ async function getTemplateTagsWithDetails(templateId) {
   try {
     // Get template tags (just the relationships)
     const templateTags = await TemplateTagsModel.getTemplateTags(templateId);
-    
+
     if (templateTags.length === 0) {
       return [];
     }
-    
+
     // Get tag definition IDs
     const tagDefinitionIds = templateTags.map(tt => tt.ttd_id);
-    
+
     // Get tag definitions
     const tagDefinitions = await TemplateTagDefinitionModel.getTagDefinitionsByIds(tagDefinitionIds);
-    
+
     // Create a map for quick lookup
     const tagDefinitionMap = new Map();
     tagDefinitions.forEach(td => {
       tagDefinitionMap.set(td.ttd_id, td);
     });
-    
+
     // Stitch the data together
     const tagsWithDetails = templateTags.map(tt => {
       const tagDefinition = tagDefinitionMap.get(tt.ttd_id);
@@ -226,12 +226,12 @@ async function getTemplateTagsWithDetails(templateId) {
         updated_at: tt.updated_at
       };
     });
-    
+
     return tagsWithDetails;
   } catch (error) {
-    logger.error('Error getting template tags with details', { 
-      error: error.message, 
-      templateId 
+    logger.error('Error getting template tags with details', {
+      error: error.message,
+      templateId
     });
     return [];
   }
@@ -248,7 +248,7 @@ async function getTemplateTagsWithDetails(templateId) {
  * @apiQuery {Number} [page=1] Page number
  * @apiQuery {Number} [limit=10] Items per page
  */
-exports.listTemplates = async function(req, res) {
+exports.listTemplates = async function (req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const templates = await TemplateModel.listTemplates(paginationParams);
@@ -256,10 +256,10 @@ exports.listTemplates = async function(req, res) {
     // Generate presigned URLs if templates exist
     if (templates.length) {
       const storage = StorageFactory.getProvider();
-      
+
       // Get all template IDs for batch database calls
       const templateIds = templates.map(template => template.template_id);
-      
+
       // Batch fetch all clips for all templates
       const allClips = await TemplateModel.getTemplateAiClipsForMultipleTemplates(templateIds);
       const clipsMap = new Map();
@@ -269,7 +269,7 @@ exports.listTemplates = async function(req, res) {
         }
         clipsMap.get(clip.template_id).push(clip);
       });
-      
+
       // Batch fetch all template tags for all templates
       const allTemplateTags = await TemplateModel.getTemplateTagsForMultipleTemplates(templateIds);
       const templateTagsMap = new Map();
@@ -279,25 +279,25 @@ exports.listTemplates = async function(req, res) {
         }
         templateTagsMap.get(tag.template_id).push(tag);
       });
-      
+
       // Get all unique ttd_ids for batch tag definition lookup
       const allTtdIds = [...new Set(allTemplateTags.map(tag => tag.ttd_id))];
-      const tagDefinitions = allTtdIds.length > 0 ? 
+      const tagDefinitions = allTtdIds.length > 0 ?
         await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(allTtdIds) : [];
       const tagDefinitionMap = new Map();
       tagDefinitions.forEach(tagDef => {
         tagDefinitionMap.set(tagDef.ttd_id, tagDef);
       });
-      
+
       // Get all unique facet_ids for batch facet lookup
       const allFacetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
-      const facets = allFacetIds.length > 0 ? 
+      const facets = allFacetIds.length > 0 ?
         await TemplateTagFacetModel.getTemplateTagFacetsByIds(allFacetIds) : [];
       const facetMap = new Map();
       facets.forEach(facet => {
         facetMap.set(facet.facet_id, facet);
       });
-      
+
       await Promise.all(templates.map(async (template) => {
         // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
@@ -305,10 +305,10 @@ exports.listTemplates = async function(req, res) {
         } else {
           template.r2_url = template.cf_r2_url;
         }
-        
+
         // Load AI clips for all templates (from pre-fetched data)
         template.clips = clipsMap.get(template.template_id) || [];
-        
+
         // Generate R2 URLs for AI clip assets
         if (template.clips && template.clips.length > 0) {
           template.clips = template.clips.map(clip => {
@@ -316,7 +316,7 @@ exports.listTemplates = async function(req, res) {
             if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
               clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
             }
-            
+
             // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
@@ -336,7 +336,7 @@ exports.listTemplates = async function(req, res) {
                 return step;
               });
             }
-            
+
             return clip;
           });
         }
@@ -364,18 +364,18 @@ exports.listTemplates = async function(req, res) {
         // Generate presigned download URL for thumb_frame if available
         if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
           try {
-            const isPublic = template.thumb_frame_bucket === 'public' || 
-                           template.thumb_frame_bucket === storage.publicBucket || 
-                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-            
+            const isPublic = template.thumb_frame_bucket === 'public' ||
+              template.thumb_frame_bucket === storage.publicBucket ||
+              template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+
             if (isPublic) {
               template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
             } else {
               template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
             }
           } catch (error) {
-            logger.error('Error generating thumb_frame presigned URL:', { 
-              error: error.message, 
+            logger.error('Error generating thumb_frame presigned URL:', {
+              error: error.message,
               template_id: template.template_id,
               thumb_frame_asset_key: template.thumb_frame_asset_key,
               thumb_frame_bucket: template.thumb_frame_bucket
@@ -399,7 +399,7 @@ exports.listTemplates = async function(req, res) {
               });
             }
           } catch (err) {
-            logger.error('Error parsing faces_needed:', { 
+            logger.error('Error parsing faces_needed:', {
               error: err.message,
               value: template.faces_needed
             });
@@ -412,18 +412,18 @@ exports.listTemplates = async function(req, res) {
             return face;
           });
         }
-        
+
         if (template.additional_data && typeof template.additional_data === 'string') {
           try {
             template.additional_data = JSON.parse(template.additional_data);
           } catch (err) {
             logger.error('Error parsing additional_data:', {
-              error: err.message, 
+              error: err.message,
               value: template.additional_data
             });
           }
         }
-        
+
         if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
           try {
             template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
@@ -437,30 +437,30 @@ exports.listTemplates = async function(req, res) {
 
         // Load template tags (both auto-generated and manually assigned) - from pre-fetched data
         template.tags = getTemplateTagsWithDetailsFromPrefetched(template.template_id, templateTagsMap, tagDefinitionMap);
-        
+
         // Load manually assigned template tags (from pre-fetched data)
         template.template_tags = templateTagsMap.get(template.template_id) || [];
-        
+
         // Stitch facet information for template tags (using pre-fetched data)
         if (template.template_tags && template.template_tags.length > 0) {
           // Use pre-fetched tag definitions and facets
-          
+
           // Stitch the data together
           template.template_tags.forEach(tag => {
             const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-            
+
             if (tagDefinition) {
               // Add tag definition data
               tag.tag_name = tagDefinition.tag_name;
               tag.tag_code = tagDefinition.tag_code;
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
-              
+
               // Use facet_id from tag definition (primary source)
               const facetId = tagDefinition.facet_id;
               if (facetId) {
                 tag.facet_id = facetId; // Ensure facet_id is present
-                
+
                 const facet = facetMap.get(facetId);
                 if (facet) {
                   tag.facet_key = facet.facet_key;
@@ -506,7 +506,7 @@ exports.listTemplates = async function(req, res) {
  * @apiQuery {Number} [page=1] Page number
  * @apiQuery {Number} [limit=10] Items per page
  */
-exports.listArchivedTemplates = async function(req, res) {
+exports.listArchivedTemplates = async function (req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const templates = await TemplateModel.listArchivedTemplates(paginationParams);
@@ -514,7 +514,7 @@ exports.listArchivedTemplates = async function(req, res) {
     // Generate presigned URLs if templates exist
     if (templates.length) {
       const storage = StorageFactory.getProvider();
-      
+
       await Promise.all(templates.map(async (template) => {
         // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
@@ -522,10 +522,10 @@ exports.listArchivedTemplates = async function(req, res) {
         } else {
           template.r2_url = template.cf_r2_url;
         }
-        
+
         // Load AI clips for all templates
         template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
-        
+
         // Generate R2 URLs for AI clip assets
         if (template.clips && template.clips.length > 0) {
           template.clips = template.clips.map(clip => {
@@ -533,7 +533,7 @@ exports.listArchivedTemplates = async function(req, res) {
             if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
               clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
             }
-            
+
             // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
@@ -553,7 +553,7 @@ exports.listArchivedTemplates = async function(req, res) {
                 return step;
               });
             }
-            
+
             return clip;
           });
         }
@@ -581,18 +581,18 @@ exports.listArchivedTemplates = async function(req, res) {
         // Generate presigned download URL for thumb_frame if available
         if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
           try {
-            const isPublic = template.thumb_frame_bucket === 'public' || 
-                           template.thumb_frame_bucket === storage.publicBucket || 
-                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-            
+            const isPublic = template.thumb_frame_bucket === 'public' ||
+              template.thumb_frame_bucket === storage.publicBucket ||
+              template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+
             if (isPublic) {
               template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
             } else {
               template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
             }
           } catch (error) {
-            logger.error('Error generating thumb_frame presigned URL:', { 
-              error: error.message, 
+            logger.error('Error generating thumb_frame presigned URL:', {
+              error: error.message,
               template_id: template.template_id,
               thumb_frame_asset_key: template.thumb_frame_asset_key,
               thumb_frame_bucket: template.thumb_frame_bucket
@@ -616,7 +616,7 @@ exports.listArchivedTemplates = async function(req, res) {
               });
             }
           } catch (err) {
-            logger.error('Error parsing faces_needed:', { 
+            logger.error('Error parsing faces_needed:', {
               error: err.message,
               value: template.faces_needed
             });
@@ -629,18 +629,18 @@ exports.listArchivedTemplates = async function(req, res) {
             return face;
           });
         }
-        
+
         if (template.additional_data && typeof template.additional_data === 'string') {
           try {
             template.additional_data = JSON.parse(template.additional_data);
           } catch (err) {
             logger.error('Error parsing additional_data:', {
-              error: err.message, 
+              error: err.message,
               value: template.additional_data
             });
           }
         }
-        
+
         if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
           try {
             template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
@@ -654,49 +654,49 @@ exports.listArchivedTemplates = async function(req, res) {
 
         // Load template tags (both auto-generated and manually assigned)
         template.tags = await getTemplateTagsWithDetails(template.template_id);
-        
+
         // Load manually assigned template tags
         template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
-        
+
         // Stitch facet information for template tags
         if (template.template_tags && template.template_tags.length > 0) {
           const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-          
+
           // Get tag definitions first to get facet_id information
           const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
-          
+
           // Create lookup map for tag definitions
           const tagDefinitionMap = new Map();
           tagDefinitions.forEach(tagDef => {
             tagDefinitionMap.set(tagDef.ttd_id, tagDef);
           });
-          
+
           // Get facet_ids from tag definitions and create facet lookup
           const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
           const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
-          
+
           // Create lookup map for facets
           const facetMap = new Map();
           facets.forEach(facet => {
             facetMap.set(facet.facet_id, facet);
           });
-          
+
           // Stitch the data together
           template.template_tags.forEach(tag => {
             const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-            
+
             if (tagDefinition) {
               // Add tag definition data
               tag.tag_name = tagDefinition.tag_name;
               tag.tag_code = tagDefinition.tag_code;
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
-              
+
               // Get facet_id from tag definition (template_tags table doesn't store facet_id)
               const facetId = tagDefinition.facet_id;
               if (facetId) {
                 tag.facet_id = facetId; // Ensure facet_id is present
-                
+
                 const facet = facetMap.get(facetId);
                 if (facet) {
                   tag.facet_key = facet.facet_key;
@@ -722,7 +722,7 @@ exports.listArchivedTemplates = async function(req, res) {
     logger.error('Error listing archived templates:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
-}; 
+};
 
 /**
  * @api {get} /templates/search Search templates
@@ -735,7 +735,7 @@ exports.listArchivedTemplates = async function(req, res) {
  * @apiQuery {Number} [page=1] Page number
  * @apiQuery {Number} [limit=10] Items per page
  */
-exports.searchTemplates = async function(req, res) {
+exports.searchTemplates = async function (req, res) {
   try {
     const { q } = req.query;
     if (!q) {
@@ -750,7 +750,7 @@ exports.searchTemplates = async function(req, res) {
     // Generate presigned URLs if templates exist
     if (templates.length) {
       const storage = StorageFactory.getProvider();
-      
+
       await Promise.all(templates.map(async (template) => {
         // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
@@ -758,10 +758,10 @@ exports.searchTemplates = async function(req, res) {
         } else {
           template.r2_url = template.cf_r2_url;
         }
-        
+
         // Load AI clips for all templates
         template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
-        
+
         // Generate R2 URLs for AI clip assets
         if (template.clips && template.clips.length > 0) {
           template.clips = template.clips.map(clip => {
@@ -769,7 +769,7 @@ exports.searchTemplates = async function(req, res) {
             if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
               clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
             }
-            
+
             // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
@@ -789,7 +789,7 @@ exports.searchTemplates = async function(req, res) {
                 return step;
               });
             }
-            
+
             return clip;
           });
         }
@@ -817,18 +817,18 @@ exports.searchTemplates = async function(req, res) {
         // Generate presigned download URL for thumb_frame if available
         if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
           try {
-            const isPublic = template.thumb_frame_bucket === 'public' || 
-                           template.thumb_frame_bucket === storage.publicBucket || 
-                           template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-            
+            const isPublic = template.thumb_frame_bucket === 'public' ||
+              template.thumb_frame_bucket === storage.publicBucket ||
+              template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+
             if (isPublic) {
               template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
             } else {
               template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
             }
           } catch (error) {
-            logger.error('Error generating thumb_frame presigned URL:', { 
-              error: error.message, 
+            logger.error('Error generating thumb_frame presigned URL:', {
+              error: error.message,
               template_id: template.template_id,
               thumb_frame_asset_key: template.thumb_frame_asset_key,
               thumb_frame_bucket: template.thumb_frame_bucket
@@ -842,7 +842,7 @@ exports.searchTemplates = async function(req, res) {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
           } catch (err) {
-            logger.error('Error parsing faces_needed:', { 
+            logger.error('Error parsing faces_needed:', {
               error: err.message,
               value: template.faces_needed
             });
@@ -859,7 +859,7 @@ exports.searchTemplates = async function(req, res) {
             });
           }
         }
-        
+
         if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
           try {
             template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
@@ -873,49 +873,49 @@ exports.searchTemplates = async function(req, res) {
 
         // Load template tags (both auto-generated and manually assigned)
         template.tags = await getTemplateTagsWithDetails(template.template_id);
-        
+
         // Load manually assigned template tags
         template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
-        
+
         // Stitch facet information for template tags
         if (template.template_tags && template.template_tags.length > 0) {
           const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-          
+
           // Get tag definitions first to get facet_id information
           const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
-          
+
           // Create lookup map for tag definitions
           const tagDefinitionMap = new Map();
           tagDefinitions.forEach(tagDef => {
             tagDefinitionMap.set(tagDef.ttd_id, tagDef);
           });
-          
+
           // Get facet_ids from tag definitions and create facet lookup
           const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
           const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
-          
+
           // Create lookup map for facets
           const facetMap = new Map();
           facets.forEach(facet => {
             facetMap.set(facet.facet_id, facet);
           });
-          
+
           // Stitch the data together
           template.template_tags.forEach(tag => {
             const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-            
+
             if (tagDefinition) {
               // Add tag definition data
               tag.tag_name = tagDefinition.tag_name;
               tag.tag_code = tagDefinition.tag_code;
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
-              
+
               // Get facet_id from tag definition (template_tags table doesn't store facet_id)
               const facetId = tagDefinition.facet_id;
               if (facetId) {
                 tag.facet_id = facetId; // Ensure facet_id is present
-                
+
                 const facet = facetMap.get(facetId);
                 if (facet) {
                   tag.facet_key = facet.facet_key;
@@ -941,7 +941,7 @@ exports.searchTemplates = async function(req, res) {
     logger.error('Error searching templates:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
-}; 
+};
 
 /**
  * Process custom_text_input_fields to create new niche data field definitions
@@ -955,7 +955,7 @@ async function processNewFieldsInCustomTextInputFields(customTextInputFields) {
 
   // Group fields by niche_slug (we'll need to get niche_id from slug)
   const fieldsByNiche = {};
-  
+
   for (const field of customTextInputFields) {
     if (field.new_field) {
       // Extract niche_slug from the field or use a default
@@ -978,7 +978,7 @@ async function processNewFieldsInCustomTextInputFields(customTextInputFields) {
           fieldIndex: i,
           newField: field.new_field
         });
-        
+
         // Remove new_field from the field object before storing
         delete field.new_field;
       } catch (error) {
@@ -1033,7 +1033,7 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
           is_visible_in_first_time_flow: 0,
           display_order: i + 1
         });
-        
+
         // Replace new_field with nfd_field_code after creation
         // We'll update this after bulk create
       }
@@ -1042,7 +1042,7 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
     // Bulk create new field definitions
     if (newFieldsToCreate.length > 0) {
       const createResult = await NicheDataFieldDefinitionModel.bulkCreateNicheDataFieldDefinitions(newFieldsToCreate);
-      
+
       // Fetch created fields by their IDs to get field_codes
       const createdFieldIds = createResult.insertIds || [];
       const createdFields = [];
@@ -1052,7 +1052,7 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
           createdFields.push(createdField);
         }
       }
-      
+
       // Update custom_text_input_fields to use nfd_field_code instead of new_field
       let createdIndex = 0;
       for (let i = 0; i < customTextInputFields.length; i++) {
@@ -1068,7 +1068,7 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
           createdIndex++;
         }
       }
-      
+
       logger.info('Created new niche data field definitions', {
         nicheSlug,
         nicheId,
@@ -1118,15 +1118,15 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} clips Template clips array with workflows
  */
-exports.createTemplate = async function(req, res) {
+exports.createTemplate = async function (req, res) {
   try {
     const templateData = req.validatedBody;
     // Generate UUID for template_id
-    templateData.template_id = uuidv4();
+    templateData.template_id = uuidv7();
 
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
-    
+
     if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'ai') {
       // User explicitly specified AI - respect it
       resolvedClipsAssetsType = 'ai';
@@ -1138,7 +1138,7 @@ exports.createTemplate = async function(req, res) {
       const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
       resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
     }
-    
+
     // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
@@ -1195,7 +1195,7 @@ exports.createTemplate = async function(req, res) {
         if (!templateData.video_uploads_json) {
           templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
         }
-        
+
         if (!templateData.template_gender) {
           if (templateData.faces_needed && templateData.faces_needed.length === 2) {
             templateData.template_gender = 'couple';
@@ -1203,7 +1203,7 @@ exports.createTemplate = async function(req, res) {
             templateData.template_gender = templateData.faces_needed[0].character_gender;
           }
         }
-        
+
         // Credits: derive minimum from AI models used
         const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
         if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
@@ -1221,8 +1221,8 @@ exports.createTemplate = async function(req, res) {
       try {
         const storage = StorageFactory.getProvider();
         const isPublic = templateData.bodymovin_json_bucket === 'public' ||
-                       templateData.bodymovin_json_bucket === storage.publicBucket ||
-                       templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
+          templateData.bodymovin_json_bucket === storage.publicBucket ||
+          templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
 
         let bodymovinUrl;
         if (isPublic) {
@@ -1291,21 +1291,21 @@ exports.createTemplate = async function(req, res) {
     if (templateTagIds && templateTagIds.length > 0) {
       await TemplateModel.createTemplateTags(templateData.template_id, templateTagIds);
     }
-    
+
     // Publish activity log command with the UUID template_id
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
-        value: { 
+        value: {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
-          action_name: 'ADD_NEW_TEMPLATE', 
+          action_name: 'ADD_NEW_TEMPLATE',
           entity_id: templateData.template_id
         }
       }],
       'create_admin_activity_log'
     );
-  
+
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: req.t('template:TEMPLATE_CREATED'),
       data: { template_id: templateData.template_id }
@@ -1345,19 +1345,19 @@ function generateFacesNeededFromClips(clips) {
 
       // Check if this is a "generate image" type node
       const isGenerateImageByCode = workflowCode === 'multi_image_editing' ||
-                                   workflowCode === 'style_change_convert_image' ||
-                                   workflowCode === 'image_generation' ||
-                                   workflowCode === 'generate_image' ||
-                                   workflowCode === 'image_editing' ||
-                                   workflowCode === 'inpainting' ||
-                                   workflowCode === 'inpaint_one_character';
+        workflowCode === 'style_change_convert_image' ||
+        workflowCode === 'image_generation' ||
+        workflowCode === 'generate_image' ||
+        workflowCode === 'image_editing' ||
+        workflowCode === 'inpainting' ||
+        workflowCode === 'inpaint_one_character';
       const isGenerateImageById = workflowId === 'multi-image-editing' ||
-                                 workflowId === 'style-change' ||
-                                 workflowId === 'image-generation' ||
-                                 workflowId === 'generate-image' ||
-                                 workflowId === 'image-editing' ||
-                                 workflowId === 'inpainting' ||
-                                 workflowId === 'inpaint-one-character';
+        workflowId === 'style-change' ||
+        workflowId === 'image-generation' ||
+        workflowId === 'generate-image' ||
+        workflowId === 'image-editing' ||
+        workflowId === 'inpainting' ||
+        workflowId === 'inpaint-one-character';
 
       const isGenerateImageStep = isGenerateImageByCode || isGenerateImageById;
 
@@ -1425,7 +1425,7 @@ function generateFacesNeededFromClips(clips) {
 
   // Attach stable unique ids for each character slot
   const facesWithIds = facesNeeded.map((face, index) => {
-    const id = uuidv4();
+    const id = uuidv7();
     return {
       ...face,
       template_character_id: id,
@@ -1455,13 +1455,13 @@ function calculateImageUploadsRequiredFromClips(clips) {
   }
 
   let uploads = 0;
-  
+
   for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
     const clip = clips[clipIndex];
     if (!clip || !Array.isArray(clip.workflow)) {
       continue;
     }
-    
+
     for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
       const step = clip.workflow[stepIndex];
       const workflowCode = (step && step.workflow_code ? String(step.workflow_code) : '').toLowerCase().trim();
@@ -1492,13 +1492,13 @@ function calculateVideoUploadsRequiredFromClips(clips) {
   }
 
   let uploads = 0;
-  
+
   for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
     const clip = clips[clipIndex];
     if (!clip || !Array.isArray(clip.workflow)) {
       continue;
     }
-    
+
     for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
       const step = clip.workflow[stepIndex];
       const workflowCode = (step && step.workflow_code ? String(step.workflow_code) : '').toLowerCase().trim();
@@ -1561,7 +1561,7 @@ function generateImageUploadsJsonFromClips(clips) {
           const itemType = String(item.type).toLowerCase().trim();
           if (itemType === 'character_gender' || itemType === 'gender') {
             const value = (item.value ?? '').toString().toLowerCase().trim();
-            
+
             if (value === 'male' || value === 'female' || value === 'unisex' || value === 'couple') {
               gender = value;
               break;
@@ -1631,7 +1631,7 @@ function generateVideoUploadsJsonFromClips(clips) {
           const itemType = String(item.type).toLowerCase().trim();
           if (itemType === 'character_gender' || itemType === 'gender') {
             const value = (item.value ?? '').toString().toLowerCase().trim();
-            
+
             if (value === 'male' || value === 'female' || value === 'unisex' || value === 'couple') {
               gender = value;
               break;
@@ -1756,20 +1756,20 @@ function computeTotalAssetCountsFromBodymovin(bodymovinJson) {
  */
 function extractAiModelOccurrencesFromClips(clips) {
   const modelOccurrences = [];
-  
+
   for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
     const clip = clips[clipIndex];
     if (!clip || !Array.isArray(clip.workflow)) continue;
-    
+
     for (let stepIndex = 0; stepIndex < clip.workflow.length; stepIndex++) {
       const step = clip.workflow[stepIndex];
       if (!step || !Array.isArray(step.data)) continue;
-      
+
       let modelId = null;
       let videoQuality = null;
       let videoDuration = null;
       let prompt = null;
-      
+
       // Extract model ID and context from step data
       for (const item of step.data) {
         if (item && item.type === 'ai_model' && item.value) {
@@ -1782,7 +1782,7 @@ function extractAiModelOccurrencesFromClips(clips) {
           prompt = item.value;
         }
       }
-      
+
       if (modelId) {
         modelOccurrences.push({
           modelId,
@@ -1797,7 +1797,7 @@ function extractAiModelOccurrencesFromClips(clips) {
       }
     }
   }
-  
+
   return modelOccurrences;
 }
 
@@ -1821,7 +1821,7 @@ function hasAiModelsInClips(clips) {
   if (!clips || clips.length === 0) {
     return false;
   }
-  
+
   for (const clip of clips) {
     if (clip.workflow && Array.isArray(clip.workflow)) {
       for (const step of clip.workflow) {
@@ -1831,7 +1831,7 @@ function hasAiModelsInClips(clips) {
       }
     }
   }
-  
+
   return false;
 }
 
@@ -1843,14 +1843,14 @@ function hasAiModelsInClips(clips) {
  */
 function calculateNonAiTemplateCredits(outputType, clips) {
   const baseCredits = outputType === 'video' ? TEMPLATE_CONSTANTS.NON_AI_VIDEO_BASE_CREDITS : TEMPLATE_CONSTANTS.NON_AI_IMAGE_BASE_CREDITS;
-  
+
   // For videos, add 0.003 USD per clip
   if (outputType === 'video' && clips && clips.length > 0) {
     // Add 0.003 USD per clip (0.15 credits per clip at $0.02 per credit)
     const additionalCredits = Math.ceil((clips.length * 0.003) / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
     return baseCredits + additionalCredits;
   }
-  
+
   return baseCredits;
 }
 
@@ -1860,16 +1860,16 @@ function calculateNonAiTemplateCredits(outputType, clips) {
  */
 async function calculateMinimumCreditsFromClips(clips) {
   const modelOccurrences = extractAiModelOccurrencesFromClips(clips);
-  
+
   if (modelOccurrences.length === 0) {
     return 0;
   }
-  
+
   // Get unique model IDs for database lookup
   const uniqueModelIds = [...new Set(modelOccurrences.map(occ => occ.modelId))];
-  
+
   const aiModels = await AiModelModel.getAiModelsByPlatformModelIds(uniqueModelIds);
-  
+
   // Create a map for quick model lookup using platform_model_id
   const modelMap = new Map();
   for (const model of aiModels) {
@@ -1881,11 +1881,11 @@ async function calculateMinimumCreditsFromClips(clips) {
 
   let totalUsd = 0;
   const occurrenceBreakdown = [];
-  
+
   // Calculate cost for each model occurrence
   for (const occurrence of modelOccurrences) {
     const model = modelMap.get(occurrence.modelId);
-    
+
     if (!model) {
       const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD;
       totalUsd += fallbackUsd;
@@ -1897,10 +1897,10 @@ async function calculateMinimumCreditsFromClips(clips) {
       });
       continue;
     }
-    
+
     if (model.status !== 'active') {
       const fallbackUsd = TEMPLATE_CONSTANTS.DEFAULT_MODEL_INVOCATION_USD;
-    totalUsd += fallbackUsd;
+      totalUsd += fallbackUsd;
       occurrenceBreakdown.push({
         ...occurrence,
         modelFound: true,
@@ -1910,10 +1910,10 @@ async function calculateMinimumCreditsFromClips(clips) {
       });
       continue;
     }
-    
+
     const costs = normalizeCosts(model.costs);
     const occurrenceCost = calculateOccurrenceCost(occurrence, costs, model);
-    
+
     totalUsd += occurrenceCost;
     occurrenceBreakdown.push({
       ...occurrence,
@@ -1928,7 +1928,7 @@ async function calculateMinimumCreditsFromClips(clips) {
   // Convert USD to credits; ceil to ensure sufficient credits
   const credits = Math.ceil(totalUsd / TEMPLATE_CONSTANTS.USD_PER_CREDIT);
   const finalCredits = Math.max(1, credits);
-  
+
   console.log('\n--- CREDITS CALCULATION SUMMARY ---');
   console.log('Total USD cost:', totalUsd);
   console.log('USD per credit:', TEMPLATE_CONSTANTS.USD_PER_CREDIT);
@@ -1949,21 +1949,21 @@ async function calculateMinimumCreditsFromClips(clips) {
  */
 function calculateOccurrenceCost(occurrence, costs, model) {
   let totalCost = 0;
-  
+
   // Handle input costs (text, image)
   if (costs.input) {
     // Text input cost
     if (costs.input.text && occurrence.workflowCode !== 'static-image') {
       totalCost += costs.input.text;
     }
-    
+
     // Image input cost (per megapixel)
     if (costs.input.image && costs.input.image.per_megapixel) {
       const imageCost = costs.input.image.per_megapixel * TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
       totalCost += imageCost;
     }
   }
-  
+
   // Handle output costs
   if (costs.output) {
     // Image output cost
@@ -1971,20 +1971,20 @@ function calculateOccurrenceCost(occurrence, costs, model) {
       const imageCost = costs.output.image.per_megapixel * TEMPLATE_CONSTANTS.DEFAULT_IMAGE_MEGAPIXELS;
       totalCost += imageCost;
     }
-    
+
     // Video output cost
     if (costs.output.video) {
       const videoCost = calculateVideoOutputCost(occurrence, costs.output.video);
       totalCost += videoCost;
     }
-    
+
     // Audio output cost
     if (costs.output.audio && costs.output.audio.price && costs.output.audio.seconds) {
       const audioCost = costs.output.audio.price;
       totalCost += audioCost;
     }
   }
-  
+
   return totalCost;
 }
 
@@ -1997,14 +1997,14 @@ function calculateOccurrenceCost(occurrence, costs, model) {
 function calculateVideoOutputCost(occurrence, videoCosts) {
   const quality = occurrence.videoQuality || '720p'; // Default quality
   const duration = occurrence.videoDuration || '5s'; // Default duration
-  
+
   if (!videoCosts[quality]) {
     const availableQualities = Object.keys(videoCosts);
     if (availableQualities.length === 0) return 0;
     const fallbackQuality = availableQualities[0];
     return calculateVideoCostForQuality(duration, videoCosts[fallbackQuality]);
   }
-  
+
   return calculateVideoCostForQuality(duration, videoCosts[quality]);
 }
 
@@ -2017,7 +2017,7 @@ function calculateVideoOutputCost(occurrence, videoCosts) {
 function calculateVideoCostForQuality(duration, qualityCosts) {
   // Parse duration (e.g., "5s" -> 5)
   const durationSeconds = parseInt(duration.replace('s', '')) || 5;
-  
+
   // Try per_segment pricing first (most common)
   if (qualityCosts.per_segment) {
     const segmentKey = duration; // e.g., "5s"
@@ -2025,20 +2025,20 @@ function calculateVideoCostForQuality(duration, qualityCosts) {
       const cost = qualityCosts.per_segment[segmentKey];
       return cost;
     }
-    
+
     // Try 5s segment as fallback
     if (qualityCosts.per_segment['5s']) {
       const cost = qualityCosts.per_segment['5s'];
       return cost;
     }
   }
-  
+
   // Try per_second pricing
   if (qualityCosts.per_second) {
     const cost = qualityCosts.per_second * durationSeconds;
     return cost;
   }
-  
+
   return 0;
 }
 
@@ -2113,7 +2113,7 @@ function estimateMinimumUsdPerInvocation(costs) {
 
 function ensureCreditsSatisfyMinimum(clientProvidedCredits, minimumCredits, translatorFn) {
   console.log("===============")
-  console.log(clientProvidedCredits, minimumCredits,'clientProvidedCredits, minimumCredits')
+  console.log(clientProvidedCredits, minimumCredits, 'clientProvidedCredits, minimumCredits')
   console.log("===============")
   const parsedCredits = Number(clientProvidedCredits);
   if (!Number.isFinite(parsedCredits) || parsedCredits < minimumCredits) {
@@ -2158,11 +2158,11 @@ function ensureCreditsSatisfyMinimum(clientProvidedCredits, minimumCredits, tran
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} [clips] Template clips array with workflows
  */
-exports.updateTemplate = async function(req, res) {
+exports.updateTemplate = async function (req, res) {
   try {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
-    
+
     // Check if template exists and get current template info
     const existingTemplate = await TemplateModel.getTemplateById(templateId);
     if (!existingTemplate) {
@@ -2183,7 +2183,7 @@ exports.updateTemplate = async function(req, res) {
 
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
-    
+
     if (templateData.template_clips_assets_type && templateData.template_clips_assets_type.toLowerCase() === 'ai') {
       // User explicitly specified AI - respect it
       resolvedClipsAssetsType = 'ai';
@@ -2195,12 +2195,12 @@ exports.updateTemplate = async function(req, res) {
       const hasAiModels = templateData.clips && templateData.clips.length > 0 ? hasAiModelsInClips(templateData.clips) : false;
       resolvedClipsAssetsType = hasAiModels ? 'ai' : 'non-ai';
     }
-    
+
     const isNonAi = resolvedClipsAssetsType === 'non-ai';
-    
+
     // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
-    
+
     logger.info('UpdateTemplate resolved template_clips_assets_type', { templateId, resolvedClipsAssetsType, userProvided: templateData.template_clips_assets_type });
 
     // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
@@ -2357,8 +2357,8 @@ exports.updateTemplate = async function(req, res) {
       try {
         const storage = StorageFactory.getProvider();
         const isPublic = bodymovinBucket === 'public' ||
-                       bodymovinBucket === storage.publicBucket ||
-                       bodymovinBucket === (config.os2?.r2?.public?.bucket);
+          bodymovinBucket === storage.publicBucket ||
+          bodymovinBucket === (config.os2?.r2?.public?.bucket);
 
         let bodymovinUrl;
         if (isPublic) {
@@ -2418,7 +2418,7 @@ exports.updateTemplate = async function(req, res) {
         }
       });
     }
-    
+
     let updated;
     if (hasClips) {
       // Use transaction for template updates with clips
@@ -2427,12 +2427,12 @@ exports.updateTemplate = async function(req, res) {
       // Use regular update for templates without clips
       updated = await TemplateModel.updateTemplate(templateId, templateData);
     }
-    
+
     // Update template tags if provided
     if (templateTagIds !== undefined) {
       await TemplateModel.updateTemplateTags(templateId, templateTagIds);
     }
-    
+
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
@@ -2443,15 +2443,15 @@ exports.updateTemplate = async function(req, res) {
     await TemplateRedisService.updateTemplateGenerationMeta(templateId);
 
     // Manual template tags are already stored above
-    
+
     // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
-        value: { 
+        value: {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
-          action_name: 'UPDATE_TEMPLATE', 
+          action_name: 'UPDATE_TEMPLATE',
           entity_id: templateId
         }
       }],
@@ -2466,7 +2466,7 @@ exports.updateTemplate = async function(req, res) {
     logger.error('Error updating template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
-} 
+}
 
 /**
  * @api {post} /templates/:templateId/archive Archive template
@@ -2477,12 +2477,12 @@ exports.updateTemplate = async function(req, res) {
  *
  * @apiParam {String} templateId Template ID
  */
-exports.archiveTemplate = async function(req, res) {
+exports.archiveTemplate = async function (req, res) {
   try {
     const { templateId } = req.params;
-    
+
     const archived = await TemplateModel.archiveTemplate(templateId);
-    
+
     if (!archived) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
@@ -2496,10 +2496,10 @@ exports.archiveTemplate = async function(req, res) {
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
-        value: { 
+        value: {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
-          action_name: 'ARCHIVE_TEMPLATE', 
+          action_name: 'ARCHIVE_TEMPLATE',
           entity_id: templateId
         }
       }],
@@ -2525,12 +2525,12 @@ exports.archiveTemplate = async function(req, res) {
  *
  * @apiBody {String[]} template_ids Array of template IDs (min: 1, max: 50)
  */
-exports.bulkArchiveTemplates = async function(req, res) {
+exports.bulkArchiveTemplates = async function (req, res) {
   try {
     const { template_ids } = req.validatedBody;
-    
+
     const archivedCount = await TemplateModel.bulkArchiveTemplates(template_ids);
-    
+
     if (archivedCount === 0) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:NO_TEMPLATES_ARCHIVED')
@@ -2542,10 +2542,10 @@ exports.bulkArchiveTemplates = async function(req, res) {
 
     // Publish activity log command for each archived template
     const activityLogCommands = template_ids.map(templateId => ({
-      value: { 
+      value: {
         admin_user_id: req.user.userId,
         entity_type: 'TEMPLATES',
-        action_name: 'BULK_ARCHIVE_TEMPLATE', 
+        action_name: 'BULK_ARCHIVE_TEMPLATE',
         entity_id: templateId
       }
     }));
@@ -2579,12 +2579,12 @@ exports.bulkArchiveTemplates = async function(req, res) {
  *
  * @apiBody {String[]} template_ids Array of template IDs (min: 1, max: 50)
  */
-exports.bulkUnarchiveTemplates = async function(req, res) {
+exports.bulkUnarchiveTemplates = async function (req, res) {
   try {
     const { template_ids } = req.validatedBody;
-    
+
     const unarchivedCount = await TemplateModel.bulkUnarchiveTemplates(template_ids);
-    
+
     if (unarchivedCount === 0) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:NO_TEMPLATES_UNARCHIVED')
@@ -2592,16 +2592,16 @@ exports.bulkUnarchiveTemplates = async function(req, res) {
     }
 
     // Update Redis cache for unarchived templates
-    await Promise.all(template_ids.map(templateId => 
+    await Promise.all(template_ids.map(templateId =>
       TemplateRedisService.updateTemplateGenerationMeta(templateId)
     ));
 
     // Publish activity log command for each unarchived template
     const activityLogCommands = template_ids.map(templateId => ({
-      value: { 
+      value: {
         admin_user_id: req.user.userId,
         entity_type: 'TEMPLATES',
-        action_name: 'BULK_UNARCHIVE_TEMPLATE', 
+        action_name: 'BULK_UNARCHIVE_TEMPLATE',
         entity_id: templateId
       }
     }));
@@ -2635,13 +2635,13 @@ exports.bulkUnarchiveTemplates = async function(req, res) {
  *
  * @apiParam {String} templateId Template ID to copy
  */
-exports.copyTemplate = async function(req, res) {
+exports.copyTemplate = async function (req, res) {
   try {
     const { templateId } = req.params;
-    
+
     // Get the original template with all its data
     const originalTemplate = await TemplateModel.getTemplateByIdWithAssets(templateId);
-    
+
     if (!originalTemplate) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
@@ -2649,21 +2649,21 @@ exports.copyTemplate = async function(req, res) {
     }
 
     // Generate new template ID
-    const newTemplateId = uuidv4();
-    
+    const newTemplateId = uuidv7();
+
     // Generate unique template code: copy first 4 letters from original + 2 random numbers
     const generateTemplateCode = (originalCode) => {
       const numbers = '0123456789';
       let newCode = '';
-      
+
       // Copy first 4 characters from original template code
       newCode = originalCode.substring(0, 4);
-      
+
       // Generate 2 random numbers
       for (let i = 0; i < 2; i++) {
         newCode += numbers.charAt(Math.floor(Math.random() * numbers.length));
       }
-      
+
       return newCode;
     };
 
@@ -2699,20 +2699,20 @@ exports.copyTemplate = async function(req, res) {
 
     // Prepare clips data for copying
     const clipsToCopy = originalTemplate.clips || [];
-    
+
     // Create the new template with all related data
     await TemplateModel.createTemplate(newTemplateData, clipsToCopy);
-    
+
     // Manual template tags are already stored above
-    
+
     // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
-        value: { 
+        value: {
           admin_user_id: req.user.userId,
           entity_type: 'TEMPLATES',
-          action_name: 'COPY_TEMPLATE', 
+          action_name: 'COPY_TEMPLATE',
           entity_id: newTemplateId,
           original_entity_id: templateId
         }
@@ -2722,7 +2722,7 @@ exports.copyTemplate = async function(req, res) {
 
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: req.t('template:TEMPLATE_COPIED'),
-      data: { 
+      data: {
         template_id: newTemplateId,
         original_template_id: templateId
       }
@@ -2743,7 +2743,7 @@ exports.copyTemplate = async function(req, res) {
  *
  * @apiBody {String[]} template_ids Array of template IDs to export (min: 1, max: 100)
  */
-exports.exportTemplates = async function(req, res) {
+exports.exportTemplates = async function (req, res) {
   try {
     const { template_ids } = req.validatedBody;
 
@@ -2849,7 +2849,7 @@ function transformTemplateForExport(template) {
  * @apiBody {Object} meta Import metadata
  * @apiBody {Array} templates Array of template objects to import
  */
-exports.importTemplates = async function(req, res) {
+exports.importTemplates = async function (req, res) {
   try {
     const { templates: importTemplates, meta } = req.validatedBody;
 
@@ -2870,7 +2870,7 @@ exports.importTemplates = async function(req, res) {
     const templateCreationPromises = importTemplates.map(async (importTemplate) => {
       try {
         // Generate new UUID for template
-        const newTemplateId = uuidv4();
+        const newTemplateId = uuidv7();
 
         // Helper function to process asset
         const processAsset = async (assetObj, assetType) => {
