@@ -2341,6 +2341,14 @@ exports.updateTemplate = async function(req, res) {
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
+    // If template type is "free", make credits zero.
+    // For "premium" or "ai", the credits are already recalculated/set in the blocks above
+    // (via calculateNonAiTemplateCredits or calculateMinimumCreditsFromClips).
+    const effectiveTemplateType = templateData.template_type || existingTemplate.template_type;
+    if (effectiveTemplateType === 'free') {
+      templateData.credits = 0;
+    }
+
     // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
     const bodymovinKey = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
     const bodymovinBucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
