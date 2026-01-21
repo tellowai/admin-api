@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const config = require('../../../config/config');
 
-exports.listTemplates = async function(pagination) {
+exports.listTemplates = async function (pagination) {
   const query = `
     SELECT 
       template_id,
@@ -50,12 +50,12 @@ exports.listTemplates = async function(pagination) {
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(
-    query, 
+    query,
     [pagination.limit, pagination.offset]
   );
 };
 
-exports.getTemplateGenerationMeta = async function(templateId) {
+exports.getTemplateGenerationMeta = async function (templateId) {
   const query = `
     SELECT 
       template_id,
@@ -77,7 +77,7 @@ exports.getTemplateGenerationMeta = async function(templateId) {
 };
 
 
-exports.listArchivedTemplates = async function(pagination) {
+exports.listArchivedTemplates = async function (pagination) {
   const query = `
     SELECT 
       template_id,
@@ -123,12 +123,12 @@ exports.listArchivedTemplates = async function(pagination) {
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(
-    query, 
+    query,
     [pagination.limit, pagination.offset]
   );
 };
 
-exports.getTemplatePrompt = async function(templateId) {
+exports.getTemplatePrompt = async function (templateId) {
   const query = `
     SELECT 
       template_id,
@@ -152,11 +152,11 @@ exports.getTemplatePrompt = async function(templateId) {
 
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
   return template;
-}; 
+};
 
-exports.searchTemplates = async function(searchQuery, page, limit) {
+exports.searchTemplates = async function (searchQuery, page, limit) {
   const offset = (page - 1) * limit;
-  
+
   const query = `
     SELECT 
       template_id,
@@ -200,18 +200,18 @@ exports.searchTemplates = async function(searchQuery, page, limit) {
 
   const searchPattern = `%${searchQuery}%`;
   return await mysqlQueryRunner.runQueryInSlave(
-    query, 
+    query,
     [searchPattern, searchPattern, searchPattern, limit, offset]
   );
-}; 
+};
 
-exports.createTemplate = async function(templateData, clips = null) {
+exports.createTemplate = async function (templateData, clips = null) {
   // For templates with clips, use transaction to ensure data consistency
   const needsTransaction = clips && clips.length > 0;
-  
+
   if (needsTransaction) {
     const connection = await mysqlQueryRunner.getConnectionFromMaster();
-    
+
     try {
       await connection.beginTransaction();
 
@@ -223,9 +223,9 @@ exports.createTemplate = async function(templateData, clips = null) {
       Object.entries(templateData).forEach(([key, value]) => {
         if (value !== undefined) {
           fields.push(key);
-          values.push(value === null ? null : 
-            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ? 
-            JSON.stringify(value) : value);
+          values.push(value === null ? null :
+            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+              JSON.stringify(value) : value);
           placeholders.push('?');
         }
       });
@@ -243,7 +243,7 @@ exports.createTemplate = async function(templateData, clips = null) {
       if (clips && clips.length > 0) {
         await this.createTemplateAiClipsInTransaction(connection, templateData.template_id, clips);
       }
-      
+
       await connection.commit();
       return result;
 
@@ -263,9 +263,9 @@ exports.createTemplate = async function(templateData, clips = null) {
     Object.entries(templateData).forEach(([key, value]) => {
       if (value !== undefined) {
         fields.push(key);
-        values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ? 
-          JSON.stringify(value) : value);
+        values.push(value === null ? null :
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+            JSON.stringify(value) : value);
         placeholders.push('?');
       }
     });
@@ -281,7 +281,7 @@ exports.createTemplate = async function(templateData, clips = null) {
   }
 };
 
-exports.updateTemplate = async function(templateId, templateData) {
+exports.updateTemplate = async function (templateId, templateData) {
   // Filter out undefined values and prepare set clause
   const setClause = [];
   const values = [];
@@ -293,9 +293,9 @@ exports.updateTemplate = async function(templateId, templateData) {
   Object.entries(templateData).forEach(([key, value]) => {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
-      values.push(value === null ? null : 
-        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ? 
-        JSON.stringify(value) : value);
+      values.push(value === null ? null :
+        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+          JSON.stringify(value) : value);
     }
   });
 
@@ -316,58 +316,82 @@ exports.updateTemplate = async function(templateId, templateData) {
 /**
  * Update template with clips (transaction-aware version)
  */
-exports.updateTemplateWithClips = async function(templateId, templateData, clips = null) {
+/**
+ * Update template with clips (transaction-aware version)
+ */
+exports.updateTemplateWithClips = async function (templateId, templateData, clips = null) {
   const connection = await mysqlQueryRunner.getConnectionFromMaster();
-  
+
   try {
     await connection.beginTransaction();
 
-    // Filter out undefined values and prepare set clause
     const setClause = [];
     const values = [];
 
-    // Extract clips data and remove from template data
+    // Extract and remove clips data
     const clipsData = templateData.clips;
     delete templateData.clips;
 
-    Object.entries(templateData).forEach(([key, value]) => {
-      if (value !== undefined) {
-        setClause.push(`${key} = ?`);
-        values.push(value === null ? null : 
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json') ? 
-          JSON.stringify(value) : value);
+    // JSON columns in templates table
+    const JSON_COLUMNS = [
+      'faces_needed',
+      'image_input_fields_json',
+      'image_uploads_json',
+      'video_uploads_json',
+      'custom_text_input_fields',
+      'additional_data'
+    ];
+
+    // Normalize JSON columns to valid JSON strings
+    for (const key of JSON_COLUMNS) {
+      if (templateData[key] === undefined) continue;
+
+      if (templateData[key] === null || templateData[key] === '') {
+        templateData[key] = '[]';
+      } else if (typeof templateData[key] === 'string') {
+        // assume already valid JSON
+      } else {
+        templateData[key] = JSON.stringify(templateData[key]);
       }
+    }
+
+    // Build SET clause dynamically (no allowed-column check)
+    Object.entries(templateData).forEach(([key, value]) => {
+      if (value === undefined) return;
+
+      setClause.push(`${key} = ?`);
+      values.push(value);
     });
 
     // Update template within transaction if there are fields to update
     if (setClause.length > 0) {
-      // Add templateId to values array
       values.push(templateId);
 
       const updateQuery = `
-        UPDATE templates 
-        SET ${setClause.join(', ')}
-        WHERE template_id = ?
-        AND archived_at IS NULL
-      `;
+    UPDATE templates
+    SET ${setClause.join(', ')}
+    WHERE template_id = ?
+    AND archived_at IS NULL
+  `;
 
       const result = await connection.query(updateQuery, values);
-      
-      if (result.affectedRows === 0) {
+
+      if (!result || result.affectedRows === 0) {
         await connection.rollback();
         return false;
       }
     }
 
+
     // Update AI clips within the same transaction
     if (clipsData && clipsData.length > 0) {
       // Delete existing clips for this template
       await this.deleteTemplateAiClipsInTransaction(connection, templateId);
-      
+
       // Insert new clips
       await this.createTemplateAiClipsInTransaction(connection, templateId, clipsData);
     }
-    
+
     await connection.commit();
     return true;
 
@@ -382,7 +406,7 @@ exports.updateTemplateWithClips = async function(templateId, templateData, clips
 /**
  * Get template by ID
  */
-exports.getTemplateById = async function(templateId) {
+exports.getTemplateById = async function (templateId) {
   const query = `
     SELECT 
       template_id,
@@ -432,7 +456,7 @@ exports.getTemplateById = async function(templateId) {
 /**
  * Get template by code
  */
-exports.getTemplateByCode = async function(templateCode) {
+exports.getTemplateByCode = async function (templateCode) {
   const query = `
     SELECT 
       template_id,
@@ -482,7 +506,7 @@ exports.getTemplateByCode = async function(templateCode) {
 /**
  * Get template by ID with complete data
  */
-exports.getTemplateByIdWithAssets = async function(templateId) {
+exports.getTemplateByIdWithAssets = async function (templateId) {
   const template = await this.getTemplateById(templateId);
 
   if (!template) {
@@ -498,7 +522,7 @@ exports.getTemplateByIdWithAssets = async function(templateId) {
 /**
  * Get multiple templates by IDs with complete data for export
  */
-exports.getTemplatesByIdsForExport = async function(templateIds) {
+exports.getTemplatesByIdsForExport = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) {
     return [];
   }
@@ -528,7 +552,7 @@ exports.getTemplatesByIdsForExport = async function(templateIds) {
 /**
  * Delete AI clips for a template (transaction-aware version)
  */
-exports.deleteTemplateAiClipsInTransaction = async function(connection, templateId) {
+exports.deleteTemplateAiClipsInTransaction = async function (connection, templateId) {
   // First get all tac_ids for this template
   const getTacIdsQuery = `
     SELECT tac_id
@@ -536,24 +560,24 @@ exports.deleteTemplateAiClipsInTransaction = async function(connection, template
     WHERE template_id = ?
     AND deleted_at IS NULL
   `;
-  
+
   const tacIds = await connection.query(getTacIdsQuery, [templateId]);
-  
+
   // Delete workflows for all clips
   if (tacIds.length > 0) {
     const tacIdList = tacIds.map(row => row.tac_id);
     const placeholders = tacIdList.map(() => '?').join(',');
-    
+
     const softDeleteWorkflowsQuery = `
       UPDATE clip_workflow
       SET deleted_at = NOW()
       WHERE tac_id IN (${placeholders})
       AND deleted_at IS NULL
     `;
-    
+
     await connection.query(softDeleteWorkflowsQuery, tacIdList);
   }
-  
+
   // Then mark clips as deleted
   const deleteQuery = `
     UPDATE template_ai_clips
@@ -568,7 +592,7 @@ exports.deleteTemplateAiClipsInTransaction = async function(connection, template
 /**
  * Delete AI clips for a template (non-transactional helper)
  */
-exports.deleteTemplateAiClips = async function(templateId) {
+exports.deleteTemplateAiClips = async function (templateId) {
   // First get all tac_ids for this template
   const getTacIdsQuery = `
     SELECT tac_id
@@ -605,7 +629,7 @@ exports.deleteTemplateAiClips = async function(templateId) {
   await mysqlQueryRunner.runQueryInMaster(deleteQuery, [templateId]);
 };
 
-exports.archiveTemplate = async function(templateId) {
+exports.archiveTemplate = async function (templateId) {
   const query = `
     UPDATE templates 
     SET archived_at = NOW()
@@ -617,7 +641,7 @@ exports.archiveTemplate = async function(templateId) {
   return result.affectedRows > 0;
 };
 
-exports.bulkArchiveTemplates = async function(templateIds) {
+exports.bulkArchiveTemplates = async function (templateIds) {
   const placeholders = templateIds.map(() => '?').join(', ');
   const query = `
     UPDATE templates 
@@ -630,7 +654,7 @@ exports.bulkArchiveTemplates = async function(templateIds) {
   return result.affectedRows;
 };
 
-exports.bulkUnarchiveTemplates = async function(templateIds) {
+exports.bulkUnarchiveTemplates = async function (templateIds) {
   const placeholders = templateIds.map(() => '?').join(', ');
   const query = `
     UPDATE templates 
@@ -646,12 +670,12 @@ exports.bulkUnarchiveTemplates = async function(templateIds) {
 /**
  * Create AI clips for a template (transaction-aware version)
  */
-exports.createTemplateAiClipsInTransaction = async function(connection, templateId, clips) {
+exports.createTemplateAiClipsInTransaction = async function (connection, templateId, clips) {
   const clipData = [];
-  
+
   for (const clip of clips) {
     const tacId = uuidv4();
-    
+
     // Base clip data for new structure
     const baseClipData = {
       tac_id: tacId,
@@ -670,13 +694,13 @@ exports.createTemplateAiClipsInTransaction = async function(connection, template
     const fields = Object.keys(clipData[0]);
     const placeholders = fields.map(() => '?').join(', ');
     const valuesPlaceholder = clipData.map(() => `(${placeholders})`).join(', ');
-    
+
     const insertQuery = `
       INSERT INTO template_ai_clips (
         ${fields.join(', ')}
       ) VALUES ${valuesPlaceholder}
       `;
-    
+
     const values = clipData.flatMap(clip => Object.values(clip));
 
     await connection.query(insertQuery, values);
@@ -685,7 +709,7 @@ exports.createTemplateAiClipsInTransaction = async function(connection, template
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
       const tacId = clipData[i].tac_id;
-      
+
       if (clip.workflow && clip.workflow.length > 0) {
         await this.createClipWorkflowInTransaction(connection, tacId, clip.workflow);
       }
@@ -696,9 +720,9 @@ exports.createTemplateAiClipsInTransaction = async function(connection, template
 /**
  * Create clip workflow entries (transaction-aware version)
  */
-exports.createClipWorkflowInTransaction = async function(connection, tacId, workflow) {
+exports.createClipWorkflowInTransaction = async function (connection, tacId, workflow) {
   const workflowData = [];
-  
+
   for (const step of workflow) {
     workflowData.push({
       tac_id: tacId,
@@ -713,13 +737,13 @@ exports.createClipWorkflowInTransaction = async function(connection, tacId, work
     const fields = Object.keys(workflowData[0]);
     const placeholders = fields.map(() => '?').join(', ');
     const valuesPlaceholder = workflowData.map(() => `(${placeholders})`).join(', ');
-    
+
     const insertQuery = `
       INSERT INTO clip_workflow (
         ${fields.join(', ')}
       ) VALUES ${valuesPlaceholder}
     `;
-    
+
     const values = workflowData.flatMap(workflow => Object.values(workflow));
     await connection.query(insertQuery, values);
   }
@@ -728,7 +752,7 @@ exports.createClipWorkflowInTransaction = async function(connection, tacId, work
 /**
  * Get AI clips for a template
  */
-exports.getTemplateAiClips = async function(templateId) {
+exports.getTemplateAiClips = async function (templateId) {
   const query = `
     SELECT 
       tac_id,
@@ -744,20 +768,20 @@ exports.getTemplateAiClips = async function(templateId) {
   `;
 
   const clips = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
-  
+
   // Get workflow for each clip
   for (const clip of clips) {
     const workflow = await this.getClipWorkflow(clip.tac_id);
     clip.workflow = workflow;
   }
-  
+
   return clips;
 };
 
 /**
  * Get workflow for a clip
  */
-exports.getClipWorkflow = async function(tacId) {
+exports.getClipWorkflow = async function (tacId) {
   const query = `
     SELECT 
       cw_id,
@@ -772,7 +796,7 @@ exports.getClipWorkflow = async function(tacId) {
   `;
 
   const workflowEntries = await mysqlQueryRunner.runQueryInSlave(query, [tacId]);
-  
+
   // Parse workflow JSON and return as array
   return workflowEntries.map(entry => {
     if (entry.workflow && typeof entry.workflow === 'string') {
@@ -789,13 +813,13 @@ exports.getClipWorkflow = async function(tacId) {
 /**
  * Create template tags for a template
  */
-exports.createTemplateTags = async function(templateId, templateTagIds) {
+exports.createTemplateTags = async function (templateId, templateTagIds) {
   if (!templateTagIds || templateTagIds.length === 0) {
     return [];
   }
 
   // Extract both ttd_id and facet_id from templateTagIds
-  
+
   const values = templateTagIds.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
   const query = `
     INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at)
@@ -818,7 +842,7 @@ exports.createTemplateTags = async function(templateId, templateTagIds) {
 /**
  * Get template tags for a template
  */
-exports.getTemplateTags = async function(templateId) {
+exports.getTemplateTags = async function (templateId) {
   const query = `
     SELECT 
       tt_id,
@@ -839,35 +863,35 @@ exports.getTemplateTags = async function(templateId) {
 /**
  * Update template tags (smart update - only add/remove what's needed)
  */
-exports.updateTemplateTags = async function(templateId, templateTagIds) {
+exports.updateTemplateTags = async function (templateId, templateTagIds) {
   // Get existing template tags
   const existingTags = await this.getTemplateTags(templateId);
-  
+
   // Convert to comparable format for easier comparison (using both facet_id and ttd_id)
   const existingTagKeys = existingTags.map(tag => `${tag.facet_id}-${tag.ttd_id}`);
   const newTagKeys = (templateTagIds || []).map(tag => `${tag.facet_id}-${tag.ttd_id}`);
-  
+
   // Find tags to remove (exist in current but not in new)
-  const tagsToRemove = existingTags.filter(tag => 
+  const tagsToRemove = existingTags.filter(tag =>
     !newTagKeys.includes(`${tag.facet_id}-${tag.ttd_id}`)
   );
-  
+
   // Find tags to add (exist in new but not in current)
-  const tagsToAdd = (templateTagIds || []).filter(tag => 
+  const tagsToAdd = (templateTagIds || []).filter(tag =>
     !existingTagKeys.includes(`${tag.facet_id}-${tag.ttd_id}`)
   );
-  
+
   // Remove tags that are no longer needed
   if (tagsToRemove.length > 0) {
     const ttdIdsToRemove = tagsToRemove.map(tag => tag.ttd_id);
     await this.removeTemplateTags(templateId, ttdIdsToRemove);
   }
-  
+
   // Add new tags (handle both new inserts and restoring soft-deleted tags)
   if (tagsToAdd.length > 0) {
     await this.createOrRestoreTemplateTags(templateId, tagsToAdd);
   }
-  
+
   // Return updated tags
   return await this.getTemplateTags(templateId);
 };
@@ -875,22 +899,22 @@ exports.updateTemplateTags = async function(templateId, templateTagIds) {
 /**
  * Update template tags (legacy method - remove all existing and add new ones)
  */
-exports.updateTemplateTagsLegacy = async function(templateId, templateTagIds) {
+exports.updateTemplateTagsLegacy = async function (templateId, templateTagIds) {
   // First remove all existing tags
   await this.removeAllTemplateTags(templateId);
-  
+
   // Then add new tags if provided
   if (templateTagIds && templateTagIds.length > 0) {
     return await this.createTemplateTags(templateId, templateTagIds);
   }
-  
+
   return [];
 };
 
 /**
  * Remove all template tags for a template
  */
-exports.removeAllTemplateTags = async function(templateId) {
+exports.removeAllTemplateTags = async function (templateId) {
   const query = `
     UPDATE template_tags 
     SET deleted_at = NOW()
@@ -905,7 +929,7 @@ exports.removeAllTemplateTags = async function(templateId) {
 /**
  * Remove specific template tags for a template
  */
-exports.removeTemplateTags = async function(templateId, ttdIds) {
+exports.removeTemplateTags = async function (templateId, ttdIds) {
   if (!ttdIds || ttdIds.length === 0) {
     return true;
   }
@@ -925,7 +949,7 @@ exports.removeTemplateTags = async function(templateId, ttdIds) {
 /**
  * Check if a specific template tag exists
  */
-exports.checkTemplateTagExists = async function(templateId, facetId, ttdId) {
+exports.checkTemplateTagExists = async function (templateId, facetId, ttdId) {
   const query = `
     SELECT tt_id 
     FROM template_tags 
@@ -940,7 +964,7 @@ exports.checkTemplateTagExists = async function(templateId, facetId, ttdId) {
 /**
  * Get AI clips for multiple templates (batch operation)
  */
-exports.getTemplateAiClipsForMultipleTemplates = async function(templateIds) {
+exports.getTemplateAiClipsForMultipleTemplates = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) {
     return [];
   }
@@ -961,7 +985,7 @@ exports.getTemplateAiClipsForMultipleTemplates = async function(templateIds) {
   `;
 
   const clips = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
-  
+
   // Get workflows for all clips in batch
   if (clips.length > 0) {
     const tacIds = clips.map(clip => clip.tac_id);
@@ -977,16 +1001,16 @@ exports.getTemplateAiClipsForMultipleTemplates = async function(templateIds) {
       WHERE tac_id IN (${workflowPlaceholders})
       AND deleted_at IS NULL
     `;
-    
+
     const workflows = await mysqlQueryRunner.runQueryInSlave(workflowQuery, tacIds);
     const workflowMap = new Map();
-    
+
     // Group workflows by tac_id (multiple workflows per clip)
     workflows.forEach(workflow => {
       if (!workflowMap.has(workflow.tac_id)) {
         workflowMap.set(workflow.tac_id, []);
       }
-      
+
       // Parse workflow JSON if it's a string
       let parsedWorkflow = workflow.workflow;
       if (typeof parsedWorkflow === 'string') {
@@ -997,25 +1021,25 @@ exports.getTemplateAiClipsForMultipleTemplates = async function(templateIds) {
           parsedWorkflow = null;
         }
       }
-      
+
       if (parsedWorkflow) {
         workflowMap.get(workflow.tac_id).push(parsedWorkflow);
       }
     });
-    
+
     // Attach workflows to clips (as arrays)
     clips.forEach(clip => {
       clip.workflow = workflowMap.get(clip.tac_id) || [];
     });
   }
-  
+
   return clips;
 };
 
 /**
  * Get template tags for multiple templates (batch operation)
  */
-exports.getTemplateTagsForMultipleTemplates = async function(templateIds) {
+exports.getTemplateTagsForMultipleTemplates = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) {
     return [];
   }
@@ -1041,7 +1065,7 @@ exports.getTemplateTagsForMultipleTemplates = async function(templateIds) {
 /**
  * Create or restore template tags (handles both new inserts and soft-deleted restores)
  */
-exports.createOrRestoreTemplateTags = async function(templateId, templateTagIds) {
+exports.createOrRestoreTemplateTags = async function (templateId, templateTagIds) {
   if (!templateTagIds || templateTagIds.length === 0) {
     return [];
   }
@@ -1054,9 +1078,9 @@ exports.createOrRestoreTemplateTags = async function(templateId, templateTagIds)
     WHERE template_id = ? AND ttd_id IN (${ttdIds.map(() => '?').join(',')})
     AND deleted_at IS NOT NULL
   `;
-  
+
   await mysqlQueryRunner.runQueryInMaster(restoreQuery, [templateId, ...ttdIds]);
-  
+
   // Then, insert any tags that don't exist at all (new or restored)
   const values = templateTagIds.map(() => `(?, ?, ?, NOW(), NOW())`).join(',');
   const insertQuery = `
@@ -1075,4 +1099,7 @@ exports.createOrRestoreTemplateTags = async function(templateId, templateTagIds)
   } catch (error) {
     throw error;
   }
-}; 
+};
+
+//wokrinf
+
