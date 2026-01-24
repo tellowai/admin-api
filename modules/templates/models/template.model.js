@@ -42,10 +42,11 @@ exports.listTemplates = async function (pagination) {
       aspect_ratio,
       orientation,
       additional_data,
-      created_at
+      created_at,
+      updated_at
     FROM templates
     WHERE archived_at IS NULL
-    ORDER BY created_at DESC
+    ORDER BY updated_at DESC
     LIMIT ? OFFSET ?
   `;
 
