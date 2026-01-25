@@ -46,7 +46,7 @@ exports.listTemplates = async function (pagination) {
       updated_at
     FROM templates
     WHERE archived_at IS NULL
-    ORDER BY updated_at DESC
+    ORDER BY updated_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -119,7 +119,7 @@ exports.listArchivedTemplates = async function (pagination) {
       archived_at
     FROM templates
     WHERE archived_at IS NOT NULL
-    ORDER BY archived_at DESC
+    ORDER BY archived_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -195,7 +195,7 @@ exports.searchTemplates = async function (searchQuery, page, limit) {
     WHERE LOWER(template_name) LIKE LOWER(?)
     OR LOWER(template_code) LIKE LOWER(?)
     OR LOWER(prompt) LIKE LOWER(?)
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
