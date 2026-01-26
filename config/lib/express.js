@@ -5,7 +5,7 @@ var path = require('path');
 var helmet = require('helmet');
 var cors = require('cors');
 var i18next = require('i18next');
-var i18nextMiddleware =require('i18next-http-middleware');
+var i18nextMiddleware = require('i18next-http-middleware');
 const i18nextBackend = require('i18next-fs-backend')
 var config = require('../config');
 var passport = require('passport');
@@ -20,7 +20,7 @@ module.exports.initMiddleware = function (app) {
   // Showing stack errors
   app.set('showStackError', true);
 
-  app.use(express.urlencoded({ 
+  app.use(express.urlencoded({
     extended: true,
     limit: '50mb' // Increased from default 100kb to 50mb
   }));
@@ -114,26 +114,26 @@ module.exports.initModulesServerLocales = function (app) {
     var filename = fullPath.replace(/^.*[\\\/]/, '');
     var filenameWoExtension = filename.split('.').slice(0, -1).join('.');
 
-    if(i18Namespaces.indexOf(filenameWoExtension) < 0) {
+    if (i18Namespaces.indexOf(filenameWoExtension) < 0) {
       i18Namespaces.push(filenameWoExtension);
     }
   });
 
   i18next
-  .use(i18nextBackend)
-  .use(i18nextMiddleware.LanguageDetector)
-  .init({
-    detection: {
-      order: ['querystring', 'header'],
-      lookupQuerystring: 'locale'
-    },
-    fallbackLng: 'en',
-    ns: i18Namespaces,
-    defaultNS: 'common',
-    backend: {
-      loadPath: 'config/locales/{{lng}}/{{ns}}.json'
-    }
-  });
+    .use(i18nextBackend)
+    .use(i18nextMiddleware.LanguageDetector)
+    .init({
+      detection: {
+        order: ['querystring', 'header'],
+        lookupQuerystring: 'locale'
+      },
+      fallbackLng: 'en',
+      ns: i18Namespaces,
+      defaultNS: 'common',
+      backend: {
+        loadPath: 'config/locales/{{lng}}/{{ns}}.json'
+      }
+    });
 };
 
 /**
@@ -170,10 +170,12 @@ module.exports.handleCors = function (app) {
     'https://www.photobop.co',
     'https://photobop.co',
     'https://tellowai.com',
-    'https://admin.tellowai.com'
+    'https://admin.tellowai.com',
+    'https://admin.pifield.com',
+    'https://pifield.com',
   ];
   var corsOptions = {
-    origin: function(origin, callback){
+    origin: function (origin, callback) {
       var originIsWhitelisted = whitelist.indexOf(origin) !== -1;
       callback(null, originIsWhitelisted);
     },

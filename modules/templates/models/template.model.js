@@ -328,11 +328,10 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
   try {
     await connection.beginTransaction();
 
-    // Filter out undefined values and prepare set clause
     const setClause = [];
     const values = [];
 
-    // Extract clips data and remove from template data
+    // Extract and remove clips data
     const clipsData = templateData.clips;
     delete templateData.clips;
 
@@ -343,19 +342,26 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
           (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
             JSON.stringify(value) : value);
       }
+    }
+
+    // Build SET clause dynamically (no allowed-column check)
+    Object.entries(templateData).forEach(([key, value]) => {
+      if (value === undefined) return;
+
+      setClause.push(`${key} = ?`);
+      values.push(value);
     });
 
     // Update template within transaction if there are fields to update
     if (setClause.length > 0) {
-      // Add templateId to values array
       values.push(templateId);
 
       const updateQuery = `
-        UPDATE templates 
-        SET ${setClause.join(', ')}
-        WHERE template_id = ?
-        AND archived_at IS NULL
-      `;
+    UPDATE templates
+    SET ${setClause.join(', ')}
+    WHERE template_id = ?
+    AND archived_at IS NULL
+  `;
 
       const result = await connection.query(updateQuery, values);
 
@@ -364,6 +370,7 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
         return false;
       }
     }
+
 
     // Update AI clips within the same transaction
     if (clipsData && clipsData.length > 0) {
@@ -1083,4 +1090,4 @@ exports.createOrRestoreTemplateTags = async function (templateId, templateTagIds
   } catch (error) {
     throw error;
   }
-}; 
+};
