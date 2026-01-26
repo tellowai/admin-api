@@ -173,6 +173,7 @@ module.exports.handleCors = function (app) {
     'https://admin.tellowai.com',
     'https://admin.pifield.com',
     'https://pifield.com',
+    'https://admin.tellow.ai'
   ];
   var corsOptions = {
     origin: function (origin, callback) {
