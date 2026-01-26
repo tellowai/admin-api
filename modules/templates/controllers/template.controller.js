@@ -497,6 +497,250 @@ exports.listTemplates = async function (req, res) {
 };
 
 /**
+ * @api {get} /templates/:templateId Get single template
+ * @apiVersion 1.0.0
+ * @apiName GetTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiParam {String} templateId Template ID
+ */
+exports.getTemplate = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+
+    if (!templateId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        error: 'Template ID is required'
+      });
+    }
+
+    // Get template by ID
+    const template = await TemplateModel.getTemplateById(templateId);
+
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    const storage = StorageFactory.getProvider();
+
+    // Generate R2 URL for template thumbnail
+    if (template.cf_r2_key) {
+      template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+    } else {
+      template.r2_url = template.cf_r2_url;
+    }
+
+    // Load AI clips for template
+    template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
+
+    // Generate R2 URLs for AI clip assets
+    if (template.clips && template.clips.length > 0) {
+      template.clips = template.clips.map(clip => {
+        // Generate R2 URL for template image asset
+        if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+          clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+        }
+
+        // Generate R2 URL for video file asset
+        if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+          clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+        }
+
+        // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
+        if (Array.isArray(clip.workflow)) {
+          clip.workflow = clip.workflow.map(step => {
+            if (!step || !Array.isArray(step.data)) return step;
+            step.data = step.data.map(item => {
+              const itemType = String(item?.type || '').toLowerCase();
+              if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+              }
+              return item;
+            });
+            return step;
+          });
+        }
+
+        return clip;
+      });
+    }
+
+    // Fallback compute of image uploads required if not present or invalid
+    if (
+      template.image_uploads_required === undefined ||
+      template.image_uploads_required === null ||
+      Number.isNaN(Number(template.image_uploads_required))
+    ) {
+      template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
+    }
+
+    // Generate R2 URLs for template assets
+    if (template.color_video_key && template.color_video_bucket) {
+      template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
+    }
+    if (template.mask_video_key && template.mask_video_bucket) {
+      template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
+    }
+    if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
+      template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+    }
+
+    // Generate presigned download URL for thumb_frame if available
+    if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+      try {
+        const isPublic = template.thumb_frame_bucket === 'public' ||
+          template.thumb_frame_bucket === storage.publicBucket ||
+          template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+
+        if (isPublic) {
+          template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+        } else {
+          template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
+        }
+      } catch (error) {
+        logger.error('Error generating thumb_frame presigned URL:', {
+          error: error.message,
+          template_id: template.template_id,
+          thumb_frame_asset_key: template.thumb_frame_asset_key,
+          thumb_frame_bucket: template.thumb_frame_bucket
+        });
+        template.thumb_frame_url = null;
+      }
+    }
+
+    // Parse JSON fields if they are strings
+    if (template.faces_needed && typeof template.faces_needed === 'string') {
+      try {
+        template.faces_needed = JSON.parse(template.faces_needed);
+
+        // Generate R2 URLs for character faces if they exist
+        if (template.faces_needed) {
+          template.faces_needed = template.faces_needed.map(face => {
+            if (face.character_face_r2_key) {
+              face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+            }
+            return face;
+          });
+        }
+      } catch (err) {
+        logger.error('Error parsing faces_needed:', {
+          error: err.message,
+          value: template.faces_needed
+        });
+      }
+    } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
+      template.faces_needed = template.faces_needed.map(face => {
+        if (face.character_face_r2_key) {
+          face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+        }
+        return face;
+      });
+    }
+
+    if (template.additional_data && typeof template.additional_data === 'string') {
+      try {
+        template.additional_data = JSON.parse(template.additional_data);
+      } catch (err) {
+        logger.error('Error parsing additional_data:', {
+          error: err.message,
+          value: template.additional_data
+        });
+      }
+    }
+
+    if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
+      try {
+        template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
+      } catch (err) {
+        logger.error('Error parsing custom_text_input_fields:', {
+          error: err.message,
+          value: template.custom_text_input_fields
+        });
+      }
+    }
+
+    if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
+      try {
+        template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
+      } catch (err) {
+        logger.error('Error parsing image_input_fields_json:', {
+          error: err.message,
+          value: template.image_input_fields_json
+        });
+      }
+    }
+
+    // Load template tags with full details
+    template.tags = await getTemplateTagsWithDetails(template.template_id);
+    template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+
+    // Stitch facet information for template tags
+    if (template.template_tags && template.template_tags.length > 0) {
+      // Get all unique ttd_ids
+      const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
+      
+      // Get tag definitions
+      const tagDefinitions = ttdIds.length > 0 ?
+        await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds) : [];
+      const tagDefinitionMap = new Map();
+      tagDefinitions.forEach(tagDef => {
+        tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+      });
+
+      // Get all unique facet_ids
+      const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+      const facets = facetIds.length > 0 ?
+        await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds) : [];
+      const facetMap = new Map();
+      facets.forEach(facet => {
+        facetMap.set(facet.facet_id, facet);
+      });
+
+      // Stitch the data together
+      template.template_tags.forEach(tag => {
+        const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
+
+        if (tagDefinition) {
+          // Add tag definition data
+          tag.tag_name = tagDefinition.tag_name;
+          tag.tag_code = tagDefinition.tag_code;
+          tag.tag_description = tagDefinition.tag_description;
+          tag.is_active = tagDefinition.is_active;
+
+          // Use facet_id from tag definition (primary source)
+          const facetId = tagDefinition.facet_id;
+          if (facetId) {
+            tag.facet_id = facetId; // Ensure facet_id is present
+
+            const facet = facetMap.get(facetId);
+            if (facet) {
+              tag.facet_key = facet.facet_key;
+              tag.facet_display_name = facet.display_name;
+              tag.facet_cardinality = facet.cardinality;
+              tag.facet_strict = facet.strict;
+              tag.facet_required_for_publish = facet.required_for_publish;
+              tag.facet_visible = facet.visible;
+              tag.facet_allow_suggestions = facet.allow_suggestions;
+            }
+          }
+        }
+      });
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: template
+    });
+
+  } catch (error) {
+    logger.error('Error getting template:', { error: error.message, stack: error.stack, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
  * @api {get} /templates/archived List archived templates
  * @apiVersion 1.0.0
  * @apiName ListArchivedTemplates

@@ -30,6 +30,13 @@ module.exports = function(app) {
 
   app.route(
     versionConfig.routePrefix + '/templates/:templateId'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.getTemplate
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId'
   ).patch(
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateUpdateTemplateData,
