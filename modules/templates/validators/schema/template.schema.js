@@ -124,7 +124,6 @@ const createTemplateSchema = Joi.object().keys({
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
-  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').default('draft'),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
   clips: Joi.array()
     .items(clipSchema)
@@ -133,6 +132,18 @@ const createTemplateSchema = Joi.object().keys({
       then: Joi.array().items(clipSchema).min(1).required(),
       otherwise: Joi.array().items(clipSchema).max(0).optional()
     })
+});
+
+// Minimal schema for creating draft template
+const createDraftTemplateSchema = Joi.object().keys({
+  template_name: Joi.string().max(255).required(),
+  template_code: Joi.string().max(9).required(),
+  cf_r2_url: Joi.string().max(1000).required(),
+  cf_r2_key: Joi.string().max(512).required(),
+  template_output_type: Joi.string().valid('image', 'video', 'audio').default('video'),
+  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').default('draft'),
+  thumb_frame_asset_key: Joi.string().max(512).allow(null).optional(),
+  thumb_frame_bucket: Joi.string().max(255).allow(null).optional()
 });
 
 const updateTemplateSchema = Joi.object().keys({
@@ -194,7 +205,6 @@ const updateTemplateSchema = Joi.object().keys({
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
-  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').optional(),
   clips: Joi.array().items(clipSchema).optional()
 });
 
@@ -204,6 +214,15 @@ const bulkArchiveTemplatesSchema = Joi.object().keys({
 
 const bulkUnarchiveTemplatesSchema = Joi.object().keys({
   template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required()
+});
+
+const updateTemplateStatusSchema = Joi.object().keys({
+  status: Joi.string().valid('active', 'inactive').required()
+});
+
+const bulkUpdateTemplatesStatusSchema = Joi.object().keys({
+  template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required(),
+  status: Joi.string().valid('active', 'inactive').required()
 });
 
 const exportTemplatesSchema = Joi.object().keys({
@@ -255,8 +274,11 @@ const importTemplatesSchema = Joi.object().keys({
 });
 
 exports.createTemplateSchema = createTemplateSchema;
+exports.createDraftTemplateSchema = createDraftTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
 exports.bulkArchiveTemplatesSchema = bulkArchiveTemplatesSchema;
 exports.bulkUnarchiveTemplatesSchema = bulkUnarchiveTemplatesSchema;
+exports.updateTemplateStatusSchema = updateTemplateStatusSchema;
+exports.bulkUpdateTemplatesStatusSchema = bulkUpdateTemplatesStatusSchema;
 exports.exportTemplatesSchema = exportTemplatesSchema;
-exports.importTemplatesSchema = importTemplatesSchema; 
+exports.importTemplatesSchema = importTemplatesSchema;

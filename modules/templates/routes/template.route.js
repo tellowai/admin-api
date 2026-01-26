@@ -5,14 +5,14 @@ const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const TemplateCtrl = require('../controllers/template.controller');
 const TemplateValidator = require('../validators/template.validator');
 
-module.exports = function(app) {
+module.exports = function (app) {
   app.route(
     versionConfig.routePrefix + '/templates'
   ).get(
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.listTemplates
   )
-  
+
   app.route(
     versionConfig.routePrefix + '/templates/archived'
   ).get(
@@ -29,6 +29,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/draft'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateCreateDraftTemplateData,
+    TemplateCtrl.createDraftTemplate
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId'
   ).get(
     AuthMiddleware.isAuthorizedJWT,
@@ -41,6 +49,22 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateUpdateTemplateData,
     TemplateCtrl.updateTemplate
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/status'
+  ).patch(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateUpdateTemplateStatusData,
+    TemplateCtrl.updateTemplateStatus
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/status/bulk'
+  ).patch(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateBulkUpdateTemplatesStatusData,
+    TemplateCtrl.bulkUpdateTemplatesStatus
   );
 
   app.route(

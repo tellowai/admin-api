@@ -681,7 +681,7 @@ exports.getTemplate = async function (req, res) {
     if (template.template_tags && template.template_tags.length > 0) {
       // Get all unique ttd_ids
       const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-      
+
       // Get tag definitions
       const tagDefinitions = ttdIds.length > 0 ?
         await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds) : [];
@@ -1557,6 +1557,63 @@ exports.createTemplate = async function (req, res) {
 
   } catch (error) {
     logger.error('Error creating template:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * @api {post} /templates/draft Create draft template (minimal)
+ * @apiVersion 1.0.0
+ * @apiName CreateDraftTemplate
+ * @apiGroup Templates
+ * @apiPermission JWT
+ *
+ * @apiBody {String} template_name Template name (required)
+ * @apiBody {String} template_code Template code (required)
+ * @apiBody {String} cf_r2_url Preview video URL (required)
+ * @apiBody {String} cf_r2_key Preview video key (required)
+ * @apiBody {String} [template_output_type=video] Template output type
+ * @apiBody {String} [status=draft] Template status
+ */
+exports.createDraftTemplate = async function (req, res) {
+  try {
+    const templateData = req.validatedBody;
+
+    // Generate UUID for template_id
+    templateData.template_id = uuidv7();
+
+    // Set defaults
+    templateData.template_output_type = templateData.template_output_type || 'video';
+    templateData.template_clips_assets_type = 'non-ai';
+    templateData.status = templateData.status || 'draft';
+    templateData.template_type = 'premium'; // Default type
+    templateData.credits = (templateData?.template_output_type == 'video') ? 50 : 1; // Default credits
+    templateData.user_assets_layer = 'bottom'; // Default layer
+
+    // Create template in database (minimal data)
+    await TemplateModel.createTemplate(templateData, []); // Empty clips array
+
+    // Publish activity log
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: {
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATES',
+          action_name: 'ADD_NEW_TEMPLATE',
+          entity_id: templateData.template_id
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      message: req.t('template:TEMPLATE_CREATED'),
+      data: { template_id: templateData.template_id }
+    });
+
+  } catch (error) {
+    logger.error('Error creating draft template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 };
@@ -2711,6 +2768,144 @@ exports.updateTemplate = async function (req, res) {
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 }
+
+/**
+ * Helper to validate if a template is publishable based on its asset type.
+ */
+async function validateTemplatePublishing(template, t) {
+  if (!template.template_clips_assets_type) {
+    return [t('template:PUBLISH_ERROR_ASSETS_TYPE_MISSING')];
+  }
+
+  const errors = [];
+  if (!template.template_name) errors.push(t('template:PUBLISH_ERROR_NAME_MISSING'));
+  if (!template.template_code) errors.push(t('template:PUBLISH_ERROR_CODE_MISSING'));
+  if (!template.template_type) errors.push(t('template:PUBLISH_ERROR_TYPE_MISSING'));
+  if (!template.template_output_type) errors.push(t('template:PUBLISH_ERROR_OUTPUT_TYPE_MISSING'));
+  if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING'));
+  if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING'));
+  if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING'));
+
+  if (template.template_clips_assets_type === 'ai') {
+    const clips = await TemplateModel.getTemplateAiClips(template.template_id);
+    if (!clips || clips.length === 0) {
+      errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
+    } else {
+      for (const clip of clips) {
+        if (!clip.workflow || clip.workflow.length === 0) {
+          errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * @api {patch} /templates/:templateId/status Update template status (publish/unpublish)
+ */
+exports.updateTemplateStatus = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const { status } = req.body;
+
+    if (!['active', 'inactive'].includes(status)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'Status must be either active or inactive'
+      });
+    }
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    if (status === 'active') {
+      const errors = await validateTemplatePublishing(template, req.t);
+      if (errors.length > 0) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Template is not ready for publishing',
+          errors: errors
+        });
+      }
+    }
+
+    const updated = await TemplateModel.updateTemplate(templateId, { status });
+    if (!updated) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+
+    // Update Redis cache
+    await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template:TEMPLATE_STATUS_UPDATED')
+    });
+  } catch (error) {
+    logger.error('Error updating template status:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * @api {patch} /templates/status/bulk Bulk update templates status
+ */
+exports.bulkUpdateTemplatesStatus = async function (req, res) {
+  try {
+    const { template_ids, status } = req.body;
+
+    const processTemplate = async (templateId) => {
+      try {
+        const template = await TemplateModel.getTemplateById(templateId);
+        if (!template) {
+          return { templateId, success: false, error: 'Template not found' };
+        }
+
+        if (status === 'active') {
+          const errors = await validateTemplatePublishing(template, req.t);
+          if (errors.length > 0) {
+            return { templateId, success: false, errors: errors };
+          }
+        }
+
+        const updated = await TemplateModel.updateTemplate(templateId, { status });
+        if (updated) {
+          await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+        }
+        return { templateId, success: !!updated };
+      } catch (err) {
+        logger.error(`Error updating status for template ${templateId}`, err);
+        return { templateId, success: false, error: 'Internal server error' };
+      }
+    };
+
+    // Use Promise.all to process in parallel
+    // Since we handle errors individually in processTemplate, Promise.all won't fail fast
+    const results = await Promise.all(template_ids.map(id => processTemplate(id)));
+
+    const allSuccess = results.every(r => r.success);
+    if (allSuccess) {
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        message: req.t('template:TEMPLATES_STATUS_BULK_UPDATED'),
+        data: results
+      });
+    } else {
+      return res.status(200).json({
+        message: 'Some templates could not be updated',
+        data: results,
+        hasErrors: true
+      });
+    }
+  } catch (error) {
+    logger.error('Error bulk updating templates status:', { error: error.message, stack: error.stack });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
 
 /**
  * @api {post} /templates/:templateId/archive Archive template
