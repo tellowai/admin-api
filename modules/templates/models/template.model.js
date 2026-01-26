@@ -42,6 +42,7 @@ exports.listTemplates = async function (pagination) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at,
       updated_at
     FROM templates
@@ -67,7 +68,8 @@ exports.getTemplateGenerationMeta = async function (templateId) {
       orientation,
       template_output_type,
       template_clips_assets_type,
-      credits
+      credits,
+      status
     FROM templates
     WHERE template_id = ?
     AND archived_at IS NULL
@@ -115,6 +117,7 @@ exports.listArchivedTemplates = async function (pagination) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at,
       archived_at
     FROM templates
@@ -145,7 +148,8 @@ exports.getTemplatePrompt = async function (templateId) {
       credits,
       aspect_ratio,
       orientation,
-      additional_data
+      additional_data,
+      status
     FROM templates
     WHERE template_id = ?
     AND archived_at IS NULL
@@ -190,6 +194,7 @@ exports.searchTemplates = async function (searchQuery, page, limit) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE LOWER(template_name) LIKE LOWER(?)
@@ -420,6 +425,7 @@ exports.getTemplateById = async function (templateId) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE template_id = ?
@@ -470,6 +476,7 @@ exports.getTemplateByCode = async function (templateCode) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE template_code = ?
