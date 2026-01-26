@@ -1,7 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
-const { v4: uuidv4 } = require('uuid');
+const { v7: uuidv7 } = require('uuid');
 const moment = require('moment');
 const config = require('../../../config/config');
 
@@ -42,10 +42,12 @@ exports.listTemplates = async function (pagination) {
       aspect_ratio,
       orientation,
       additional_data,
-      created_at
+      status,
+      created_at,
+      updated_at
     FROM templates
     WHERE archived_at IS NULL
-    ORDER BY created_at DESC
+    ORDER BY updated_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -66,7 +68,8 @@ exports.getTemplateGenerationMeta = async function (templateId) {
       orientation,
       template_output_type,
       template_clips_assets_type,
-      credits
+      credits,
+      status
     FROM templates
     WHERE template_id = ?
     AND archived_at IS NULL
@@ -114,11 +117,12 @@ exports.listArchivedTemplates = async function (pagination) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at,
       archived_at
     FROM templates
     WHERE archived_at IS NOT NULL
-    ORDER BY archived_at DESC
+    ORDER BY archived_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -144,7 +148,8 @@ exports.getTemplatePrompt = async function (templateId) {
       credits,
       aspect_ratio,
       orientation,
-      additional_data
+      additional_data,
+      status
     FROM templates
     WHERE template_id = ?
     AND archived_at IS NULL
@@ -189,12 +194,13 @@ exports.searchTemplates = async function (searchQuery, page, limit) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE LOWER(template_name) LIKE LOWER(?)
     OR LOWER(template_code) LIKE LOWER(?)
     OR LOWER(prompt) LIKE LOWER(?)
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
@@ -316,9 +322,6 @@ exports.updateTemplate = async function (templateId, templateData) {
 /**
  * Update template with clips (transaction-aware version)
  */
-/**
- * Update template with clips (transaction-aware version)
- */
 exports.updateTemplateWithClips = async function (templateId, templateData, clips = null) {
   const connection = await mysqlQueryRunner.getConnectionFromMaster();
 
@@ -332,26 +335,12 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
     const clipsData = templateData.clips;
     delete templateData.clips;
 
-    // JSON columns in templates table
-    const JSON_COLUMNS = [
-      'faces_needed',
-      'image_input_fields_json',
-      'image_uploads_json',
-      'video_uploads_json',
-      'custom_text_input_fields',
-      'additional_data'
-    ];
-
-    // Normalize JSON columns to valid JSON strings
-    for (const key of JSON_COLUMNS) {
-      if (templateData[key] === undefined) continue;
-
-      if (templateData[key] === null || templateData[key] === '') {
-        templateData[key] = '[]';
-      } else if (typeof templateData[key] === 'string') {
-        // assume already valid JSON
-      } else {
-        templateData[key] = JSON.stringify(templateData[key]);
+    Object.entries(templateData).forEach(([key, value]) => {
+      if (value !== undefined) {
+        setClause.push(`${key} = ?`);
+        values.push(value === null ? null :
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+            JSON.stringify(value) : value);
       }
     }
 
@@ -376,7 +365,7 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
 
       const result = await connection.query(updateQuery, values);
 
-      if (!result || result.affectedRows === 0) {
+      if (result.affectedRows === 0) {
         await connection.rollback();
         return false;
       }
@@ -443,6 +432,7 @@ exports.getTemplateById = async function (templateId) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE template_id = ?
@@ -493,6 +483,7 @@ exports.getTemplateByCode = async function (templateCode) {
       aspect_ratio,
       orientation,
       additional_data,
+      status,
       created_at
     FROM templates
     WHERE template_code = ?
@@ -674,7 +665,7 @@ exports.createTemplateAiClipsInTransaction = async function (connection, templat
   const clipData = [];
 
   for (const clip of clips) {
-    const tacId = uuidv4();
+    const tacId = uuidv7();
 
     // Base clip data for new structure
     const baseClipData = {

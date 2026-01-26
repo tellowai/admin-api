@@ -124,6 +124,7 @@ const createTemplateSchema = Joi.object().keys({
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
+  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').default('draft'),
   // Clips are required for 'ai' templates and must be empty for 'non-ai'
   clips: Joi.array()
     .items(clipSchema)
@@ -193,6 +194,7 @@ const updateTemplateSchema = Joi.object().keys({
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
+  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').optional(),
   clips: Joi.array().items(clipSchema).optional()
 });
 
