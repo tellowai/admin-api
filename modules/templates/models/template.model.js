@@ -342,14 +342,6 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
           (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
             JSON.stringify(value) : value);
       }
-    }
-
-    // Build SET clause dynamically (no allowed-column check)
-    Object.entries(templateData).forEach(([key, value]) => {
-      if (value === undefined) return;
-
-      setClause.push(`${key} = ?`);
-      values.push(value);
     });
 
     // Update template within transaction if there are fields to update
