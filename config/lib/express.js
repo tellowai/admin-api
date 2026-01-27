@@ -160,21 +160,7 @@ module.exports.initHelmetHeaders = function (app) {
  * Configure Cors module to allow specific domains
  */
 module.exports.handleCors = function (app) {
-  var whitelist = [
-    'http://localhost:8010',
-    'http://localhost:8000',
-    'http://localhost:3000',
-    'http://localhost:8005',
-    'https://dev.photobop.co',
-    'https://dev-admin.photobop.co',
-    'https://www.photobop.co',
-    'https://photobop.co',
-    'https://tellowai.com',
-    'https://admin.tellowai.com',
-    'https://admin.pifield.com',
-    'https://pifield.com',
-    'https://admin.tellow.ai'
-  ];
+  var whitelist = config?.cors?.whitelist || [];
   var corsOptions = {
     origin: function (origin, callback) {
       var originIsWhitelisted = whitelist.indexOf(origin) !== -1;
