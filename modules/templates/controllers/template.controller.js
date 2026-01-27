@@ -2702,6 +2702,24 @@ exports.updateTemplate = async function (req, res) {
       templateData.total_texts_count = templateData.total_texts_count || existingTemplate.total_texts_count || 0;
     }
 
+    // Extract aspect_ratio from clips (prioritize workflow setting over Bodymovin specific logic)
+    if (templateData.clips && templateData.clips.length > 0) {
+      for (const clip of templateData.clips) {
+        if (clip.workflow && Array.isArray(clip.workflow)) {
+          for (const step of clip.workflow) {
+            if (step.data && Array.isArray(step.data)) {
+              const aspectRatioItem = step.data.find(d => d.type === 'aspect_ratio');
+              if (aspectRatioItem && aspectRatioItem.value) {
+                templateData.aspect_ratio = aspectRatioItem.value;
+                break;
+              }
+            }
+          }
+        }
+        if (templateData.aspect_ratio) break; // Found an aspect ratio, stop searching
+      }
+    }
+
     // Extract template_tag_ids for separate handling
     const templateTagIds = templateData.template_tag_ids;
     const nicheSlug = templateData.niche_slug; // Extract niche_slug if provided
