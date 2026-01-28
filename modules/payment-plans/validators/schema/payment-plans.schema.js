@@ -8,28 +8,33 @@ const gatewaySchema = Joi.object().keys({
   is_active: Joi.number().integer().valid(0, 1).optional()
 });
 
+const benefitSchema = Joi.object().keys({
+  icon: Joi.string().allow('').optional(),
+  text: Joi.string().required()
+});
+
 const uiConfigSchema = Joi.object().keys({
-  self_selection_text: Joi.string().allow('').optional(),
-  panel_bg_color: Joi.string().allow('').optional(),
-  panel_glow_color: Joi.string().allow('').optional(),
-  panel_border_color: Joi.string().allow('').optional(),
-  button_cta_text: Joi.string().allow('').optional(),
-  button_bg_color: Joi.string().allow('').optional(),
-  button_text_color: Joi.string().allow('').optional(),
-  plan_badge: Joi.string().allow('').optional(),
-  plan_badge_bg_color: Joi.string().allow('').optional(),
-  plan_badge_border_color: Joi.string().allow('').optional(),
-  plan_badge_text_color: Joi.string().allow('').optional(),
-  plan_badge_icon: Joi.string().allow('').optional()
+  self_selection_text: Joi.string().allow('', null).optional(),
+  panel_bg_color: Joi.string().allow('', null).optional(),
+  panel_glow_color: Joi.string().allow('', null).optional(),
+  panel_border_color: Joi.string().allow('', null).optional(),
+  button_cta_text: Joi.string().allow('', null).optional(),
+  button_bg_color: Joi.string().allow('', null).optional(),
+  button_text_color: Joi.string().allow('', null).optional(),
+  plan_badge: Joi.string().allow('', null).optional(),
+  plan_badge_bg_color: Joi.string().allow('', null).optional(),
+  plan_badge_border_color: Joi.string().allow('', null).optional(),
+  plan_badge_text_color: Joi.string().allow('', null).optional(),
+  plan_badge_icon: Joi.string().allow('', null).optional()
 });
 
 const createPaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().required(),
   tier: Joi.string().valid('premium', 'ai', 'unified').required(),
   plan_type: Joi.string().valid('single', 'bundle', 'credits').required(),
-  plan_heading: Joi.string().allow('').optional(),
-  plan_subheading: Joi.string().allow('').optional(),
-  plan_benefits: Joi.array().items(Joi.string()).optional(),
+  plan_heading: Joi.string().allow('', null).optional(),
+  plan_subheading: Joi.string().allow('', null).optional(),
+  plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),
   original_price: Joi.number().min(0).optional(),
   current_price: Joi.number().min(0).required(),
   currency: Joi.string().required(),
@@ -48,9 +53,9 @@ const updatePaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().optional(),
   tier: Joi.string().valid('premium', 'ai', 'unified').optional(),
   plan_type: Joi.string().valid('single', 'bundle', 'credits').optional(),
-  plan_heading: Joi.string().allow('').optional(),
-  plan_subheading: Joi.string().allow('').optional(),
-  plan_benefits: Joi.array().items(Joi.string()).optional(),
+  plan_heading: Joi.string().allow('', null).optional(),
+  plan_subheading: Joi.string().allow('', null).optional(),
+  plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),
   original_price: Joi.number().min(0).optional(),
   current_price: Joi.number().min(0).optional(),
   currency: Joi.string().optional(),
@@ -62,7 +67,6 @@ const updatePaymentPlanSchema = Joi.object().keys({
   validity_days: Joi.number().integer().min(1).optional(),
   gateways: Joi.array().items(gatewaySchema).optional(),
   ui_config: uiConfigSchema.optional()
-  // is_active excluded from update as per previous requirement
 });
 
 exports.createPaymentPlanSchema = createPaymentPlanSchema;

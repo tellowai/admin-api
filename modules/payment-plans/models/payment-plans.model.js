@@ -25,7 +25,7 @@ exports.listPlans = async function (pagination) {
       created_at,
       updated_at
     FROM payment_plans
-    ORDER BY created_at DESC
+    ORDER BY current_price ASC
     LIMIT ? OFFSET ?
   `;
 
