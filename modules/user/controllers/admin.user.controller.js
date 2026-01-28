@@ -208,10 +208,11 @@ exports.searchAdminUsersByEmail = async function (req, res) {
     const limit = req.query.limit ? (req.query.limit>0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
     const offset = (page - 1) * limit;
     const q = req.query.q;
+    const searchType = req.query.searchType || 'both'; // 'email', 'mobile', or 'both'
     let usersWithFullObj = [];
 
     if(q) {
-      usersWithFullObj = await ManageAdminUserDbo.searchAdminUsersByEmailOrMobile(q, limit, offset);
+      usersWithFullObj = await ManageAdminUserDbo.searchAdminUsersByEmailOrMobile(q, limit, offset, searchType);
     }
 
     const userIdsArr = (usersWithFullObj.length)? usersWithFullObj.map(user => user.user_id) : [];

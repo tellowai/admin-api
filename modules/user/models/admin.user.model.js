@@ -58,8 +58,19 @@ exports.searchAdminUsersByEmail = async function(email, limit, offset) {
     return await mysqlQueryRunner.runQueryInMaster(selectAllQuery, [limit, offset]);
 };
 
-exports.searchAdminUsersByEmailOrMobile = async function(emailOrmobile, limit, offset) {
-    let selectAllQuery = `SELECT user_id, email, display_name, profile_pic FROM user WHERE (email LIKE '%${emailOrmobile}%' OR mobile LIKE '%${emailOrmobile}%') AND DELETED_AT IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+exports.searchAdminUsersByEmailOrMobile = async function(emailOrmobile, limit, offset, searchType = 'both') {
+    let whereClause = '';
+    
+    if (searchType === 'email') {
+        whereClause = `email LIKE '%${emailOrmobile}%'`;
+    } else if (searchType === 'mobile') {
+        whereClause = `mobile LIKE '%${emailOrmobile}%'`;
+    } else {
+        // Default: search both email and mobile
+        whereClause = `(email LIKE '%${emailOrmobile}%' OR mobile LIKE '%${emailOrmobile}%')`;
+    }
+    
+    let selectAllQuery = `SELECT user_id, email, mobile, display_name, profile_pic FROM user WHERE ${whereClause} AND DELETED_AT IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?`;
 
     return await mysqlQueryRunner.runQueryInMaster(selectAllQuery, [limit, offset]);
 };
