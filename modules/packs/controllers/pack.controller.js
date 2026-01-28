@@ -10,6 +10,7 @@ const logger = require('../../../config/lib/logger');
 const config = require('../../../config/config');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 class PackController {
   static async listPacks(req, res) {
@@ -54,19 +55,16 @@ class PackController {
       const packData = req.validatedBody;
       console.log(packData,'packData')
       const packId = await PackModel.createPack(packData);
-      
+
       // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            entity_type: 'PACKS',
-            action_name: 'ADD_NEW_PACK', 
-            entity_id: packId
-          }
-        }],
-        'create_admin_activity_log'
-      );
+      const activityLogObj = {
+        adminUserId: req.user && req.user.userId ? req.user.userId : null,
+        entityType: 'PACKS',
+        actionName: 'ADD_NEW_PACK',
+        entityId: packId,
+        additionalData: {}
+      };
+      await publishNewAdminActivityLog(activityLogObj);
     
       return res.status(HTTP_STATUS_CODES.CREATED).json({
         message: req.t('packs:success.pack_created'),

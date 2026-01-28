@@ -94,9 +94,9 @@ exports.createPlan = async function (req, res) {
 
     // Activity Log
     try {
-      if (req.user && req.user.admin_id) {
+      if (req.user && req.user.userId) {
         await ActivityLogController.publishNewAdminActivityLog({
-          adminUserId: req.user.admin_id,
+          adminUserId: req.user.userId,
           entityType: 'payment_plans',
           actionName: 'CREATE_PAYMENT_PLAN',
           entityId: planId,
@@ -128,9 +128,9 @@ exports.updatePlan = async function (req, res) {
 
     // Activity Log
     try {
-      if (req.user && req.user.admin_id) {
+      if (req.user && req.user.userId) {
         await ActivityLogController.publishNewAdminActivityLog({
-          adminUserId: req.user.admin_id,
+          adminUserId: req.user.userId,
           entityType: 'payment_plans',
           actionName: 'UPDATE_PAYMENT_PLAN',
           entityId: planId,
@@ -170,9 +170,9 @@ exports.togglePlanStatus = async function (req, res) {
 
       // Activity Log
       try {
-        if (req.user && req.user.admin_id) {
+        if (req.user && req.user.userId) {
           await ActivityLogController.publishNewAdminActivityLog({
-            adminUserId: req.user.admin_id,
+            adminUserId: req.user.userId,
             entityType: 'payment_plans',
             actionName: 'DEACTIVATE_PAYMENT_PLAN',
             entityId: planId,
@@ -248,9 +248,9 @@ exports.togglePlanStatus = async function (req, res) {
 
       // Activity Log
       try {
-        if (req.user && req.user.admin_id) {
+        if (req.user && req.user.userId) {
           await ActivityLogController.publishNewAdminActivityLog({
-            adminUserId: req.user.admin_id,
+            adminUserId: req.user.userId,
             entityType: 'payment_plans',
             actionName: 'ACTIVATE_PAYMENT_PLAN',
             entityId: planId,
