@@ -69,5 +69,10 @@ const updatePaymentPlanSchema = Joi.object().keys({
   ui_config: uiConfigSchema.optional()
 });
 
+const toggleStatusSchema = Joi.object().keys({
+  is_active: Joi.number().integer().valid(0, 1).required()
+});
+
 exports.createPaymentPlanSchema = createPaymentPlanSchema;
 exports.updatePaymentPlanSchema = updatePaymentPlanSchema;
+exports.toggleStatusSchema = toggleStatusSchema;

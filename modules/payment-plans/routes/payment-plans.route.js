@@ -29,4 +29,12 @@ module.exports = function (app) {
       PaymentPlansValidator.validateUpdatePlanData,
       PaymentPlansCtrl.updatePlan
     );
+
+  // Toggle plan status (active/inactive)
+  app.route(versionConfig.routePrefix + '/payment-plans/:planId/status')
+    .patch(
+      AuthMiddleware.isAuthorizedJWT,
+      PaymentPlansValidator.validateToggleStatusData,
+      PaymentPlansCtrl.togglePlanStatus
+    );
 };

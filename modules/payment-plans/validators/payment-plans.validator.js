@@ -35,3 +35,19 @@ exports.validateUpdatePlanData = function (req, res, next) {
   req.validatedBody = payloadValidation.value;
   return next(null);
 };
+
+exports.validateToggleStatusData = function (req, res, next) {
+  const payload = req.body;
+
+  const payloadValidation = validationCtrl.validate(planSchema.toggleStatusSchema, payload);
+
+  if (payloadValidation.error && payloadValidation.error.length) {
+    return res.status(CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+
+  req.validatedBody = payloadValidation.value;
+  return next(null);
+};

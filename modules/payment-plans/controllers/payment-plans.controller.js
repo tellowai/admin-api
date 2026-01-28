@@ -148,3 +148,128 @@ exports.updatePlan = async function (req, res) {
     return handleError(res, err, req.t('payment_plans:UPDATE_FAILED'));
   }
 };
+
+exports.togglePlanStatus = async function (req, res) {
+  try {
+    const planId = req.params.planId;
+    const { is_active } = req.validatedBody;
+
+    if (!planId) {
+      return res.status(CODES.BAD_REQUEST).send({ message: req.t('payment_plans:PLAN_ID_REQUIRED') });
+    }
+
+    // Check if plan exists
+    const plan = await PaymentPlansModel.getPlanById(planId);
+    if (!plan) {
+      return res.status(CODES.NOT_FOUND).send({ message: req.t('payment_plans:PLAN_NOT_FOUND') });
+    }
+
+    // If deactivating, directly update without validation
+    if (is_active === 0) {
+      await PaymentPlansModel.updatePlanStatus(planId, 0);
+
+      // Activity Log
+      try {
+        if (req.user && req.user.admin_id) {
+          await ActivityLogController.publishNewAdminActivityLog({
+            adminUserId: req.user.admin_id,
+            entityType: 'payment_plans',
+            actionName: 'DEACTIVATE_PAYMENT_PLAN',
+            entityId: planId,
+            additionalData: JSON.stringify({ plan_name: plan.plan_name })
+          });
+        }
+      } catch (logErr) {
+        logger.error('Failed to log admin activity for deactivate plan', logErr);
+      }
+
+      return res.status(CODES.OK).json({
+        message: req.t('payment_plans:PLAN_DEACTIVATED')
+      });
+    }
+
+    // If activating, validate all mandatory fields
+    if (is_active === 1) {
+      const errors = [];
+
+      // Validate plan_name
+      if (!plan.plan_name || plan.plan_name.trim() === '') {
+        errors.push({ field: 'plan_name', message: 'Plan name is required' });
+      }
+
+      // Validate tier
+      if (!plan.tier || !['premium', 'ai', 'unified'].includes(plan.tier)) {
+        errors.push({ field: 'tier', message: 'Tier must be one of: premium, ai, unified' });
+      }
+
+      // Validate plan_type
+      if (!plan.plan_type || !['single', 'bundle', 'credits'].includes(plan.plan_type)) {
+        errors.push({ field: 'plan_type', message: 'Plan type must be one of: single, bundle, credits' });
+      }
+
+      // Validate current_price
+      if (plan.current_price === null || plan.current_price === undefined || plan.current_price < 0) {
+        errors.push({ field: 'current_price', message: 'Current price must be greater than or equal to 0' });
+      }
+
+      // Validate currency
+      if (!plan.currency || plan.currency.trim() === '') {
+        errors.push({ field: 'currency', message: 'Currency is required' });
+      }
+
+      // Validate billing_interval
+      if (!plan.billing_interval || plan.billing_interval.trim() === '') {
+        errors.push({ field: 'billing_interval', message: 'Billing interval is required' });
+      }
+
+      // Validate validity_days
+      if (!plan.validity_days || plan.validity_days <= 0) {
+        errors.push({ field: 'validity_days', message: 'Validity days must be greater than 0' });
+      }
+
+      // Validate gateways - at least one active gateway required
+      const gateways = await PaymentPlansModel.getPlanGateways(planId);
+      const activeGateways = gateways.filter(g => g.is_active === 1 && g.pg_plan_id && g.pg_plan_id.trim() !== '');
+      
+      if (activeGateways.length === 0) {
+        errors.push({ field: 'gateways', message: 'At least one active payment gateway with valid plan ID is required' });
+      }
+
+      // If validation errors exist, return them
+      if (errors.length > 0) {
+        return res.status(CODES.BAD_REQUEST).json({
+          message: req.t('payment_plans:ACTIVATION_FAILED'),
+          errors: errors
+        });
+      }
+
+      // All validations passed, activate the plan
+      await PaymentPlansModel.updatePlanStatus(planId, 1);
+
+      // Activity Log
+      try {
+        if (req.user && req.user.admin_id) {
+          await ActivityLogController.publishNewAdminActivityLog({
+            adminUserId: req.user.admin_id,
+            entityType: 'payment_plans',
+            actionName: 'ACTIVATE_PAYMENT_PLAN',
+            entityId: planId,
+            additionalData: JSON.stringify({ plan_name: plan.plan_name })
+          });
+        }
+      } catch (logErr) {
+        logger.error('Failed to log admin activity for activate plan', logErr);
+      }
+
+      return res.status(CODES.OK).json({
+        message: req.t('payment_plans:PLAN_ACTIVATED')
+      });
+    }
+
+    return res.status(CODES.BAD_REQUEST).json({
+      message: 'Invalid status value'
+    });
+  } catch (err) {
+    return handleError(res, err, req.t('payment_plans:STATUS_UPDATE_FAILED'));
+  }
+};

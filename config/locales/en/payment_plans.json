@@ -6,5 +6,9 @@
   "CREATE_FAILED": "Failed to create payment plan.",
   "UPDATE_FAILED": "Failed to update payment plan.",
   "GET_FAILED": "Failed to retrieve payment plan details.",
-  "PLAN_ID_REQUIRED": "Plan ID is required."
+  "PLAN_ID_REQUIRED": "Plan ID is required.",
+  "PLAN_ACTIVATED": "Payment plan activated successfully.",
+  "PLAN_DEACTIVATED": "Payment plan deactivated successfully.",
+  "ACTIVATION_FAILED": "Cannot activate plan. Missing required data.",
+  "STATUS_UPDATE_FAILED": "Failed to update plan status."
 }

@@ -63,6 +63,15 @@ exports.getPlanUIConfig = async function (planId) {
 }
 
 /**
+ * Update payment plan status (active/inactive)
+ */
+exports.updatePlanStatus = async function (planId, isActive) {
+  const query = 'UPDATE payment_plans SET is_active = ? WHERE pp_id = ?';
+  await mysqlQueryRunner.runQueryInMaster(query, [isActive, planId]);
+  return true;
+};
+
+/**
  * Create a new payment plan with all related data
  */
 exports.createPlan = async function (data) {
