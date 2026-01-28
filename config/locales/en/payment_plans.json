@@ -1,0 +1,10 @@
+{
+  "PLAN_CREATED": "Payment plan created successfully.",
+  "PLAN_UPDATED": "Payment plan updated successfully.",
+  "PLAN_NOT_FOUND": "Payment plan not found.",
+  "LIST_FAILED": "Failed to list payment plans.",
+  "CREATE_FAILED": "Failed to create payment plan.",
+  "UPDATE_FAILED": "Failed to update payment plan.",
+  "GET_FAILED": "Failed to retrieve payment plan details.",
+  "PLAN_ID_REQUIRED": "Plan ID is required."
+}
