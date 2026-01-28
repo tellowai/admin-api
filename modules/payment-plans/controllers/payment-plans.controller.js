@@ -4,6 +4,7 @@ const PaymentPlansModel = require('../models/payment-plans.model');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const { CODES } = require('../../core/controllers/httpcodes.server.controller');
+const ActivityLogController = require('../../core/controllers/activitylog.controller');
 
 // Helper for error handling
 const handleError = (res, err, message) => {
@@ -90,6 +91,22 @@ exports.createPlan = async function (req, res) {
   try {
     // req.validatedBody is populated by validor middleware
     const planId = await PaymentPlansModel.createPlan(req.validatedBody);
+
+    // Activity Log
+    try {
+      if (req.user && req.user.admin_id) {
+        await ActivityLogController.publishNewAdminActivityLog({
+          adminUserId: req.user.admin_id,
+          entityType: 'payment_plans',
+          actionName: 'CREATE_PAYMENT_PLAN',
+          entityId: planId,
+          additionalData: JSON.stringify({ plan_name: req.validatedBody.plan_name })
+        });
+      }
+    } catch (logErr) {
+      logger.error('Failed to log admin activity for create plan', logErr);
+    }
+
     return res.status(CODES.CREATED).json({
       message: req.t('payment_plans:PLAN_CREATED'),
       planId: planId
@@ -108,6 +125,21 @@ exports.updatePlan = async function (req, res) {
 
     // req.validatedBody is populated by validor middleware
     await PaymentPlansModel.updatePlan(planId, req.validatedBody);
+
+    // Activity Log
+    try {
+      if (req.user && req.user.admin_id) {
+        await ActivityLogController.publishNewAdminActivityLog({
+          adminUserId: req.user.admin_id,
+          entityType: 'payment_plans',
+          actionName: 'UPDATE_PAYMENT_PLAN',
+          entityId: planId,
+          additionalData: JSON.stringify({ plan_name: req.validatedBody.plan_name })
+        });
+      }
+    } catch (logErr) {
+      logger.error('Failed to log admin activity for update plan', logErr);
+    }
 
     return res.status(CODES.OK).json({
       message: req.t('payment_plans:PLAN_UPDATED')
