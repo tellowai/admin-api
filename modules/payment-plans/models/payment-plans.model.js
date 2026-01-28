@@ -14,6 +14,7 @@ exports.listPlans = async function (pagination) {
       plan_name,
       plan_heading,
       plan_subheading,
+      plan_benefits,
       original_price,
       current_price,
       currency,
@@ -31,6 +32,18 @@ exports.listPlans = async function (pagination) {
 
   return await mysqlQueryRunner.runQueryInSlave(query, [pagination.limit, pagination.offset]);
 };
+
+exports.getUIConfigsForPlans = async function (planIds) {
+  if (!planIds || planIds.length === 0) return [];
+
+  const query = `
+    SELECT *
+    FROM payment_plan_ui_config 
+    WHERE payment_plan_id IN (?)
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [planIds]);
+}
 
 exports.getPlanById = async function (planId) {
   const query = `SELECT * FROM payment_plans WHERE pp_id = ?`;

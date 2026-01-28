@@ -19,6 +19,33 @@ exports.listPlans = async function (req, res) {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const plans = await PaymentPlansModel.listPlans(paginationParams);
 
+    if (plans.length > 0) {
+      const planIds = plans.map(p => p.pp_id);
+      const uiConfigs = await PaymentPlansModel.getUIConfigsForPlans(planIds);
+
+      const configMap = new Map();
+      uiConfigs.forEach(conf => {
+        configMap.set(conf.payment_plan_id, conf);
+      });
+
+      plans.forEach(plan => {
+        const conf = configMap.get(plan.pp_id);
+        if (conf) {
+          plan.panel_bg_color = conf.panel_bg_color;
+          plan.panel_border_color = conf.panel_border_color;
+          plan.panel_glow_color = conf.panel_glow_color;
+          plan.button_cta_text = conf.button_cta_text;
+          plan.button_bg_color = conf.button_bg_color;
+          plan.button_text_color = conf.button_text_color;
+          plan.plan_badge = conf.plan_badge;
+          plan.plan_badge_bg_color = conf.plan_badge_bg_color;
+          plan.plan_badge_border_color = conf.plan_badge_border_color;
+          plan.plan_badge_text_color = conf.plan_badge_text_color;
+          plan.plan_badge_icon = conf.plan_badge_icon;
+        }
+      });
+    }
+
     // We are returning plain data for the page, no total counts as per requirement
     return res.status(CODES.OK).json({
       data: plans
