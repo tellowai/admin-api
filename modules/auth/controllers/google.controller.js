@@ -635,6 +635,17 @@ function getRegistrationProviderObjFromRawData(userDataFromProvider) {
   return providerDataObj;
 }
 
+function getSecondaryEmailData(rawData) {
+
+  var secondaryEmailObj = {
+    user_se_id: createId(),
+    email: rawData.email,
+    user_id: rawData.user_id
+  }
+
+  return secondaryEmailObj;
+}
+
 function getLoggedInDeviceData(userAgenet, payload) {
   
   var userLoginDeviceData = {};
