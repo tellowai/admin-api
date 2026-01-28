@@ -4,6 +4,7 @@ var HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.control
 var UserDbo = require('../dbo/user.dbo');
 const moment = require('moment');
 const tr46 = require('tr46');
+const RbacModel = require('../models/rbac.model');
 
 
 /**
@@ -60,6 +61,34 @@ exports.getLoggedInUserData = async function (req, res) {
 
   if(loggedInUserData.dob) {
     loggedInUserData.dob = moment(loggedInUserData.dob).format('MM/DD/YYYY');
+  }
+
+  // Fetch user roles and permissions
+  try {
+    const { roles, permissions } = await RbacModel.getUserRolesAndPermissions(userId);
+    
+    // Add roles and permissions to response
+    loggedInUserData.roles = roles.map(r => ({
+      role_id: r.role_id,
+      role_name: r.role_name,
+      role_description: r.role_description
+    }));
+    
+    loggedInUserData.permissions = permissions.map(p => ({
+      permission_id: p.admin_permission_id,
+      permission_code: p.permission_code,
+      permission_name: p.permission_name,
+      permission_description: p.permission_description
+    }));
+    
+    // Add permission codes array for easier frontend checking
+    loggedInUserData.permission_codes = permissions.map(p => p.permission_code);
+  } catch (error) {
+    console.error('Error fetching user roles and permissions:', error);
+    // Continue without roles/permissions if fetch fails
+    loggedInUserData.roles = [];
+    loggedInUserData.permissions = [];
+    loggedInUserData.permission_codes = [];
   }
 
   return res.status(

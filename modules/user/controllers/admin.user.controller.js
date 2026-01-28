@@ -10,6 +10,8 @@ const coreUtils = require('../../core/controllers/utils.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
+const { ROLES } = require('../../auth/constants/permissions.constants');
+const RbacModel = require('../../auth/models/rbac.model');
 
 
 
@@ -30,12 +32,33 @@ const { publishNewAdminActivityLog } = require('../../core/controllers/activityl
 exports.createNewAdminUserWithSelectRoles = async function (req, res, next) {
   try {
     const newAdminUser = req.validatedBody;
+    const requesterRoles = req.user.roles || [];
 
     if(!newAdminUser.roles || !newAdminUser.roles.length) {
       throw {
         message: i18next.t("user:ROLES_NOT_ASSIGNED"),
         customErrCode: CUSTOM_ERROR_CODES.ROLE_NOT_ASSSIGNED,
         httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
+      };
+    }
+
+    // Prevent assigning 'owner' role - it's not assignable
+    if(newAdminUser.roles.includes(ROLES.OWNER)) {
+      throw {
+        message: i18next.t("user:OWNER_ROLE_NOT_ASSIGNABLE"),
+        customErrCode: CUSTOM_ERROR_CODES.OWNER_ROLE_NOT_ASSIGNABLE,
+        httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
+      };
+    }
+
+    // Admin users can only assign 'editor' role - not 'admin'
+    // Only owner can assign 'admin' role
+    const isOwner = requesterRoles.includes(ROLES.OWNER);
+    if (!isOwner && newAdminUser.roles.includes(ROLES.ADMIN)) {
+      throw {
+        message: i18next.t("user:ONLY_OWNER_CAN_ASSIGN_ADMIN_ROLE") || 'Only owner can assign admin role',
+        customErrCode: CUSTOM_ERROR_CODES.PERMISSION_DENIED,
+        httpStatusCode: HTTP_STATUS_CODES.FORBIDDEN
       };
     }
 
@@ -94,6 +117,7 @@ exports.deleteAdminUser = async function (req, res, next) {
   try {
     const { userId } = req.params;
     const { userId: adminUserId } = req.user;
+    const requesterRoles = req.user.roles || [];
 
     if(userId === adminUserId) {
       throw {
@@ -101,6 +125,24 @@ exports.deleteAdminUser = async function (req, res, next) {
         customErrCode: CUSTOM_ERROR_CODES.YOU_CANNOT_DELETE_YOURSELF,
         httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
       }; 
+    }
+
+    // Admin can only delete users with 'editor' role
+    // Admin cannot delete other admins or owners
+    const isOwner = requesterRoles.includes(ROLES.OWNER);
+    if (!isOwner) {
+      // Check target user's roles
+      const targetUserRoles = await RbacModel.getUserRoles(userId);
+      const targetRoleNames = targetUserRoles.map(r => r.role_name);
+      
+      // If target has admin or owner role, deny deletion
+      if (targetRoleNames.includes(ROLES.ADMIN) || targetRoleNames.includes(ROLES.OWNER)) {
+        throw {
+          message: i18next.t("user:ADMIN_CANNOT_DELETE_ADMIN_OR_OWNER") || 'Admin cannot delete other admins or owners',
+          customErrCode: CUSTOM_ERROR_CODES.PERMISSION_DENIED,
+          httpStatusCode: HTTP_STATUS_CODES.FORBIDDEN
+        };
+      }
     }
 
     await ManageAdminUserDbo.deleteAdminUser(userId);
@@ -146,6 +188,19 @@ exports.getAdminUsersList = async function (req, res) {
 
       // sort they array by admin user created at
       adminUsers = coreUtils.sortArr1DataByArr2(adminUsers, adminUserIdsWithFullObj, 'user_id');
+      
+      // Get roles for all admin users
+      const rolesData = await ManageAdminUserDbo.getRolesForUsers(adminUserIdsArr);
+      const rolesMap = {};
+      rolesData.forEach(item => {
+        rolesMap[item.user_id] = item.roles;
+      });
+      
+      // Add roles to each user (empty array if no roles)
+      adminUsers = adminUsers.map(user => ({
+        ...user,
+        roles: rolesMap[user.user_id] || []
+      }));
     }
 
 
@@ -166,10 +221,34 @@ exports.bulkRemoveAdminUsers = async function (req, res, next) {
   try {
     const { user_ids: userIds } = req.validatedBody;
     const { userId: adminUserId } = req.user;
+    const requesterRoles = req.user.roles || [];
     let finalUserIds = userIds;
 
+    // Filter out self
     if(userIds.length && userIds.includes(adminUserId)) {
       finalUserIds = userIds.filter(item => item !== adminUserId);
+    }
+
+    // Admin can only delete users with 'editor' role
+    // Admin cannot delete other admins or owners
+    const isOwner = requesterRoles.includes(ROLES.OWNER);
+    if (!isOwner && finalUserIds.length) {
+      // Get roles for all target users
+      const rolesData = await ManageAdminUserDbo.getRolesForUsers(finalUserIds);
+      
+      // Filter out users with admin or owner role
+      const protectedUserIds = [];
+      rolesData.forEach(item => {
+        const roleNames = (item.roles || []).map(r => r.role_name);
+        if (roleNames.includes(ROLES.ADMIN) || roleNames.includes(ROLES.OWNER)) {
+          protectedUserIds.push(item.user_id);
+        }
+      });
+      
+      // Remove protected users from deletion list
+      if (protectedUserIds.length) {
+        finalUserIds = finalUserIds.filter(id => !protectedUserIds.includes(id));
+      }
     }
 
     if(finalUserIds.length){
@@ -239,6 +318,103 @@ exports.searchAdminUsersByEmail = async function (req, res) {
     err.custom = {
       httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST,
       message: err.message || req.t('user:ADMIN_USERS_LIST_RETRIEVAL_FAILED')
+    };
+
+    return AdminUserErrorHandler.handleNewAdminCreationErrors(err, res);
+  }
+};
+
+/**
+ * @api {put} /admin/users/:userId/roles Update admin user roles
+ * @apiName UpdateAdminUserRoles
+ * @apiGroup AdminUsers
+ *
+ * @apiParam {String} userId User ID
+ * @apiParam {Array} roles Array of role names (e.g., ['admin', 'editor'])
+ * 
+ * @apiSuccess {String} message Success message
+ * @apiSuccess {Object} data Updated user data with roles
+ * 
+ * @apiError {String} message Error message
+ */
+exports.updateAdminUserRoles = async function (req, res, next) {
+  try {
+    const { userId } = req.params;
+    const { roles } = req.validatedBody;
+    const requesterRoles = req.user.roles || [];
+
+    if(!roles || !roles.length) {
+      throw {
+        message: i18next.t("user:ROLES_NOT_ASSIGNED"),
+        customErrCode: CUSTOM_ERROR_CODES.ROLE_NOT_ASSSIGNED,
+        httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
+      };
+    }
+
+    // Prevent assigning 'owner' role - it's not assignable
+    if(roles.includes(ROLES.OWNER)) {
+      throw {
+        message: i18next.t("user:OWNER_ROLE_NOT_ASSIGNABLE"),
+        customErrCode: CUSTOM_ERROR_CODES.OWNER_ROLE_NOT_ASSIGNABLE,
+        httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
+      };
+    }
+
+    // Admin users can only assign 'editor' role - not 'admin'
+    // Only owner can assign 'admin' role
+    const isOwner = requesterRoles.includes(ROLES.OWNER);
+    if (!isOwner && roles.includes(ROLES.ADMIN)) {
+      throw {
+        message: i18next.t("user:ONLY_OWNER_CAN_ASSIGN_ADMIN_ROLE") || 'Only owner can assign admin role',
+        customErrCode: CUSTOM_ERROR_CODES.PERMISSION_DENIED,
+        httpStatusCode: HTTP_STATUS_CODES.FORBIDDEN
+      };
+    }
+
+    // Fetch role ids for given role names
+    const roleIds = await ManageAdminUserDbo.getRoleIdsWithRoleNames(roles);
+    
+    if (!roleIds || roleIds.length === 0) {
+      throw {
+        message: i18next.t("user:INVALID_ROLES") || 'Invalid roles provided',
+        customErrCode: CUSTOM_ERROR_CODES.BAD_REQUEST,
+        httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST
+      };
+    }
+
+    const roleIdArray = roleIds.map(r => r.role_id);
+
+    // Update user roles
+    await ManageAdminUserDbo.updateUserRoles(userId, roleIdArray);
+
+    // Clear cache for this user
+    RbacModel.clearUserCache(userId);
+
+    // Get updated user data with roles
+    const updatedRoles = await RbacModel.getUserRoles(userId);
+
+    // Publish activity log
+    publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'ADMIN_USER',
+      actionName: 'UPDATE_ADMIN_USER_ROLES',
+      entityId: userId,
+      additionalData: { roles: roles }
+    });
+
+    // Send response
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('user:ADMIN_USER_ROLES_UPDATED_SUCCESSFULLY') || 'User roles updated successfully',
+      data: {
+        user_id: userId,
+        roles: updatedRoles
+      }
+    });
+
+  } catch (err) {
+    err.custom = {
+      httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST,
+      message: req.t('user:ADMIN_USER_ROLES_UPDATE_FAILED') || 'Failed to update user roles'
     };
 
     return AdminUserErrorHandler.handleNewAdminCreationErrors(err, res);

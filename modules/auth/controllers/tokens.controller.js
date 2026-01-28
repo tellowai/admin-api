@@ -33,7 +33,11 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
       //generate JWT token
       jwtCtrl.generateToken(userDataForJWT, function (jwtToken) {
-
+        if (!jwtToken) {
+          return callback({
+            message: i18next.t('TOKEN_GENERATION_FAILED') || 'Failed to generate token'
+          });
+        }
         finalTokenObj.jwtToken = jwtToken
         return callback(null);
       });
