@@ -752,7 +752,24 @@ exports.getTemplateAiClips = async function (templateId) {
 
   const clips = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
 
-  // Get workflow for each clip
+  if (clips.length > 0) {
+    // Zero-Join Policy: Fetch workflow attachments using template_id
+    // Since workflow_template_attachments links via (template_id, clip_index), not tac_id
+    const attachmentsQuery = `
+        SELECT wf_id, clip_index 
+        FROM workflow_template_attachments 
+        WHERE template_id = ?
+    `;
+    const attachments = await mysqlQueryRunner.runQueryInSlave(attachmentsQuery, [templateId]);
+    const attachmentMap = new Map(attachments.map(a => [a.clip_index, a.wf_id]));
+
+    // Stitch
+    clips.forEach(clip => {
+      clip.workflow_id = attachmentMap.get(clip.clip_index) || null;
+    });
+  }
+
+  // Get workflow for each clip (Legacy)
   for (const clip of clips) {
     const workflow = await this.getClipWorkflow(clip.tac_id);
     clip.workflow = workflow;
@@ -969,8 +986,30 @@ exports.getTemplateAiClipsForMultipleTemplates = async function (templateIds) {
 
   const clips = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
 
-  // Get workflows for all clips in batch
   if (clips.length > 0) {
+    // 1. Fetch V2 Workflow IDs (Zero-Join Policy)
+    // Map via (template_id, clip_index)
+    const attachmentsQuery = `
+      SELECT wf_id, template_id, clip_index 
+      FROM workflow_template_attachments 
+      WHERE template_id IN (${placeholders})
+    `;
+    const attachments = await mysqlQueryRunner.runQueryInSlave(attachmentsQuery, templateIds);
+
+    // Create a composite key map
+    const attachmentMap = new Map();
+    attachments.forEach(a => {
+      const key = `${a.template_id}_${a.clip_index}`;
+      attachmentMap.set(key, a.wf_id);
+    });
+
+    // Stitch workflow_id (V2)
+    clips.forEach(clip => {
+      const key = `${clip.template_id}_${clip.clip_index}`;
+      clip.workflow_id = attachmentMap.get(key) || null;
+    });
+
+    // 2. Fetch Legacy Workflows
     const tacIds = clips.map(clip => clip.tac_id);
     const workflowPlaceholders = tacIds.map(() => '?').join(',');
     const workflowQuery = `
