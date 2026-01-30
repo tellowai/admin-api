@@ -145,3 +145,28 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null) {
     return node;
   });
 };
+
+/**
+ * Get I/O definitions for multiple system nodes
+ */
+exports.getSystemNodeIODefinitionsByNodeIds = async function (nodeIds) {
+  if (!nodeIds || nodeIds.length === 0) return [];
+
+  const query = `
+    SELECT 
+      wsniod_id,
+      wsnd_id,
+      amst_id,
+      direction,
+      name,
+      label,
+      is_required,
+      is_list,
+      sort_order
+    FROM workflow_system_node_io_definitions
+    WHERE wsnd_id IN (?)
+    ORDER BY wsnd_id, sort_order ASC
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [nodeIds]);
+};
