@@ -3,9 +3,11 @@
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 /**
- * Get I/O definitions for a specific model (No JOINs)
+ * Get I/O definitions for multiple models (No JOINs, batch operation)
  */
-exports.getIODefinitionsByModelId = async function (modelId) {
+exports.getIODefinitionsByModelIds = async function (modelIds) {
+  if (!modelIds || modelIds.length === 0) return [];
+
   const query = `
     SELECT 
       amiod_id,
@@ -21,18 +23,18 @@ exports.getIODefinitionsByModelId = async function (modelId) {
       constraints,
       sort_order
     FROM ai_model_io_definitions
-    WHERE amr_id = ?
-    ORDER BY sort_order ASC
+    WHERE amr_id IN (?)
+    ORDER BY amr_id, sort_order ASC
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, [modelId]);
+  return await mysqlQueryRunner.runQueryInSlave(query, [modelIds]);
 };
 
 /**
  * List all active AI models (No JOINs)
  */
-exports.listActiveModels = async function () {
-  const query = `
+exports.listActiveModels = async function (searchQuery = null) {
+  let query = `
     SELECT 
       amr_id,
       amp_id,
@@ -46,10 +48,18 @@ exports.listActiveModels = async function () {
       pricing_config
     FROM ai_model_registry
     WHERE is_active = TRUE AND archived_at IS NULL
-    ORDER BY name
   `;
 
-  const results = await mysqlQueryRunner.runQueryInSlave(query, []);
+  const params = [];
+  if (searchQuery) {
+    query += ` AND (LOWER(name) LIKE ? OR LOWER(slug) LIKE ?) `;
+    const term = `%${searchQuery.toLowerCase()}%`;
+    params.push(term, term);
+  }
+
+  query += ` ORDER BY name `;
+
+  const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
   // Parse JSON fields
   return results.map(model => {
@@ -75,11 +85,19 @@ exports.getSocketTypesByIds = async function (ids) {
 };
 
 /**
+ * Get ALL socket types (small lookup table, ~6 rows)
+ */
+exports.getAllSocketTypes = async function () {
+  const query = `SELECT amst_id, name, slug, color_hex FROM ai_model_socket_types`;
+  return await mysqlQueryRunner.runQueryInSlave(query);
+};
+
+/**
  * Get providers by IDs
  */
 exports.getProvidersByIds = async function (ids) {
   if (!ids || ids.length === 0) return [];
-  const query = `SELECT amp_id, name, logo_url FROM ai_model_providers WHERE amp_id IN (?)`;
+  const query = `SELECT amp_id, name FROM ai_model_providers WHERE amp_id IN (?)`;
   return await mysqlQueryRunner.runQueryInSlave(query, [ids]);
 };
 
@@ -95,8 +113,8 @@ exports.getCategoriesByIds = async function (ids) {
 /**
  * List active system node definitions
  */
-exports.listSystemNodeDefinitions = async function () {
-  const query = `
+exports.listSystemNodeDefinitions = async function (searchQuery = null) {
+  let query = `
     SELECT 
       wsnd_id,
       type_slug,
@@ -107,9 +125,18 @@ exports.listSystemNodeDefinitions = async function () {
       config_schema
     FROM workflow_system_node_definitions
     WHERE is_active = TRUE
-    ORDER BY name ASC
   `;
-  const results = await mysqlQueryRunner.runQueryInSlave(query, []);
+
+  const params = [];
+  if (searchQuery) {
+    query += ` AND (LOWER(name) LIKE ? OR LOWER(type_slug) LIKE ?) `;
+    const term = `%${searchQuery.toLowerCase()}%`;
+    params.push(term, term);
+  }
+
+  query += ` ORDER BY name ASC `;
+
+  const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
   return results.map(node => {
     if (node.config_schema && typeof node.config_schema === 'string') {
