@@ -12,7 +12,7 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
       amp_id,
       amc_id,
       name,
-      slug,
+      platform_model_id,
       version,
       description,
       is_active,
@@ -31,7 +31,7 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
 
   // Search by name
   if (searchParams.search) {
-    conditions.push(`(LOWER(name) LIKE LOWER(?) OR LOWER(slug) LIKE LOWER(?))`);
+    conditions.push(`(LOWER(name) LIKE LOWER(?) OR LOWER(platform_model_id) LIKE LOWER(?))`);
     queryParams.push(`%${searchParams.search}%`, `%${searchParams.search}%`);
   }
 

@@ -59,7 +59,6 @@ exports.create = async function (req, res) {
       amp_id: req.body.amp_id,
       amc_id: req.body.amc_id || 1, // Default category if not provided?
       name: req.body.name,
-      slug: req.body.slug || req.body.platform_model_id, // Fallback if slug not sent
       platform_model_id: req.body.platform_model_id,
       version: req.body.version || 'v1.0.0',
       description: req.body.description,
@@ -133,6 +132,7 @@ exports.update = async function (req, res) {
     delete updateData.amr_id;
     delete updateData.created_at;
     delete updateData.updated_at;
+    delete updateData.slug; // Removed from DB
 
     await aiRegistryModel.updateAiModel(amrId, updateData);
     res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_models.updated_successfully') || 'Updated successfully' });
