@@ -4,6 +4,7 @@ const aiRegistryModel = require('../models/ai-registry.model');
 const paginationController = require('../../core/controllers/pagination.controller');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const _ = require('lodash');
+const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 /**
  * List AI Models
@@ -37,10 +38,10 @@ exports.list = async function (req, res) {
       category: categoriesMap[model.amc_id] || null
     }));
 
-    res.json(result);
+    res.status(HTTP_STATUS_CODES.OK).json(result);
   } catch (err) {
     console.error('Error listing AI models:', err);
-    res.status(500).send({ message: 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
   }
 };
 
@@ -50,15 +51,16 @@ exports.list = async function (req, res) {
 exports.create = async function (req, res) {
   try {
     // Basic validation
-    if (!req.body.name || !req.body.slug || !req.body.amp_id) {
-      return res.status(400).send({ message: 'Name, slug, and provider (amp_id) are required.' });
+    if (!req.body.name || !req.body.platform_model_id || !req.body.amp_id) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({ message: req.t('ai_models.validation_required') || 'Name, platform_model_id, and provider (amp_id) are required.' });
     }
 
     const newModelData = {
       amp_id: req.body.amp_id,
       amc_id: req.body.amc_id || 1, // Default category if not provided?
       name: req.body.name,
-      slug: req.body.slug,
+      slug: req.body.slug || req.body.platform_model_id, // Fallback if slug not sent
+      platform_model_id: req.body.platform_model_id,
       version: req.body.version || 'v1.0.0',
       description: req.body.description,
       is_active: 1, // Default active
@@ -69,10 +71,10 @@ exports.create = async function (req, res) {
     };
 
     const result = await aiRegistryModel.createAiModel(newModelData);
-    res.json({ amr_id: result.insertId, ...newModelData });
+    res.status(HTTP_STATUS_CODES.CREATED).json({ amr_id: result.insertId, ...newModelData });
   } catch (err) {
     console.error('Error creating AI model:', err);
-    res.status(500).send({ message: err.message || 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common.internal_server_error') });
   }
 };
 
@@ -85,7 +87,7 @@ exports.read = async function (req, res) {
     const model = await aiRegistryModel.getAiModelById(amrId);
 
     if (!model) {
-      return res.status(404).send({ message: 'AI Model not found' });
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_models.not_found') || 'AI Model not found' });
     }
 
     // Fetch related data in parallel
@@ -112,10 +114,10 @@ exports.read = async function (req, res) {
       model.io_definitions = [];
     }
 
-    res.json(model);
+    res.status(HTTP_STATUS_CODES.OK).json(model);
   } catch (err) {
     console.error('Error reading AI model:', err);
-    res.status(500).send({ message: 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
   }
 };
 
@@ -133,10 +135,10 @@ exports.update = async function (req, res) {
     delete updateData.updated_at;
 
     await aiRegistryModel.updateAiModel(amrId, updateData);
-    res.json({ message: 'Updated successfully' });
+    res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_models.updated_successfully') || 'Updated successfully' });
   } catch (err) {
     console.error('Error updating AI model:', err);
-    res.status(500).send({ message: 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
   }
 };
 
