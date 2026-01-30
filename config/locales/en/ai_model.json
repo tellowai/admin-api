@@ -12,7 +12,8 @@
   "AI_MODEL_ALREADY_EXISTS": "AI model with this ID already exists",
   "AI_MODEL_CREATE_FAILED": "Failed to create AI model",
   "AI_MODEL_UPDATE_FAILED": "Failed to update AI model",
+  "VALIDATION_REQUIRED": "Required fields are missing: Name, Provider Model ID and Provider.",
   "PLATFORM_CREATED_SUCCESSFULLY": "Platform created successfully",
   "PLATFORM_CREATE_FAILED": "Failed to create platform",
   "PLATFORM_UPDATED_SUCCESSFULLY": "Platform updated successfully"
-} 
+}

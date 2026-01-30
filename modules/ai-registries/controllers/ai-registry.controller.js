@@ -41,7 +41,7 @@ exports.list = async function (req, res) {
     res.status(HTTP_STATUS_CODES.OK).json(result);
   } catch (err) {
     console.error('Error listing AI models:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
@@ -52,7 +52,7 @@ exports.create = async function (req, res) {
   try {
     // Basic validation
     if (!req.body.name || !req.body.platform_model_id || !req.body.amp_id) {
-      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({ message: req.t('ai_models.validation_required') || 'Name, platform_model_id, and provider (amp_id) are required.' });
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({ message: req.t('ai_model:VALIDATION_REQUIRED') || 'Name, platform_model_id, and provider (amp_id) are required.' });
     }
 
     const newModelData = {
@@ -73,7 +73,7 @@ exports.create = async function (req, res) {
     res.status(HTTP_STATUS_CODES.CREATED).json({ amr_id: result.insertId, ...newModelData });
   } catch (err) {
     console.error('Error creating AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common.internal_server_error') });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common:SOMETHING_WENT_WRONG') });
   }
 };
 
@@ -86,7 +86,7 @@ exports.read = async function (req, res) {
     const model = await aiRegistryModel.getAiModelById(amrId);
 
     if (!model) {
-      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_models.not_found') || 'AI Model not found' });
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
     }
 
     // Fetch related data in parallel
@@ -116,7 +116,7 @@ exports.read = async function (req, res) {
     res.status(HTTP_STATUS_CODES.OK).json(model);
   } catch (err) {
     console.error('Error reading AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
@@ -135,10 +135,10 @@ exports.update = async function (req, res) {
     delete updateData.slug; // Removed from DB
 
     await aiRegistryModel.updateAiModel(amrId, updateData);
-    res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_models.updated_successfully') || 'Updated successfully' });
+    res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
   } catch (err) {
     console.error('Error updating AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common.internal_server_error') || 'Internal Server Error' });
+    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
