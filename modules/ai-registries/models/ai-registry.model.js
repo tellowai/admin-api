@@ -10,7 +10,6 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
     SELECT 
       amr_id,
       amp_id,
-      amc_id,
       name,
       platform_model_id,
       version,
@@ -199,6 +198,32 @@ exports.getSocketTypesByIds = async function (ids) {
   return await mysqlQueryRunner.runQueryInSlave(query, [ids]);
 };
 
+// --- Tags (ai_model_registry_tags + ai_model_tag_definitions) ---
+
+exports.getTagsForAmrId = async function (amrId) {
+  const junctionQuery = `SELECT amtd_id FROM ai_model_registry_tags WHERE amr_id = ? ORDER BY amtd_id ASC`;
+  const rows = await mysqlQueryRunner.runQueryInSlave(junctionQuery, [amrId]);
+  if (!rows || rows.length === 0) return [];
+  const amtdIds = rows.map(r => r.amtd_id);
+  const placeholders = amtdIds.map(() => '?').join(', ');
+  const defQuery = `
+    SELECT amtd_id, tag_name, tag_code, tag_description
+    FROM ai_model_tag_definitions
+    WHERE amtd_id IN (${placeholders}) AND deleted_at IS NULL
+  `;
+  const definitions = await mysqlQueryRunner.runQueryInSlave(defQuery, amtdIds);
+  return definitions;
+};
+
+exports.setTagsForAmrId = async function (amrId, amtdIds) {
+  const deleteQuery = `DELETE FROM ai_model_registry_tags WHERE amr_id = ?`;
+  await mysqlQueryRunner.runQueryInMaster(deleteQuery, [amrId]);
+  if (!amtdIds || amtdIds.length === 0) return;
+  const values = amtdIds.map(id => `(?, ?)`).join(', ');
+  const insertQuery = `INSERT INTO ai_model_registry_tags (amr_id, amtd_id) VALUES ${values}`;
+  const params = amtdIds.flatMap(id => [amrId, id]);
+  await mysqlQueryRunner.runQueryInMaster(insertQuery, params);
+};
 
 // --- IO Definitions ---
 

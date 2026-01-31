@@ -38,9 +38,7 @@ exports.listActiveModels = async function (searchQuery = null) {
     SELECT 
       amr_id,
       amp_id,
-      amc_id,
       name,
-      slug,
       version,
       description,
       icon_url,
@@ -52,7 +50,7 @@ exports.listActiveModels = async function (searchQuery = null) {
 
   const params = [];
   if (searchQuery) {
-    query += ` AND (LOWER(name) LIKE ? OR LOWER(slug) LIKE ?) `;
+    query += ` AND (LOWER(name) LIKE ? OR LOWER(platform_model_id) LIKE ?) `;
     const term = `%${searchQuery.toLowerCase()}%`;
     params.push(term, term);
   }

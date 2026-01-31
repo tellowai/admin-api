@@ -20,22 +20,14 @@ exports.list = async function (req, res) {
 
     const models = await aiRegistryModel.listAiModels(searchParams, paginationParams);
 
-    // Stitch Providers & Categories
+    // Stitch Providers
     const ampIds = _.uniq(models.map(m => m.amp_id));
-    const amcIds = _.uniq(models.map(m => m.amc_id));
-
-    const [providers, categories] = await Promise.all([
-      aiRegistryModel.getProvidersByIds(ampIds),
-      aiRegistryModel.getCategoriesByIds(amcIds)
-    ]);
-
+    const providers = await aiRegistryModel.getProvidersByIds(ampIds);
     const providersMap = _.keyBy(providers, 'amp_id');
-    const categoriesMap = _.keyBy(categories, 'amc_id');
 
     const result = models.map(model => ({
       ...model,
-      provider: providersMap[model.amp_id] || null,
-      category: categoriesMap[model.amc_id] || null
+      provider: providersMap[model.amp_id] || null
     }));
 
     res.status(HTTP_STATUS_CODES.OK).json(result);
@@ -57,7 +49,6 @@ exports.create = async function (req, res) {
 
     const newModelData = {
       amp_id: req.body.amp_id,
-      amc_id: req.body.amc_id || 1, // Default category if not provided?
       name: req.body.name,
       platform_model_id: req.body.platform_model_id,
       version: req.body.version || 'v1.0.0',
@@ -89,15 +80,15 @@ exports.read = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
     }
 
-    // Fetch related data in parallel
-    const [providers, categories, ioDefinitions] = await Promise.all([
+    // Fetch related data in parallel (tags optional - table may not exist yet)
+    const [providers, ioDefinitions, tagsResult] = await Promise.all([
       aiRegistryModel.getProvidersByIds([model.amp_id]),
-      aiRegistryModel.getCategoriesByIds([model.amc_id]),
-      aiRegistryModel.getIoDefinitionsByModelId(amrId)
+      aiRegistryModel.getIoDefinitionsByModelId(amrId),
+      aiRegistryModel.getTagsForAmrId(amrId).catch(() => [])
     ]);
 
     model.provider = providers[0] || null;
-    model.category = categories[0] || null;
+    model.tags = tagsResult || [];
 
     // Stitch Socket Types to IO Definitions
     if (ioDefinitions.length > 0) {
@@ -126,13 +117,25 @@ exports.read = async function (req, res) {
 exports.update = async function (req, res) {
   try {
     const amrId = req.params.amrId;
-    const updateData = req.body;
+    const updateData = { ...req.body };
 
-    // Prevent updating ID
+    // Handle tags separately (junction table ai_model_registry_tags)
+    const tagIds = updateData.tags;
+    delete updateData.tags;
+
+    // Prevent updating ID and removed columns
     delete updateData.amr_id;
     delete updateData.created_at;
     delete updateData.updated_at;
-    delete updateData.slug; // Removed from DB
+    delete updateData.slug;
+    delete updateData.amc_id; // Removed from ai_model_registry
+    delete updateData.provider; // Read-only from join
+    delete updateData.io_definitions; // Managed via IO endpoints
+
+    if (tagIds !== undefined) {
+      const amtdIds = Array.isArray(tagIds) ? tagIds.map(t => (typeof t === 'object' && t != null && t.amtd_id != null) ? t.amtd_id : t).filter(Boolean) : [];
+      await aiRegistryModel.setTagsForAmrId(amrId, amtdIds);
+    }
 
     await aiRegistryModel.updateAiModel(amrId, updateData);
     res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
