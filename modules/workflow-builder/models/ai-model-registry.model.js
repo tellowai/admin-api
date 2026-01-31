@@ -3,6 +3,15 @@
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 /**
+ * Get I/O definitions for a single model (convenience wrapper)
+ */
+exports.getIODefinitionsByModelId = async function (modelId) {
+  if (modelId == null) return [];
+  const rows = await exports.getIODefinitionsByModelIds([modelId]);
+  return rows;
+};
+
+/**
  * Get I/O definitions for multiple models (No JOINs, batch operation)
  */
 exports.getIODefinitionsByModelIds = async function (modelIds) {

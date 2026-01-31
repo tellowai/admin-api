@@ -733,6 +733,35 @@ exports.getTemplate = async function (req, res) {
 };
 
 /**
+ * Ensure template_ai_clips rows exist for the given clip definitions; create a workflow per clip
+ * and attach wf_id in template_ai_clips. Use when get template returns empty clips (e.g. new/legacy template).
+ * Body: { clips: [ { clip_index: number, asset_type: 'image'|'video' }, ... ] }
+ */
+exports.ensureTemplateAiClips = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const { clips } = req.validatedBody;
+    const userId = req.user.userId;
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    const resultClips = await TemplateModel.ensureTemplateAiClipsWithWorkflows(templateId, clips, userId);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: { clips: resultClips }
+    });
+  } catch (error) {
+    logger.error('Error ensuring template AI clips:', { error: error.message, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
  * @api {get} /templates/archived List archived templates
  * @apiVersion 1.0.0
  * @apiName ListArchivedTemplates

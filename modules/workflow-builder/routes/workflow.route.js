@@ -65,6 +65,30 @@ module.exports = function (app) {
       WorkflowCtrl.getModelValidationRules
     );
 
+  // Workflow by clip (tac_id) – get/create/update by template_ai_clips.tac_id
+  app.route(versionConfig.routePrefix + '/workflows/by-clip/:tacId')
+    .get(
+      AuthMiddleware.isAdminUser,
+      WorkflowValidator.validateTacIdParam,
+      WorkflowCtrl.getWorkflowByTacId
+    );
+
+  app.route(versionConfig.routePrefix + '/workflows/by-clip/:tacId/auto-save')
+    .put(
+      AuthMiddleware.isAdminUser,
+      WorkflowValidator.validateTacIdParam,
+      WorkflowValidator.validateAutoSave,
+      WorkflowCtrl.autoSaveWorkflowByTacId
+    );
+
+  app.route(versionConfig.routePrefix + '/workflows/by-clip/:tacId/save')
+    .put(
+      AuthMiddleware.isAdminUser,
+      WorkflowValidator.validateTacIdParam,
+      WorkflowValidator.validateSaveWorkflow,
+      WorkflowCtrl.saveWorkflowByTacId
+    );
+
   // Registry routes
   app.route(versionConfig.routePrefix + '/workflow-builder/ai-models')
     .get(

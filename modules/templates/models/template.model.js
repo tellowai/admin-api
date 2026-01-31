@@ -4,6 +4,7 @@ const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const { v7: uuidv7 } = require('uuid');
 const moment = require('moment');
 const config = require('../../../config/config');
+const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 
 exports.listTemplates = async function (pagination) {
   const query = `
@@ -733,6 +734,46 @@ exports.createClipWorkflowInTransaction = async function (connection, tacId, wor
 };
 
 /**
+ * Get or create a single template_ai_clip by (template_id, clip_index).
+ * API accepts 0-based clip_index; DB stores 1-based (CHECK clip_index >= 1).
+ * Returns { tac_id } for use when clip might not exist yet (e.g. workflow save before template save).
+ * Simple queries, no joins.
+ */
+exports.ensureTemplateAiClip = async function (templateId, clipIndex, assetType = 'video') {
+  const clipIndexDb = clipIndex >= 1 ? clipIndex : clipIndex + 1;
+  const existingQuery = `
+    SELECT tac_id FROM template_ai_clips
+    WHERE template_id = ? AND clip_index = ? AND deleted_at IS NULL
+  `;
+  const existing = await mysqlQueryRunner.runQueryInSlave(existingQuery, [templateId, clipIndexDb]);
+  if (existing.length > 0) return { tac_id: existing[0].tac_id };
+
+  const tacId = uuidv7();
+  const insertQuery = `
+    INSERT INTO template_ai_clips (tac_id, template_id, clip_index, asset_type, created_at, updated_at)
+    VALUES (?, ?, ?, ?, NOW(), NOW())
+  `;
+  await mysqlQueryRunner.runQueryInMaster(insertQuery, [tacId, templateId, clipIndexDb, assetType]);
+  return { tac_id: tacId };
+};
+
+/**
+ * Ensure template_ai_clips rows exist for the given clip definitions, create a workflow per clip,
+ * and attach wf_id in template_ai_clips. Returns the clips (same shape as getTemplateAiClips).
+ * clips: array of { clip_index: number, asset_type: string }.
+ */
+exports.ensureTemplateAiClipsWithWorkflows = async function (templateId, clips, userId) {
+  if (!clips || clips.length === 0) return [];
+  for (const clip of clips) {
+    const clipIndex = clip.clip_index;
+    const assetType = clip.asset_type || 'video';
+    const { tac_id } = await exports.ensureTemplateAiClip(templateId, clipIndex, assetType);
+    await WorkflowModel.ensureWorkflowForTacId(tac_id, userId);
+  }
+  return await exports.getTemplateAiClips(templateId);
+};
+
+/**
  * Get AI clips for a template
  */
 exports.getTemplateAiClips = async function (templateId) {
@@ -741,6 +782,7 @@ exports.getTemplateAiClips = async function (templateId) {
       tac_id,
       template_id,
       clip_index,
+      wf_id,
       asset_type,
       created_at,
       updated_at
@@ -753,19 +795,8 @@ exports.getTemplateAiClips = async function (templateId) {
   const clips = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
 
   if (clips.length > 0) {
-    // Zero-Join Policy: Fetch workflow attachments using template_id
-    // Since workflow_template_attachments links via (template_id, clip_index), not tac_id
-    const attachmentsQuery = `
-        SELECT wf_id, clip_index 
-        FROM workflow_template_attachments 
-        WHERE template_id = ?
-    `;
-    const attachments = await mysqlQueryRunner.runQueryInSlave(attachmentsQuery, [templateId]);
-    const attachmentMap = new Map(attachments.map(a => [a.clip_index, a.wf_id]));
-
-    // Stitch
     clips.forEach(clip => {
-      clip.workflow_id = attachmentMap.get(clip.clip_index) || null;
+      clip.workflow_id = clip.wf_id || null;
     });
   }
 
@@ -975,6 +1006,7 @@ exports.getTemplateAiClipsForMultipleTemplates = async function (templateIds) {
       tac_id,
       template_id,
       clip_index,
+      wf_id,
       asset_type,
       created_at,
       updated_at
@@ -987,26 +1019,8 @@ exports.getTemplateAiClipsForMultipleTemplates = async function (templateIds) {
   const clips = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
 
   if (clips.length > 0) {
-    // 1. Fetch V2 Workflow IDs (Zero-Join Policy)
-    // Map via (template_id, clip_index)
-    const attachmentsQuery = `
-      SELECT wf_id, template_id, clip_index 
-      FROM workflow_template_attachments 
-      WHERE template_id IN (${placeholders})
-    `;
-    const attachments = await mysqlQueryRunner.runQueryInSlave(attachmentsQuery, templateIds);
-
-    // Create a composite key map
-    const attachmentMap = new Map();
-    attachments.forEach(a => {
-      const key = `${a.template_id}_${a.clip_index}`;
-      attachmentMap.set(key, a.wf_id);
-    });
-
-    // Stitch workflow_id (V2)
     clips.forEach(clip => {
-      const key = `${clip.template_id}_${clip.clip_index}`;
-      clip.workflow_id = attachmentMap.get(key) || null;
+      clip.workflow_id = clip.wf_id || null;
     });
 
     // 2. Fetch Legacy Workflows

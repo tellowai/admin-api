@@ -2,6 +2,7 @@
 
 const WorkflowModel = require('../models/workflow.model');
 const WorkflowNodeModel = require('../models/workflow.node.model');
+const TemplateModel = require('../../templates/models/template.model');
 const WorkflowEdgeModel = require('../models/workflow.edge.model');
 const WorkflowValidationService = require('../services/workflow.validation.service');
 const WorkflowErrorHandler = require('../middlewares/workflow.error.handler');
@@ -9,6 +10,9 @@ const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const KafkaCtrl = require('../../core/controllers/kafka.controller');
 const { v4: uuidv4 } = require('uuid');
+const StorageFactory = require('../../os2/providers/storage.factory');
+const config = require('../../../config/config');
+const logger = require('../../../config/lib/logger');
 
 /**
  * List workflows with pagination
@@ -38,6 +42,37 @@ exports.listWorkflows = async function (req, res) {
 };
 
 /**
+ * Enrich node config_values: for any value that is { bucket, asset_key }, add asset_url (presigned or public).
+ */
+async function enrichNodesWithAssetUrls(nodes) {
+  if (!nodes || nodes.length === 0) return;
+  const storage = StorageFactory.getProvider();
+  const publicBucketUrl = config.os2?.r2?.public?.bucketUrl;
+  const publicBucketName = config.os2?.r2?.public?.bucket;
+
+  for (const node of nodes) {
+    const configValues = node.config_values || {};
+    for (const key of Object.keys(configValues)) {
+      const val = configValues[key];
+      if (!val || typeof val !== 'object' || !val.asset_key) continue;
+      if (val.asset_url) continue; // already enriched
+      const bucket = val.bucket || 'public';
+      const keyPath = val.asset_key;
+      try {
+        const isPublic = bucket === 'public' || bucket === publicBucketName;
+        if (isPublic && publicBucketUrl) {
+          configValues[key].asset_url = `${publicBucketUrl}/${keyPath}`;
+        } else {
+          configValues[key].asset_url = await storage.generatePresignedDownloadUrl(keyPath, { expiresIn: 3600 });
+        }
+      } catch (err) {
+        logger.warn('Workflow: failed to generate asset_url for node config', { nodeId: node.uuid, key, error: err.message });
+      }
+    }
+  }
+}
+
+/**
  * Get workflow with nodes and edges
  */
 exports.getWorkflow = async function (req, res) {
@@ -59,6 +94,8 @@ exports.getWorkflow = async function (req, res) {
       WorkflowEdgeModel.getEdgesByWorkflowId(workflowId)
     ]);
 
+    await enrichNodesWithAssetUrls(nodes);
+
     // Stitch edges with node UUIDs (Zero-Join Policy)
     const nodeMap = new Map();
     nodes.forEach(node => {
@@ -77,6 +114,217 @@ exports.getWorkflow = async function (req, res) {
         nodes,
         edges
       }
+    });
+  } catch (error) {
+    WorkflowErrorHandler.handleWorkflowErrors(error, res);
+  }
+};
+
+/**
+ * Get workflow by clip (tac_id). Returns workflow data or 404 if no workflow linked.
+ */
+exports.getWorkflowByTacId = async function (req, res) {
+  try {
+    const { tacId } = req.params;
+    const userId = req.user.userId;
+
+    const wfId = await WorkflowModel.getWfIdByTacId(tacId);
+    if (!wfId) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('workflow:WORKFLOW_NOT_FOUND')
+      });
+    }
+
+    const [workflow, nodes, rawEdges] = await Promise.all([
+      WorkflowModel.getWorkflowById(wfId, userId),
+      WorkflowNodeModel.getNodesByWorkflowId(wfId),
+      WorkflowEdgeModel.getEdgesByWorkflowId(wfId)
+    ]);
+    if (!workflow) {
+      return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
+        message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
+      });
+    }
+    await enrichNodesWithAssetUrls(nodes);
+    const nodeMap = new Map(nodes.map(n => [n.wfn_id, n.uuid]));
+    const edges = rawEdges.map(edge => ({
+      ...edge,
+      source: nodeMap.get(edge.source_wfn_id),
+      target: nodeMap.get(edge.target_wfn_id)
+    }));
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        ...workflow,
+        nodes,
+        edges
+      }
+    });
+  } catch (error) {
+    WorkflowErrorHandler.handleWorkflowErrors(error, res);
+  }
+};
+
+/**
+ * Auto-save workflow by clip (tac_id). Creates template_ai_clips row and workflow when clip does not exist yet.
+ */
+exports.autoSaveWorkflowByTacId = async function (req, res) {
+  try {
+    const tacIdParam = req.params.tacId;
+    const body = req.validatedBody;
+    const { nodes, edges, viewport, changeHash } = body;
+    const userId = req.user.userId;
+
+    let resolvedTacId = tacIdParam;
+    const tacRow = await WorkflowModel.getTacRow(tacIdParam);
+    if (!tacRow) {
+      if (body.templateId != null && body.clipIndex !== undefined) {
+        const { tac_id } = await TemplateModel.ensureTemplateAiClip(
+          body.templateId,
+          body.clipIndex,
+          body.assetType || 'video'
+        );
+        resolvedTacId = tac_id;
+      } else {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+          message: req.t('workflow:WORKFLOW_NOT_FOUND')
+        });
+      }
+    }
+
+    const workflowId = await WorkflowModel.ensureWorkflowForTacId(resolvedTacId, userId);
+    if (!workflowId) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('workflow:WORKFLOW_NOT_FOUND')
+      });
+    }
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    if (!workflow) {
+      return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
+        message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
+      });
+    }
+
+    if (changeHash && workflow.change_hash && workflow.change_hash !== changeHash) {
+      return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+        error: 'CONFLICT',
+        message: req.t('workflow:WORKFLOW_MODIFIED_ELSEWHERE'),
+        serverHash: workflow.change_hash
+      });
+    }
+
+    const validationResult = await WorkflowValidationService.validateWorkflow(nodes, edges);
+    if (!validationResult.valid) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        error: 'VALIDATION_ERROR',
+        message: req.t('workflow:VALIDATION_FAILED'),
+        errors: validationResult.errors,
+        nodeErrors: validationResult.nodeErrors
+      });
+    }
+
+    const newHash = uuidv4().substring(0, 16);
+    await WorkflowModel.saveWorkflowData(workflowId, {
+      nodes,
+      edges,
+      viewport,
+      change_hash: newHash
+    });
+
+    const responseData = {
+      workflowId,
+      savedAt: new Date().toISOString(),
+      changeHash: newHash
+    };
+    if (resolvedTacId !== tacIdParam) responseData.tacId = resolvedTacId;
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    WorkflowErrorHandler.handleWorkflowErrors(error, res);
+  }
+};
+
+/**
+ * Manual save workflow by clip (tac_id). Creates template_ai_clips row and workflow when clip does not exist yet.
+ */
+exports.saveWorkflowByTacId = async function (req, res) {
+  try {
+    const tacIdParam = req.params.tacId;
+    const body = req.validatedBody;
+    const { nodes, edges, viewport, metadata } = body;
+    const userId = req.user.userId;
+
+    let resolvedTacId = tacIdParam;
+    const tacRow = await WorkflowModel.getTacRow(tacIdParam);
+    if (!tacRow) {
+      if (body.templateId != null && body.clipIndex !== undefined) {
+        const { tac_id } = await TemplateModel.ensureTemplateAiClip(
+          body.templateId,
+          body.clipIndex,
+          body.assetType || 'video'
+        );
+        resolvedTacId = tac_id;
+      } else {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+          message: req.t('workflow:WORKFLOW_NOT_FOUND')
+        });
+      }
+    }
+
+    const workflowId = await WorkflowModel.ensureWorkflowForTacId(resolvedTacId, userId);
+    if (!workflowId) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('workflow:WORKFLOW_NOT_FOUND')
+      });
+    }
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    if (!workflow) {
+      return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
+        message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
+      });
+    }
+
+    const validationResult = await WorkflowValidationService.validateWorkflow(nodes, edges);
+    if (!validationResult.valid) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        error: 'VALIDATION_ERROR',
+        message: req.t('workflow:VALIDATION_FAILED'),
+        errors: validationResult.errors,
+        nodeErrors: validationResult.nodeErrors
+      });
+    }
+
+    const newHash = uuidv4().substring(0, 16);
+    await WorkflowModel.saveWorkflowData(workflowId, {
+      nodes,
+      edges,
+      viewport,
+      change_hash: newHash
+    });
+
+    KafkaCtrl.sendMessage(
+      KafkaCtrl.TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        admin_user_id: userId,
+        entity_type: 'workflow',
+        action_name: 'save',
+        entity_id: workflowId
+      }],
+      'workflow_saved'
+    );
+
+    const responseData = {
+      workflowId,
+      savedAt: new Date().toISOString(),
+      changeHash: newHash
+    };
+    if (resolvedTacId !== tacIdParam) responseData.tacId = resolvedTacId;
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      success: true,
+      message: 'Workflow saved successfully',
+      data: responseData
     });
   } catch (error) {
     WorkflowErrorHandler.handleWorkflowErrors(error, res);

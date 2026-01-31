@@ -4,7 +4,7 @@ const Joi = require('@hapi/joi');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 const nodeSchema = Joi.object({
-  uuid: Joi.string().uuid(),
+  uuid: Joi.string().min(1).max(64).optional(), // Allow any string id (frontend may use readable ids; DB/model use node.uuid ?? node.id ?? uuidv4())
   type: Joi.string().valid('AI_MODEL', 'USER_INPUT', 'STATIC_ASSET', 'LOGIC_GATE', 'OUTPUT', 'SYSTEM').required(),
   amr_id: Joi.number().integer().allow(null),
   system_node_type: Joi.string().allow(null),
@@ -19,7 +19,7 @@ const nodeSchema = Joi.object({
 }).unknown(true); // Allow other fields that might be passed from frontend
 
 const edgeSchema = Joi.object({
-  uuid: Joi.string().uuid(),
+  uuid: Joi.string().min(1).max(64).optional(), // Allow any string id
   source: Joi.string().required(),
   sourceHandle: Joi.string().required(),
   target: Joi.string().required(),
@@ -74,7 +74,10 @@ exports.validateAutoSave = function (req, res, next) {
       y: Joi.number(),
       zoom: Joi.number()
     }).default({ x: 0, y: 0, zoom: 1 }),
-    changeHash: Joi.string().allow(null)
+    changeHash: Joi.string().allow(null),
+    templateId: Joi.string().uuid().optional(),
+    clipIndex: Joi.number().integer().min(0).optional(),
+    assetType: Joi.string().valid('image', 'video').optional()
   });
 
   const { error, value } = schema.validate(req.body);
@@ -101,7 +104,10 @@ exports.validateSaveWorkflow = function (req, res, next) {
     metadata: Joi.object({
       name: Joi.string().min(1).max(255),
       description: Joi.string().max(1000).allow(null, '')
-    }).default({})
+    }).default({}),
+    templateId: Joi.string().uuid().optional(),
+    clipIndex: Joi.number().integer().min(0).optional(),
+    assetType: Joi.string().valid('image', 'video').optional()
   });
 
   const { error, value } = schema.validate(req.body);
@@ -113,5 +119,16 @@ exports.validateSaveWorkflow = function (req, res, next) {
   }
 
   req.validatedBody = value;
+  next();
+};
+
+/** tac_id param (template_ai_clips id) */
+exports.validateTacIdParam = function (req, res, next) {
+  const tacId = req.params.tacId;
+  if (!tacId || typeof tacId !== 'string' || tacId.trim().length === 0) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: 'tacId is required'
+    });
+  }
   next();
 };

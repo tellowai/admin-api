@@ -105,7 +105,18 @@ exports.validateField = function (value, rules, fieldName) {
 };
 
 /**
- * Validate entire workflow
+ * Check if a node input is satisfied by an edge connection (no direct config value needed).
+ */
+function isInputConnected(nodeId, fieldName, edges) {
+  if (!edges || !Array.isArray(edges)) return false;
+  return edges.some(
+    e => (e.target === nodeId || e.target === String(nodeId)) && e.targetHandle === fieldName
+  );
+}
+
+/**
+ * Validate entire workflow.
+ * Required inputs can be satisfied by either: (1) an edge connection, or (2) a direct value (e.g. text, or image upload { bucket, asset_key }).
  */
 exports.validateWorkflow = async function (nodes, edges) {
   const allErrors = [];
@@ -115,16 +126,22 @@ exports.validateWorkflow = async function (nodes, edges) {
     if (node.type !== 'AI_MODEL' || !node.amr_id) continue;
 
     const rules = await this.getModelValidationRules(node.amr_id);
-    const configValues = node.config_values || {};
+    const configValues = (node.data && node.data.config_values) || node.config_values || {};
+    const nodeId = node.uuid || node.id;
 
     for (const [fieldName, fieldRules] of Object.entries(rules)) {
       const value = configValues[fieldName];
-      const errors = this.validateField(value, fieldRules, fieldName);
 
+      // Required input satisfied by connection: no config value needed (value comes from connected node at runtime)
+      if (fieldRules.isRequired && isInputConnected(nodeId, fieldName, edges)) {
+        continue;
+      }
+
+      const errors = this.validateField(value, fieldRules, fieldName);
       if (errors.length > 0) {
-        allErrors.push(...errors.map(e => ({ ...e, nodeId: node.uuid })));
-        if (!nodeErrors[node.uuid]) nodeErrors[node.uuid] = {};
-        nodeErrors[node.uuid][fieldName] = errors;
+        allErrors.push(...errors.map(e => ({ ...e, nodeId })));
+        if (!nodeErrors[nodeId]) nodeErrors[nodeId] = {};
+        nodeErrors[nodeId][fieldName] = errors;
       }
     }
   }

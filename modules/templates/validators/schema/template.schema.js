@@ -273,6 +273,16 @@ const importTemplatesSchema = Joi.object().keys({
   templates: Joi.array().items(importTemplateObjectSchema).min(1).max(50).required()
 });
 
+// Ensure AI clips: one entry per clip (creates template_ai_clips + workflow per clip)
+const ensureAiClipsClipSchema = Joi.object({
+  clip_index: Joi.number().integer().min(0).required(),
+  asset_type: Joi.string().valid('image', 'video').default('video')
+});
+
+const ensureAiClipsSchema = Joi.object().keys({
+  clips: Joi.array().items(ensureAiClipsClipSchema).min(1).required()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.createDraftTemplateSchema = createDraftTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
@@ -282,3 +292,4 @@ exports.updateTemplateStatusSchema = updateTemplateStatusSchema;
 exports.bulkUpdateTemplatesStatusSchema = bulkUpdateTemplatesStatusSchema;
 exports.exportTemplatesSchema = exportTemplatesSchema;
 exports.importTemplatesSchema = importTemplatesSchema;
+exports.ensureAiClipsSchema = ensureAiClipsSchema;

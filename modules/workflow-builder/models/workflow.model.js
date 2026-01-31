@@ -1,7 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4, v7: uuidv7 } = require('uuid');
 
 /**
  * List workflows for a user with pagination
@@ -123,21 +123,29 @@ exports.saveWorkflowData = async function (workflowId, data) {
     // However, the plan code deletes from workflow_nodes explicitly.
     await connection.query(`DELETE FROM workflow_nodes WHERE wf_id = ?`, [workflowId]);
 
-    // Insert new nodes
+    // Insert new nodes (support both API shape and React Flow shape: node.data.config_values, node.id)
     if (data.nodes && data.nodes.length > 0) {
-      const nodeValues = data.nodes.map(node => [
-        node.uuid || uuidv4(),
-        workflowId,
-        node.type,
-        node.amr_id || null,
-        node.system_node_type || null,
-        node.position?.x || 0,
-        node.position?.y || 0,
-        node.width || 250,
-        node.height || 150,
-        JSON.stringify(node.config_values || {}),
-        JSON.stringify(node.ui_metadata || {})
-      ]);
+      const nodeValues = data.nodes.map(node => {
+        // Prefer React Flow shape; Joi validator can default node.config_values to {} and hide data.config_values
+        const configValues = node.data?.config_values ?? node.config_values ?? {};
+        const uiMeta = node.ui_metadata ?? (node.data && (() => {
+          const { config_values: _cv, ...rest } = node.data;
+          return rest;
+        })()) ?? {};
+        return [
+          node.uuid ?? node.id ?? uuidv4(),
+          workflowId,
+          node.type,
+          node.amr_id ?? null,
+          node.system_node_type ?? null,
+          node.position?.x ?? node.computedPosition?.x ?? 0,
+          node.position?.y ?? node.computedPosition?.y ?? 0,
+          node.width ?? node.dimensions?.width ?? 250,
+          node.height ?? node.dimensions?.height ?? 150,
+          JSON.stringify(configValues),
+          JSON.stringify(uiMeta)
+        ];
+      });
 
       await connection.query(
         `INSERT INTO workflow_nodes 
@@ -147,14 +155,13 @@ exports.saveWorkflowData = async function (workflowId, data) {
       );
     }
 
-    // Insert new edges
+    // Insert new edges (only run SELECT when we have edges to insert)
     if (data.edges && data.edges.length > 0) {
-      // First get the node IDs by UUID
-      const [insertedNodes] = await connection.query(
+      const insertedNodes = await connection.query(
         `SELECT wfn_id, uuid FROM workflow_nodes WHERE wf_id = ?`,
         [workflowId]
       );
-      const nodeUuidToId = Object.fromEntries(insertedNodes.map(n => [n.uuid, n.wfn_id]));
+      const nodeUuidToId = Object.fromEntries(Array.isArray(insertedNodes) ? insertedNodes.map(n => [n.uuid, n.wfn_id]) : []);
 
       const edgeValues = data.edges.map(edge => [
         edge.uuid || uuidv4(),
@@ -182,4 +189,62 @@ exports.saveWorkflowData = async function (workflowId, data) {
   } finally {
     connection.release();
   }
+};
+
+/**
+ * Get workflow ID linked to a template_ai_clip (tac_id). Returns null if no workflow linked.
+ * Simple query, no joins.
+ */
+exports.getWfIdByTacId = async function (tacId) {
+  const query = `
+    SELECT wf_id FROM template_ai_clips
+    WHERE tac_id = ? AND deleted_at IS NULL
+  `;
+  const results = await mysqlQueryRunner.runQueryInSlave(query, [tacId]);
+  if (results.length === 0 || results[0].wf_id == null) return null;
+  return results[0].wf_id;
+};
+
+/**
+ * Get one row for clip (tac_id): wf_id, template_id, clip_index. Single query, no joins.
+ * Use for ensureWorkflowForTacId to avoid 2 round trips (getWfId + getTacClipInfo).
+ */
+exports.getTacRow = async function (tacId) {
+  const query = `
+    SELECT wf_id, template_id, clip_index FROM template_ai_clips
+    WHERE tac_id = ? AND deleted_at IS NULL
+  `;
+  const results = await mysqlQueryRunner.runQueryInSlave(query, [tacId]);
+  return results.length > 0 ? results[0] : null;
+};
+
+/**
+ * Link a workflow to a template_ai_clip (tac_id).
+ */
+exports.setWfIdForTacId = async function (tacId, wfId) {
+  const query = `UPDATE template_ai_clips SET wf_id = ?, updated_at = NOW() WHERE tac_id = ?`;
+  await mysqlQueryRunner.runQueryInMaster(query, [wfId, tacId]);
+};
+
+/**
+ * Get or create workflow for a clip (tac_id). Returns wf_id.
+ * Single tac query (wf_id + template_id + clip_index), then create+link if needed. No extra round trip for clip info.
+ */
+exports.ensureWorkflowForTacId = async function (tacId, userId) {
+  const row = await exports.getTacRow(tacId);
+  if (!row) return null;
+  if (row.wf_id != null) return row.wf_id;
+
+  const name = `template_${row.template_id}_clip_${row.clip_index}`;
+  const workflowData = {
+    uuid: uuidv7(),
+    user_id: userId,
+    name,
+    description: null,
+    status: 'draft'
+  };
+  const result = await exports.createWorkflow(workflowData);
+  const newWfId = result.insertId;
+  await exports.setWfIdForTacId(tacId, newWfId);
+  return newWfId;
 };
