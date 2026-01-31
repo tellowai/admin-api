@@ -11,7 +11,7 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
  */
 exports.list = async function (req, res) {
   try {
-    const paginationParams = paginationController.getPaginationParams(req);
+    const paginationParams = paginationController.getPaginationParams(req.query);
     const searchParams = {
       search: req.query.search,
       amp_id: req.query.amp_id,
