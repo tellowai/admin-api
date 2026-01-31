@@ -9,7 +9,9 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
  */
 exports.listActiveModels = async function (req, res) {
   try {
-    const { q } = req.query;
+    // Normalize q: not passed, empty, or null => no search; always order by updated_at DESC in model
+    const rawQ = req.query.q;
+    const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
     const models = await AiModelRegistryModel.listActiveModels(q);
 
     if (models.length === 0) {
@@ -67,8 +69,7 @@ exports.listActiveModels = async function (req, res) {
       pricing_config: model.pricing_config
     }));
 
-    // Sort by name
-    enrichedModels.sort((a, b) => a.name.localeCompare(b.name));
+    // Keep order from DB: ORDER BY updated_at DESC (no client re-sort)
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data: enrichedModels });
   } catch (error) {
@@ -92,7 +93,9 @@ exports.listSocketTypes = async function (req, res) {
  */
 exports.listSystemNodes = async function (req, res) {
   try {
-    const { q } = req.query;
+    // Normalize q: not passed, empty, or null => no search; always order by updated_at DESC in model
+    const rawQ = req.query.q;
+    const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
     const nodes = await AiModelRegistryModel.listSystemNodeDefinitions(q);
 
     if (nodes.length === 0) {

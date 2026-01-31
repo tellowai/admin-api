@@ -478,14 +478,6 @@ exports.listTemplates = async function (req, res) {
       }));
     }
 
-    // Log final validation summary
-    logger.info('List templates completed:', {
-      totalTemplates: templates.length,
-      templatesWithTags: templates.filter(t => t.template_tags && t.template_tags.length > 0).length,
-      totalTags: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.length : 0), 0),
-      tagsWithFacetData: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.filter(tag => tag.facet_key).length : 0), 0)
-    });
-
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: templates
     });

@@ -50,8 +50,8 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
     query += ` AND ${conditions.join(' AND ')}`;
   }
 
-  // Sorting
-  query += ` ORDER BY created_at DESC`;
+  // Sorting (most recently updated first)
+  query += ` ORDER BY updated_at DESC`;
 
   // Pagination
   if (paginationParams) {

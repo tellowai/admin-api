@@ -55,7 +55,7 @@ exports.listActiveModels = async function (searchQuery = null) {
     params.push(term, term);
   }
 
-  query += ` ORDER BY name `;
+  query += ` ORDER BY updated_at DESC `;
 
   const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
@@ -132,7 +132,7 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null) {
     params.push(term, term);
   }
 
-  query += ` ORDER BY name ASC `;
+  query += ` ORDER BY updated_at DESC `;
 
   const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
