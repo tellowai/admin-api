@@ -2,17 +2,22 @@
 
 const AiModelRegistryModel = require('../models/ai-model-registry.model');
 const WorkflowErrorHandler = require('../middlewares/workflow.error.handler');
+const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 /**
- * List active AI models for the node library
+ * List active AI models for the node library (page-based: page=1,2,3 & page_size)
  */
 exports.listActiveModels = async function (req, res) {
   try {
-    // Normalize q: not passed, empty, or null => no search; always order by updated_at DESC in model
     const rawQ = req.query.q;
     const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
-    const models = await AiModelRegistryModel.listActiveModels(q);
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+    const models = await AiModelRegistryModel.listActiveModels(
+      q,
+      paginationParams.limit,
+      paginationParams.offset
+    );
 
     if (models.length === 0) {
       return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });
@@ -93,10 +98,14 @@ exports.listSocketTypes = async function (req, res) {
  */
 exports.listSystemNodes = async function (req, res) {
   try {
-    // Normalize q: not passed, empty, or null => no search; always order by updated_at DESC in model
     const rawQ = req.query.q;
     const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
-    const nodes = await AiModelRegistryModel.listSystemNodeDefinitions(q);
+    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+    const nodes = await AiModelRegistryModel.listSystemNodeDefinitions(
+      q,
+      paginationParams.limit,
+      paginationParams.offset
+    );
 
     if (nodes.length === 0) {
       return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });

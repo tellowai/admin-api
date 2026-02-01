@@ -40,9 +40,12 @@ exports.getIODefinitionsByModelIds = async function (modelIds) {
 };
 
 /**
- * List all active AI models (No JOINs)
+ * List active AI models with pagination (No JOINs)
+ * @param {string|null} searchQuery - optional search term
+ * @param {number} limit - page size
+ * @param {number} offset - offset for pagination
  */
-exports.listActiveModels = async function (searchQuery = null) {
+exports.listActiveModels = async function (searchQuery = null, limit = 20, offset = 0) {
   let query = `
     SELECT 
       amr_id,
@@ -64,7 +67,8 @@ exports.listActiveModels = async function (searchQuery = null) {
     params.push(term, term);
   }
 
-  query += ` ORDER BY updated_at DESC `;
+  query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ? `;
+  params.push(limit, offset);
 
   const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
@@ -118,9 +122,12 @@ exports.getCategoriesByIds = async function (ids) {
 };
 
 /**
- * List active system node definitions
+ * List active system node definitions with pagination
+ * @param {string|null} searchQuery - optional search term
+ * @param {number} limit - page size
+ * @param {number} offset - offset for pagination
  */
-exports.listSystemNodeDefinitions = async function (searchQuery = null) {
+exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 20, offset = 0) {
   let query = `
     SELECT 
       wsnd_id,
@@ -141,7 +148,8 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null) {
     params.push(term, term);
   }
 
-  query += ` ORDER BY updated_at DESC `;
+  query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ? `;
+  params.push(limit, offset);
 
   const results = await mysqlQueryRunner.runQueryInSlave(query, params);
 
