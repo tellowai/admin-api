@@ -426,6 +426,7 @@ exports.getTemplateById = async function (templateId) {
       orientation,
       additional_data,
       status,
+      workflow_builder_version,
       created_at
     FROM templates
     WHERE template_id = ?

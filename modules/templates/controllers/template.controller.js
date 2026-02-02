@@ -1388,6 +1388,8 @@ exports.createTemplate = async function (req, res) {
     const templateData = req.validatedBody;
     // Generate UUID for template_id
     templateData.template_id = uuidv7();
+    // Default workflow builder to v2
+    templateData.workflow_builder_version = templateData.workflow_builder_version || 'v2';
 
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
@@ -1610,6 +1612,7 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.template_type = 'premium'; // Default type
     templateData.credits = (templateData?.template_output_type == 'video') ? 50 : 1; // Default credits
     templateData.user_assets_layer = 'bottom'; // Default layer
+    templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
 
     // Create template in database (minimal data)
     await TemplateModel.createTemplate(templateData, []); // Empty clips array
