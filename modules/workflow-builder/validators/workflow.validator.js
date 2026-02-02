@@ -71,9 +71,11 @@ exports.validateUpdateWorkflow = function (req, res, next) {
   next();
 };
 
+const MAX_NODES_PER_WORKFLOW = 25;
+
 exports.validateAutoSave = function (req, res, next) {
   const schema = Joi.object({
-    nodes: Joi.array().items(nodeSchema).default([]),
+    nodes: Joi.array().items(nodeSchema).max(MAX_NODES_PER_WORKFLOW).messages({ 'array.max': 'Maximum 25 nodes per workflow' }).default([]),
     edges: Joi.array().items(edgeSchema).default([]),
     viewport: Joi.object({
       x: Joi.number(),
@@ -100,7 +102,7 @@ exports.validateAutoSave = function (req, res, next) {
 
 exports.validateSaveWorkflow = function (req, res, next) {
   const schema = Joi.object({
-    nodes: Joi.array().items(nodeSchema).required(),
+    nodes: Joi.array().items(nodeSchema).max(MAX_NODES_PER_WORKFLOW).messages({ 'array.max': 'Maximum 25 nodes per workflow' }).required(),
     edges: Joi.array().items(edgeSchema).default([]),
     viewport: Joi.object({
       x: Joi.number(),

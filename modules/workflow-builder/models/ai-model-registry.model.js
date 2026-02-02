@@ -84,6 +84,33 @@ exports.listActiveModels = async function (searchQuery = null, limit = 20, offse
   });
 };
 
+/**
+ * Get AI model registry rows by amr_id (single batch query). Used to enrich workflow nodes of type AI_MODEL.
+ * Extracts all amr_ids from nodes, then runs one IN (?) query.
+ * @param {number[]} amrIds - amr_id values from ai_model_registry
+ * @returns {Promise<Object[]>} rows with amr_id, name, platform_model_id, version, description, icon_url
+ */
+exports.getByAmrIds = async function (amrIds) {
+  if (!amrIds || amrIds.length === 0) return [];
+
+  const unique = [...new Set(amrIds)].filter(id => id != null);
+  if (unique.length === 0) return [];
+
+  const query = `
+    SELECT 
+      amr_id,
+      name,
+      platform_model_id,
+      version,
+      description,
+      icon_url
+    FROM ai_model_registry
+    WHERE amr_id IN (?)
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+};
+
 // Batch fetch helpers
 
 /**

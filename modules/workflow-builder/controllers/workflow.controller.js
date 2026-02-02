@@ -2,8 +2,9 @@
 
 const WorkflowModel = require('../models/workflow.model');
 const WorkflowNodeModel = require('../models/workflow.node.model');
-const TemplateModel = require('../../templates/models/template.model');
 const WorkflowEdgeModel = require('../models/workflow.edge.model');
+const AiModelRegistryModel = require('../models/ai-model-registry.model');
+const TemplateModel = require('../../templates/models/template.model');
 const WorkflowValidationService = require('../services/workflow.validation.service');
 const WorkflowErrorHandler = require('../middlewares/workflow.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
@@ -73,6 +74,24 @@ async function enrichNodesWithAssetUrls(nodes) {
 }
 
 /**
+ * Enrich nodes of type AI_MODEL with ai_model_registry row (by amr_id) as node.ai_model.
+ */
+async function enrichNodesWithAiModels(nodes) {
+  if (!nodes || nodes.length === 0) return;
+  const amrIds = nodes
+    .filter(n => n.type === 'AI_MODEL' && n.amr_id != null)
+    .map(n => n.amr_id);
+  if (amrIds.length === 0) return;
+  const rows = await AiModelRegistryModel.getByAmrIds(amrIds);
+  const byAmrId = new Map(rows.map(r => [r.amr_id, r]));
+  for (const node of nodes) {
+    if (node.type === 'AI_MODEL' && node.amr_id != null) {
+      node.ai_model = byAmrId.get(node.amr_id) || null;
+    }
+  }
+}
+
+/**
  * Get workflow with nodes and edges
  */
 exports.getWorkflow = async function (req, res) {
@@ -95,6 +114,7 @@ exports.getWorkflow = async function (req, res) {
     ]);
 
     await enrichNodesWithAssetUrls(nodes);
+    await enrichNodesWithAiModels(nodes);
 
     // Stitch edges with node UUIDs (Zero-Join Policy)
     const nodeMap = new Map();
@@ -146,6 +166,7 @@ exports.getWorkflowByTacId = async function (req, res) {
       });
     }
     await enrichNodesWithAssetUrls(nodes);
+    await enrichNodesWithAiModels(nodes);
     const nodeMap = new Map(nodes.map(n => [n.wfn_id, n.uuid]));
     const edges = rawEdges.map(edge => ({
       ...edge,
@@ -166,6 +187,42 @@ exports.getWorkflowByTacId = async function (req, res) {
 };
 
 /**
+ * Helper: Resolve node connections.
+ * If a node parameter (handle) has an incoming edge, remove any manual value for that parameter
+ * from the node's config_values/data.config_values to avoid conflicts.
+ */
+function cleanConnectedInputs(nodes, edges) {
+  if (!nodes || !edges) return;
+  const nodeMap = new Map();
+  nodes.forEach(node => {
+    // Index by all potential IDs
+    if (node.id) nodeMap.set(String(node.id), node);
+    if (node.uuid) nodeMap.set(String(node.uuid), node);
+  });
+
+  edges.forEach(edge => {
+    const targetId = edge.target;
+    const targetHandle = edge.targetHandle; // Corresponds to the input key (e.g., 'source_image')
+    const targetNode = nodeMap.get(String(targetId));
+
+    if (targetNode && targetHandle) {
+      // Clear from root config_values
+      if (targetNode.config_values && targetNode.config_values[targetHandle] !== undefined) {
+        delete targetNode.config_values[targetHandle];
+      }
+      // Clear from data.config_values (ReactFlow/VueFlow shape)
+      if (targetNode.data && targetNode.data.config_values && targetNode.data.config_values[targetHandle] !== undefined) {
+        delete targetNode.data.config_values[targetHandle];
+      }
+      // Clear from data.inputs (Frontend sometimes uses this)
+      if (targetNode.data && targetNode.data.inputs && targetNode.data.inputs[targetHandle] !== undefined) {
+        delete targetNode.data.inputs[targetHandle];
+      }
+    }
+  });
+}
+
+/**
  * Auto-save workflow by clip (tac_id). Creates template_ai_clips row and workflow when clip does not exist yet.
  */
 exports.autoSaveWorkflowByTacId = async function (req, res) {
@@ -174,6 +231,9 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
     const body = req.validatedBody;
     const { nodes, edges, viewport, changeHash } = body;
     const userId = req.user.userId;
+
+    // Clean manual inputs that have connections
+    cleanConnectedInputs(nodes, edges);
 
     let resolvedTacId = tacIdParam;
     const tacRow = await WorkflowModel.getTacRow(tacIdParam);
@@ -255,6 +315,9 @@ exports.saveWorkflowByTacId = async function (req, res) {
     const body = req.validatedBody;
     const { nodes, edges, viewport, metadata } = body;
     const userId = req.user.userId;
+
+    // Clean manual inputs that have connections
+    cleanConnectedInputs(nodes, edges);
 
     let resolvedTacId = tacIdParam;
     const tacRow = await WorkflowModel.getTacRow(tacIdParam);
