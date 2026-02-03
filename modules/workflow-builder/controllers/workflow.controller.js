@@ -592,3 +592,115 @@ exports.getModelValidationRules = async function (req, res) {
     WorkflowErrorHandler.handleWorkflowErrors(error, res);
   }
 };
+
+/**
+ * Get cross-clip sources for the template: other clips and their nodes with outputs matching filterType.
+ * Used by REF_CLIP_IMAGE / REF_CLIP_VIDEO / REF_CLIP_TEXT "source" picker. No joins; batch queries only.
+ * Query: currentTacId (exclude), filterType (image|video|text).
+ */
+exports.getCrossClipSources = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const currentTacId = req.query.currentTacId || null;
+    const filterType = (req.query.filterType || 'image').toLowerCase();
+
+    const clipSummaries = await TemplateModel.getTemplateClipSummaries(templateId);
+    // Include all other clips (even without wf_id) so UI can show "Clip 2", "Clip 3" etc.; nodes only for those with wf_id
+    const clips = clipSummaries
+      .filter(c => c.tac_id !== currentTacId)
+      .map(c => ({ tac_id: c.tac_id, clip_index: c.clip_index, wf_id: c.wf_id || null, label: `Clip ${(c.clip_index || 0)}` }));
+
+    const wfIds = clips.map(c => c.wf_id).filter(id => id != null);
+    const nodes = wfIds.length > 0 ? await WorkflowNodeModel.getNodesByWorkflowIds(wfIds) : [];
+    const wfIdToTacId = new Map(clips.filter(c => c.wf_id != null).map(c => [c.wf_id, c.tac_id]));
+
+    const socketTypes = await AiModelRegistryModel.getAllSocketTypes();
+    const amstIdToSlug = new Map((socketTypes || []).map(st => [st.amst_id, (st.slug || '').toLowerCase()]));
+
+    const amrIds = [...new Set(nodes.filter(n => n.type === 'AI_MODEL' && n.amr_id != null).map(n => n.amr_id))];
+    let amrIdToOutputs = new Map();
+    let amrIdToAiModel = new Map();
+    if (amrIds.length > 0) {
+      const [ioDefs, aiModelRows] = await Promise.all([
+        AiModelRegistryModel.getIODefinitionsByModelIds(amrIds),
+        AiModelRegistryModel.getByAmrIds(amrIds)
+      ]);
+      aiModelRows.forEach(r => { amrIdToAiModel.set(r.amr_id, r); });
+      const outputDefs = (ioDefs || []).filter(io => io.direction === 'OUTPUT');
+      outputDefs.forEach(io => {
+        if (!amrIdToOutputs.has(io.amr_id)) amrIdToOutputs.set(io.amr_id, []);
+        amrIdToOutputs.get(io.amr_id).push({
+          name: io.name,
+          label: io.label || io.name,
+          type: amstIdToSlug.get(io.amst_id) || 'text'
+        });
+      });
+    }
+
+    const systemDefs = await AiModelRegistryModel.listSystemNodeDefinitions(null, 100, 0);
+    const wsndIds = (systemDefs || []).map(d => d.wsnd_id);
+    let typeSlugToOutputs = new Map();
+    let wsndIdToOutputs = new Map();
+    if (wsndIds.length > 0) {
+      const sysIo = await AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds(wsndIds);
+      const sysOutputs = (sysIo || []).filter(io => io.direction === 'OUTPUT');
+      const wsndIdToSlug = new Map((systemDefs || []).map(d => [d.wsnd_id, (d.type_slug || '').toLowerCase()]));
+      sysOutputs.forEach(io => {
+        const out = {
+          name: io.name,
+          label: io.label || io.name,
+          type: amstIdToSlug.get(io.amst_id) || 'text'
+        };
+        if (!wsndIdToOutputs.has(io.wsnd_id)) wsndIdToOutputs.set(io.wsnd_id, []);
+        wsndIdToOutputs.get(io.wsnd_id).push(out);
+        const slug = wsndIdToSlug.get(io.wsnd_id);
+        if (slug) {
+          if (!typeSlugToOutputs.has(slug)) typeSlugToOutputs.set(slug, []);
+          typeSlugToOutputs.get(slug).push(out);
+        }
+      });
+    }
+
+    const REF_CLIP_TYPES = ['REF_CLIP_IMAGE', 'REF_CLIP_VIDEO', 'REF_CLIP_TEXT'];
+    const nodesWithOutputs = nodes
+      .filter(node => !REF_CLIP_TYPES.includes(node.type || ''))
+      .map(node => {
+        let outputs = [];
+        if (node.type === 'AI_MODEL' && node.amr_id != null) {
+          outputs = amrIdToOutputs.get(node.amr_id) || [];
+        } else {
+          // System nodes: amr_id is wsnd_id in workflow_nodes; look up by wsnd_id first, then by type slug
+          outputs = (node.amr_id != null && wsndIdToOutputs.get(node.amr_id)) ||
+            typeSlugToOutputs.get((node.type || node.system_node_type || '').toLowerCase()) ||
+            [];
+        }
+        return { ...node, outputs };
+      })
+      .filter(node => node.outputs.some(o => (o.type || '').toLowerCase() === filterType));
+
+    const nodesByTacId = {};
+    clips.forEach(c => { nodesByTacId[c.tac_id] = []; });
+    nodesWithOutputs.forEach(node => {
+      const tacId = wfIdToTacId.get(node.wf_id);
+      if (!tacId || !nodesByTacId[tacId]) return;
+      const nodeLabel = node.data?.label || node.config_values?.label || node.ui_metadata?.label || node.type || node.uuid;
+      const matchingOutputs = node.outputs.filter(o => (o.type || '').toLowerCase() === filterType);
+      const promptRaw = node.config_values?.prompt ?? node.config_values?.positive_prompt ?? '';
+      const prompt_preview = typeof promptRaw === 'string' ? promptRaw.replace(/\s+/g, ' ').trim().slice(0, 100) : '';
+      const ai_model = node.type === 'AI_MODEL' && node.amr_id != null ? (amrIdToAiModel.get(node.amr_id) || null) : null;
+      nodesByTacId[tacId].push({
+        id: node.uuid,
+        label: nodeLabel,
+        outputs: matchingOutputs,
+        prompt_preview: prompt_preview || null,
+        ai_model: ai_model ? { amr_id: ai_model.amr_id, name: ai_model.name } : null
+      });
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: { clips, nodesByTacId }
+    });
+  } catch (error) {
+    WorkflowErrorHandler.handleWorkflowErrors(error, res);
+  }
+};

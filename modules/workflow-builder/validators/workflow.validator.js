@@ -3,11 +3,12 @@
 const Joi = require('@hapi/joi');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
-// Node type: AI/model types + system node type_slugs from workflow_system_node_definitions (START, END, USER_INPUT_TEXT, etc.).
+// Node type: AI/model types + system node type_slugs from workflow_system_node_definitions (START, END, USER_INPUT_TEXT, etc.) + REF_CLIP_*.
 const NODE_TYPES = [
   'AI_MODEL', 'USER_INPUT', 'STATIC_ASSET', 'LOGIC_GATE', 'OUTPUT', 'SYSTEM',
   'START', 'END', 'USER_INPUT_TEXT', 'USER_INPUT_IMAGE', 'USER_INPUT_VIDEO',
-  'STATIC_IMAGE', 'STATIC_VIDEO'
+  'STATIC_IMAGE', 'STATIC_VIDEO',
+  'REF_CLIP_IMAGE', 'REF_CLIP_VIDEO', 'REF_CLIP_TEXT'
 ];
 const nodeSchema = Joi.object({
   uuid: Joi.string().min(1).max(64).optional(), // Allow any string id (frontend may use readable ids; DB/model use node.uuid ?? node.id ?? uuidv4())

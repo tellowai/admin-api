@@ -775,6 +775,20 @@ exports.ensureTemplateAiClipsWithWorkflows = async function (templateId, clips, 
 };
 
 /**
+ * Get clip summaries for a template (tac_id, clip_index, wf_id only). No joins, no legacy workflow.
+ * Used for cross-clip source picker.
+ */
+exports.getTemplateClipSummaries = async function (templateId) {
+  const query = `
+    SELECT tac_id, clip_index, wf_id
+    FROM template_ai_clips
+    WHERE template_id = ? AND deleted_at IS NULL
+    ORDER BY clip_index ASC
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+};
+
+/**
  * Get AI clips for a template
  */
 exports.getTemplateAiClips = async function (templateId) {

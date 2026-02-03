@@ -101,4 +101,11 @@ module.exports = function (app) {
       AuthMiddleware.isAdminUser,
       WorkflowRegistryCtrl.listSystemNodes
     );
+
+  // Cross-clip source picker: other clips + nodes with matching output type (for REF_CLIP_* nodes)
+  app.route(versionConfig.routePrefix + '/workflow-builder/templates/:templateId/cross-clip-sources')
+    .get(
+      AuthMiddleware.isAdminUser,
+      WorkflowCtrl.getCrossClipSources
+    );
 };
