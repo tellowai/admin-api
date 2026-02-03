@@ -799,47 +799,65 @@ exports.getTemplateAiClips = async function (templateId) {
     clips.forEach(clip => {
       clip.workflow_id = clip.wf_id || null;
     });
-  }
 
-  // Get workflow for each clip (Legacy)
-  for (const clip of clips) {
-    const workflow = await this.getClipWorkflow(clip.tac_id);
-    clip.workflow = workflow;
+    // Bulk fetch legacy workflows (clip_workflow) for all tac_ids in one query
+    const tacIds = clips.map(c => c.tac_id);
+    const workflowsByTac = await this.getClipWorkflowsByTacIds(tacIds);
+    clips.forEach(clip => {
+      clip.workflow = workflowsByTac.get(clip.tac_id) || [];
+    });
   }
 
   return clips;
 };
 
 /**
- * Get workflow for a clip
+ * Get legacy workflow arrays for multiple clips in one query (clip_workflow table).
+ * @param {string[]} tacIds - template_ai_clips.tac_id values
+ * @returns {Promise<Map<string, Array>>} Map of tac_id -> array of workflow step objects
  */
-exports.getClipWorkflow = async function (tacId) {
+exports.getClipWorkflowsByTacIds = async function (tacIds) {
+  if (!tacIds || tacIds.length === 0) return new Map();
+
+  const unique = [...new Set(tacIds)].filter(Boolean);
   const query = `
-    SELECT 
-      cw_id,
-      tac_id,
-      workflow,
-      created_at,
-      updated_at
+    SELECT tac_id, workflow
     FROM clip_workflow
-    WHERE tac_id = ?
+    WHERE tac_id IN (?)
     AND deleted_at IS NULL
-    ORDER BY cw_id ASC
+    ORDER BY tac_id, cw_id ASC
   `;
 
-  const workflowEntries = await mysqlQueryRunner.runQueryInSlave(query, [tacId]);
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+  const byTac = new Map();
 
-  // Parse workflow JSON and return as array
-  return workflowEntries.map(entry => {
+  for (const entry of rows) {
+    let step = null;
     if (entry.workflow && typeof entry.workflow === 'string') {
       try {
-        return JSON.parse(entry.workflow);
+        step = JSON.parse(entry.workflow);
       } catch (e) {
-        return null;
+        step = null;
       }
+    } else {
+      step = entry.workflow;
     }
-    return entry.workflow;
-  }).filter(Boolean);
+    if (step != null) {
+      const list = byTac.get(entry.tac_id) || [];
+      list.push(step);
+      byTac.set(entry.tac_id, list);
+    }
+  }
+
+  return byTac;
+};
+
+/**
+ * Get workflow for a single clip (Legacy). Prefer getClipWorkflowsByTacIds for multiple clips.
+ */
+exports.getClipWorkflow = async function (tacId) {
+  const byTac = await this.getClipWorkflowsByTacIds([tacId]);
+  return byTac.get(tacId) || [];
 };
 
 /**

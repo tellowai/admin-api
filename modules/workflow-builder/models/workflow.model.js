@@ -79,6 +79,41 @@ exports.getWorkflowById = async function (workflowId, userId = null) {
 };
 
 /**
+ * Bulk: which wf_ids exist in workflows (archived_at IS NULL). Single query.
+ * @param {number[]} wfIds - workflow IDs
+ * @returns {Promise<Set<number>>} Set of wf_id that exist
+ */
+exports.getWorkflowIdsThatExist = async function (wfIds) {
+  if (!wfIds || wfIds.length === 0) return new Set();
+
+  const unique = [...new Set(wfIds)].filter(id => id != null);
+  const query = `SELECT wf_id FROM workflows WHERE wf_id IN (?) AND archived_at IS NULL`;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+  return new Set(rows.map(r => r.wf_id));
+};
+
+/**
+ * Bulk: node count per wf_id. Single query.
+ * @param {number[]} wfIds - workflow IDs
+ * @returns {Promise<Map<number, number>>} Map of wf_id -> node count
+ */
+exports.getWorkflowNodeCountsByWfIds = async function (wfIds) {
+  if (!wfIds || wfIds.length === 0) return new Map();
+
+  const unique = [...new Set(wfIds)].filter(id => id != null);
+  const query = `
+    SELECT wf_id, COUNT(*) AS cnt
+    FROM workflow_nodes
+    WHERE wf_id IN (?)
+    GROUP BY wf_id
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+  const map = new Map();
+  rows.forEach(r => map.set(r.wf_id, Number(r.cnt) || 0));
+  return map;
+};
+
+/**
  * Create new workflow
  */
 exports.createWorkflow = async function (workflowData) {
