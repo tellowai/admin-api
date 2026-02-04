@@ -44,6 +44,14 @@ module.exports = function (app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/:templateId/ensure-ai-clips'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateEnsureAiClipsData,
+    TemplateCtrl.ensureTemplateAiClips
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId'
   ).patch(
     AuthMiddleware.isAuthorizedJWT,

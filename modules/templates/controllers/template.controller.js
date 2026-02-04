@@ -19,6 +19,7 @@ const AiModelModel = require('../../ai-models/models/ai-model.model');
 const TemplateRedisService = require('../services/template.redis.service');
 const NicheModel = require('../../niches/models/niche.model');
 const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.field.definition.model');
+const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 
 // Timeout for fetching Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -478,14 +479,6 @@ exports.listTemplates = async function (req, res) {
       }));
     }
 
-    // Log final validation summary
-    logger.info('List templates completed:', {
-      totalTemplates: templates.length,
-      templatesWithTags: templates.filter(t => t.template_tags && t.template_tags.length > 0).length,
-      totalTags: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.length : 0), 0),
-      tagsWithFacetData: templates.reduce((sum, t) => sum + (t.template_tags ? t.template_tags.filter(tag => tag.facet_key).length : 0), 0)
-    });
-
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: templates
     });
@@ -736,6 +729,35 @@ exports.getTemplate = async function (req, res) {
 
   } catch (error) {
     logger.error('Error getting template:', { error: error.message, stack: error.stack, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * Ensure template_ai_clips rows exist for the given clip definitions; create a workflow per clip
+ * and attach wf_id in template_ai_clips. Use when get template returns empty clips (e.g. new/legacy template).
+ * Body: { clips: [ { clip_index: number, asset_type: 'image'|'video' }, ... ] }
+ */
+exports.ensureTemplateAiClips = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const { clips } = req.validatedBody;
+    const userId = req.user.userId;
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    const resultClips = await TemplateModel.ensureTemplateAiClipsWithWorkflows(templateId, clips, userId);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: { clips: resultClips }
+    });
+  } catch (error) {
+    logger.error('Error ensuring template AI clips:', { error: error.message, templateId: req.params.templateId });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 };
@@ -1367,6 +1389,8 @@ exports.createTemplate = async function (req, res) {
     const templateData = req.validatedBody;
     // Generate UUID for template_id
     templateData.template_id = uuidv7();
+    // Default workflow builder to v2
+    templateData.workflow_builder_version = templateData.workflow_builder_version || 'v2';
 
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
@@ -1589,6 +1613,7 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.template_type = 'premium'; // Default type
     templateData.credits = (templateData?.template_output_type == 'video') ? 50 : 1; // Default credits
     templateData.user_assets_layer = 'bottom'; // Default layer
+    templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
 
     // Create template in database (minimal data)
     await TemplateModel.createTemplate(templateData, []); // Empty clips array
@@ -2789,6 +2814,7 @@ exports.updateTemplate = async function (req, res) {
 
 /**
  * Helper to validate if a template is publishable based on its asset type.
+ * Uses workflow_builder_version: v1 = legacy clip_workflow validation; v2 = template_ai_clips + workflows + workflow_nodes.
  */
 async function validateTemplatePublishing(template, t) {
   if (!template.template_clips_assets_type) {
@@ -2805,13 +2831,48 @@ async function validateTemplatePublishing(template, t) {
   if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING'));
 
   if (template.template_clips_assets_type === 'ai') {
-    const clips = await TemplateModel.getTemplateAiClips(template.template_id);
-    if (!clips || clips.length === 0) {
-      errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
+    const workflowBuilderVersion = (template.workflow_builder_version || 'v1').toLowerCase();
+
+    if (workflowBuilderVersion === 'v2') {
+      // V2: validate template_ai_clips + workflows table (each clip has wf_id, workflow exists, has nodes)
+      const clips = await TemplateModel.getTemplateAiClips(template.template_id);
+      if (!clips || clips.length === 0) {
+        errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
+      } else {
+        const missingWf = clips.filter(c => c.wf_id == null);
+        if (missingWf.length > 0) {
+          missingWf.forEach(clip => {
+            errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+          });
+        } else {
+          const wfIds = clips.map(c => c.wf_id).filter(Boolean);
+          const [existingWfIds, nodeCountsByWfId] = await Promise.all([
+            WorkflowModel.getWorkflowIdsThatExist(wfIds),
+            WorkflowModel.getWorkflowNodeCountsByWfIds(wfIds)
+          ]);
+          for (const clip of clips) {
+            if (clip.wf_id == null) continue;
+            if (!existingWfIds.has(clip.wf_id)) {
+              errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+            } else {
+              const nodeCount = nodeCountsByWfId.get(clip.wf_id) || 0;
+              if (nodeCount < 1) {
+                errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+              }
+            }
+          }
+        }
+      }
     } else {
-      for (const clip of clips) {
-        if (!clip.workflow || clip.workflow.length === 0) {
-          errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+      // V1: legacy validation (clip_workflow workflow array)
+      const clips = await TemplateModel.getTemplateAiClips(template.template_id);
+      if (!clips || clips.length === 0) {
+        errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
+      } else {
+        for (const clip of clips) {
+          if (!clip.workflow || clip.workflow.length === 0) {
+            errors.push(t('template:PUBLISH_ERROR_CLIP_WORKFLOW_MISSING', { index: clip.clip_index }));
+          }
         }
       }
     }

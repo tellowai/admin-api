@@ -118,21 +118,10 @@ exports.listAiModels = async function(req, res) {
           .filter(id => id) // Filter out any null/undefined IDs
       )];
       
-      logger.info('Tag fetching info:', {
-        total_models: modelsWithPlatforms.length,
-        models_with_tags: allTagAssociations.filter(item => item.tagAssociations.length > 0).length,
-        unique_tag_ids: allTagIds.length,
-        tag_ids: allTagIds
-      });
-      
       // Fetch all tag definitions in one query
       let allTagDefinitions = [];
       if (allTagIds.length > 0) {
         allTagDefinitions = await AiModelTagModel.getTagDefinitionsByIds(allTagIds);
-        logger.info('Tag definitions fetched:', {
-          requested_count: allTagIds.length,
-          actual_fetched: allTagDefinitions.length
-        });
       }
       
       // Create a lookup map for tag definitions
