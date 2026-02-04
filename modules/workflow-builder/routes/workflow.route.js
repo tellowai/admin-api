@@ -102,6 +102,43 @@ module.exports = function (app) {
       WorkflowRegistryCtrl.listSystemNodes
     );
 
+  // Admin CRUD for system node definitions
+  app.route(versionConfig.routePrefix + '/workflow-builder/system-node-definitions')
+    .get(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.listSystemNodeDefinitionsAdmin
+    )
+    .post(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.createSystemNodeDefinition
+    );
+
+  app.route(versionConfig.routePrefix + '/workflow-builder/system-node-definitions/:wsndId')
+    .get(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.getSystemNodeDefinitionById
+    )
+    .patch(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.updateSystemNodeDefinition
+    );
+
+  app.route(versionConfig.routePrefix + '/workflow-builder/system-node-definitions/:wsndId/io-definitions')
+    .post(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.createSystemNodeIoDefinition
+    );
+
+  app.route(versionConfig.routePrefix + '/workflow-builder/system-node-io-definitions/:wsniodId')
+    .patch(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.updateSystemNodeIoDefinition
+    )
+    .delete(
+      AuthMiddleware.isAdminUser,
+      WorkflowRegistryCtrl.deleteSystemNodeIoDefinition
+    );
+
   // Cross-clip source picker: other clips + nodes with matching output type (for REF_CLIP_* nodes)
   app.route(versionConfig.routePrefix + '/workflow-builder/templates/:templateId/cross-clip-sources')
     .get(
