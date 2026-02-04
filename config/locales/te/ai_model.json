@@ -11,5 +11,13 @@
   "AI_MODEL_UPDATED_SUCCESSFULLY": "AI మోడల్ విజయవంతంగా అప్‌డేట్ చేయబడింది",
   "AI_MODEL_ALREADY_EXISTS": "ఈ ID తో AI మోడల్ ఇప్పటికే ఉంది",
   "AI_MODEL_CREATE_FAILED": "AI మోడల్ సృష్టించడంలో విఫలమైంది",
-  "AI_MODEL_UPDATE_FAILED": "AI మోడల్ అప్‌డేట్ చేయడంలో విఫలమైంది"
+  "AI_MODEL_UPDATE_FAILED": "AI మోడల్ అప్‌డేట్ చేయడంలో విఫలమైంది",
+  "VALIDATION_REQUIRED": "అవసరమైన ఫీల్డ్‌లు తప్పిపోయినవి: పేరు, ప్రొవైడర్ మోడల్ ID మరియు ప్రొవైడర్.",
+  "PLATFORM_CREATED_SUCCESSFULLY": "ప్లాట్‌ఫారమ్ విజయవంతంగా సృష్టించబడింది",
+  "PLATFORM_CREATE_FAILED": "ప్లాట్‌ఫారమ్ సృష్టించడంలో విఫలమైంది",
+  "PLATFORM_UPDATED_SUCCESSFULLY": "ప్లాట్‌ఫారమ్ విజయవంతంగా అప్‌డేట్ చేయబడింది",
+  "PROVIDER_NAME_SLUG_REQUIRED": "పేరు మరియు స్లగ్ అవసరం.",
+  "PROVIDER_UPDATED_SUCCESSFULLY": "ప్రొవైడర్ విజయవంతంగా అప్‌డేట్ చేయబడింది.",
+  "IO_UPDATED_SUCCESSFULLY": "IO నిర్వచనం విజయవంతంగా అప్‌డేట్ చేయబడింది.",
+  "IO_DELETED_SUCCESSFULLY": "IO నిర్వచనం విజయవంతంగా తొలగించబడింది."
 } 

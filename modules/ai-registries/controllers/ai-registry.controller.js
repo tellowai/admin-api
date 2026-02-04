@@ -5,6 +5,7 @@ const paginationController = require('../../core/controllers/pagination.controll
 const StorageFactory = require('../../os2/providers/storage.factory');
 const _ = require('lodash');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 /**
  * List AI Models
@@ -30,10 +31,10 @@ exports.list = async function (req, res) {
       provider: providersMap[model.amp_id] || null
     }));
 
-    res.status(HTTP_STATUS_CODES.OK).json(result);
+    return res.status(HTTP_STATUS_CODES.OK).json(result);
   } catch (err) {
     console.error('Error listing AI models:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
@@ -61,10 +62,16 @@ exports.create = async function (req, res) {
     };
 
     const result = await aiRegistryModel.createAiModel(newModelData);
-    res.status(HTTP_STATUS_CODES.CREATED).json({ amr_id: result.insertId, ...newModelData });
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY',
+      actionName: 'CREATE_AI_REGISTRY_MODEL',
+      entityId: result.insertId
+    });
+    return res.status(HTTP_STATUS_CODES.CREATED).json({ amr_id: result.insertId, ...newModelData });
   } catch (err) {
     console.error('Error creating AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common:SOMETHING_WENT_WRONG') });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common:SOMETHING_WENT_WRONG') });
   }
 };
 
@@ -104,10 +111,10 @@ exports.read = async function (req, res) {
       model.io_definitions = [];
     }
 
-    res.status(HTTP_STATUS_CODES.OK).json(model);
+    return res.status(HTTP_STATUS_CODES.OK).json(model);
   } catch (err) {
     console.error('Error reading AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
@@ -138,10 +145,18 @@ exports.update = async function (req, res) {
     }
 
     await aiRegistryModel.updateAiModel(amrId, updateData);
-    res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
+    const updateKeys = Object.keys(updateData);
+    const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status'));
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY',
+      actionName: isStatusOnly ? 'UPDATE_AI_REGISTRY_MODEL_STATUS' : 'UPDATE_AI_REGISTRY_MODEL',
+      entityId: parseInt(amrId, 10)
+    });
+    return res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:AI_MODEL_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
   } catch (err) {
     console.error('Error updating AI model:', err);
-    res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 
@@ -164,9 +179,10 @@ exports.listProviders = async function (req, res) {
       return p;
     }));
 
-    res.json(providersWithLogos);
+    return res.status(HTTP_STATUS_CODES.OK).json(providersWithLogos);
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error listing providers:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -177,13 +193,19 @@ exports.createProvider = async function (req, res) {
   try {
     const data = req.body;
     if (!data.name || !data.slug) {
-      return res.status(400).send({ message: 'Name and slug are required.' });
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({ message: req.t('ai_model:PROVIDER_NAME_SLUG_REQUIRED') || 'Name and slug are required.' });
     }
     const result = await aiRegistryModel.createProvider(data);
-    res.json({ amp_id: result.insertId, ...data });
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY_PROVIDER',
+      actionName: 'CREATE_AI_REGISTRY_PROVIDER',
+      entityId: result.insertId
+    });
+    return res.status(HTTP_STATUS_CODES.CREATED).json({ amp_id: result.insertId, ...data });
   } catch (err) {
     console.error('Error creating provider:', err);
-    res.status(500).send({ message: err.message || 'Internal Server Error' });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -201,10 +223,18 @@ exports.updateProvider = async function (req, res) {
     delete updateData.updated_at;
 
     await aiRegistryModel.updateProvider(ampId, updateData);
-    res.json({ message: 'Updated successfully' });
+    const updateKeys = Object.keys(updateData);
+    const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status'));
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY_PROVIDER',
+      actionName: isStatusOnly ? 'UPDATE_AI_REGISTRY_PROVIDER_STATUS' : 'UPDATE_AI_REGISTRY_PROVIDER',
+      entityId: parseInt(ampId, 10)
+    });
+    return res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:PROVIDER_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
   } catch (err) {
     console.error('Error updating provider:', err);
-    res.status(500).send({ message: err.message || 'Internal Server Error' });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -214,9 +244,10 @@ exports.updateProvider = async function (req, res) {
 exports.listCategories = async function (req, res) {
   try {
     const categories = await aiRegistryModel.listCategories();
-    res.json(categories);
+    return res.status(HTTP_STATUS_CODES.OK).json(categories);
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error listing categories:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -226,9 +257,10 @@ exports.listCategories = async function (req, res) {
 exports.listSocketTypes = async function (req, res) {
   try {
     const types = await aiRegistryModel.listSocketTypes();
-    res.json(types);
+    return res.status(HTTP_STATUS_CODES.OK).json(types);
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error listing socket types:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -242,9 +274,16 @@ exports.createIoDefinition = async function (req, res) {
       amr_id: req.params.amrId // Ensure it links to the current model
     };
     const result = await aiRegistryModel.createIoDefinition(data);
-    res.json({ amiod_id: result.insertId, ...data });
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY_IO',
+      actionName: 'CREATE_AI_REGISTRY_IO',
+      entityId: result.insertId
+    });
+    return res.status(HTTP_STATUS_CODES.CREATED).json({ amiod_id: result.insertId, ...data });
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error creating IO definition:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -255,9 +294,16 @@ exports.updateIoDefinition = async function (req, res) {
   try {
     const amiodId = req.params.amiodId;
     await aiRegistryModel.updateIoDefinition(amiodId, req.body);
-    res.json({ message: 'Updated successfully' });
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY_IO',
+      actionName: 'UPDATE_AI_REGISTRY_IO',
+      entityId: parseInt(amiodId, 10)
+    });
+    return res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:IO_UPDATED_SUCCESSFULLY') || 'Updated successfully' });
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error updating IO definition:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };
 
@@ -268,8 +314,15 @@ exports.deleteIoDefinition = async function (req, res) {
   try {
     const amiodId = req.params.amiodId;
     await aiRegistryModel.deleteIoDefinition(amiodId);
-    res.json({ message: 'Deleted successfully' });
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'AI_REGISTRY_IO',
+      actionName: 'DELETE_AI_REGISTRY_IO',
+      entityId: parseInt(amiodId, 10)
+    });
+    return res.status(HTTP_STATUS_CODES.OK).json({ message: req.t('ai_model:IO_DELETED_SUCCESSFULLY') || 'Deleted successfully' });
   } catch (err) {
-    res.status(500).send({ message: err.message });
+    console.error('Error deleting IO definition:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
   }
 };

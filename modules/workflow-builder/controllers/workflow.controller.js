@@ -9,7 +9,7 @@ const WorkflowValidationService = require('../services/workflow.validation.servi
 const WorkflowErrorHandler = require('../middlewares/workflow.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
-const KafkaCtrl = require('../../core/controllers/kafka.controller');
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 const { v4: uuidv4 } = require('uuid');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
@@ -291,6 +291,13 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
       change_hash: newHash
     });
 
+    await publishNewAdminActivityLog({
+      adminUserId: userId,
+      entityType: 'WORKFLOW',
+      actionName: 'AUTO_SAVE_WORKFLOW_BY_TAC_ID',
+      entityId: workflowId
+    });
+
     const responseData = {
       workflowId,
       savedAt: new Date().toISOString(),
@@ -367,16 +374,12 @@ exports.saveWorkflowByTacId = async function (req, res) {
       change_hash: newHash
     });
 
-    KafkaCtrl.sendMessage(
-      KafkaCtrl.TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-      [{
-        admin_user_id: userId,
-        entity_type: 'workflow',
-        action_name: 'save',
-        entity_id: workflowId
-      }],
-      'workflow_saved'
-    );
+    await publishNewAdminActivityLog({
+      adminUserId: userId,
+      entityType: 'WORKFLOW',
+      actionName: 'SAVE_WORKFLOW_BY_TAC_ID',
+      entityId: workflowId
+    });
 
     const responseData = {
       workflowId,
@@ -412,17 +415,12 @@ exports.createWorkflow = async function (req, res) {
 
     const result = await WorkflowModel.createWorkflow(workflowData);
 
-    // Publish activity log
-    KafkaCtrl.sendMessage(
-      KafkaCtrl.TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-      [{
-        admin_user_id: userId,
-        entity_type: 'workflow',
-        action_name: 'create',
-        entity_id: result.insertId
-      }],
-      'workflow_created'
-    );
+    await publishNewAdminActivityLog({
+      adminUserId: userId,
+      entityType: 'WORKFLOW',
+      actionName: 'CREATE_WORKFLOW',
+      entityId: result.insertId
+    });
 
     return res.status(HTTP_STATUS_CODES.CREATED).json({
       message: req.t('workflow:WORKFLOW_CREATED'),
@@ -496,6 +494,13 @@ exports.autoSaveWorkflow = async function (req, res) {
       change_hash: newHash
     });
 
+    await publishNewAdminActivityLog({
+      adminUserId: userId,
+      entityType: 'WORKFLOW',
+      actionName: 'AUTO_SAVE_WORKFLOW',
+      entityId: workflowId
+    });
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       success: true,
       data: {
@@ -543,17 +548,12 @@ exports.saveWorkflow = async function (req, res) {
       change_hash: newHash
     });
 
-    // Publish activity log
-    KafkaCtrl.sendMessage(
-      KafkaCtrl.TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-      [{
-        admin_user_id: userId,
-        entity_type: 'workflow',
-        action_name: 'save',
-        entity_id: workflowId
-      }],
-      'workflow_saved'
-    );
+    await publishNewAdminActivityLog({
+      adminUserId: userId,
+      entityType: 'WORKFLOW',
+      actionName: 'SAVE_WORKFLOW',
+      entityId: workflowId
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       success: true,

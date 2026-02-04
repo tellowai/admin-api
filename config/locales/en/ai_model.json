@@ -15,5 +15,9 @@
   "VALIDATION_REQUIRED": "Required fields are missing: Name, Provider Model ID and Provider.",
   "PLATFORM_CREATED_SUCCESSFULLY": "Platform created successfully",
   "PLATFORM_CREATE_FAILED": "Failed to create platform",
-  "PLATFORM_UPDATED_SUCCESSFULLY": "Platform updated successfully"
+  "PLATFORM_UPDATED_SUCCESSFULLY": "Platform updated successfully",
+  "PROVIDER_NAME_SLUG_REQUIRED": "Name and slug are required.",
+  "PROVIDER_UPDATED_SUCCESSFULLY": "Provider updated successfully.",
+  "IO_UPDATED_SUCCESSFULLY": "IO definition updated successfully.",
+  "IO_DELETED_SUCCESSFULLY": "IO definition deleted successfully."
 }

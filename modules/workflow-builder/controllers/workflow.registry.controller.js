@@ -4,6 +4,7 @@ const AiModelRegistryModel = require('../models/ai-model-registry.model');
 const WorkflowErrorHandler = require('../middlewares/workflow.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 function parseJsonField(value) {
   if (value == null) return value;
@@ -184,7 +185,9 @@ exports.listSystemNodeDefinitionsAdmin = async function (req, res) {
   try {
     const rawQ = req.query.search;
     const search = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
-    const status = req.query.status || null;
+    // Only filter by status when explicitly 'active' or 'inactive'; otherwise return all
+    const status =
+      req.query.status === 'active' || req.query.status === 'inactive' ? req.query.status : null;
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const nodesRaw = await AiModelRegistryModel.listSystemNodeDefinitionsForAdmin(
       search,
@@ -265,6 +268,13 @@ exports.createSystemNodeDefinition = async function (req, res) {
     const result = await AiModelRegistryModel.insertSystemNodeDefinition(data);
     const wsndId = result.insertId;
 
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'WORKFLOW_SYSTEM_NODE_DEFINITIONS',
+      actionName: 'CREATE_SYSTEM_NODE_DEFINITION',
+      entityId: wsndId
+    });
+
     const rows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
     const created = rows[0] || null;
     if (!created) {
@@ -301,6 +311,14 @@ exports.updateSystemNodeDefinition = async function (req, res) {
     }
 
     await AiModelRegistryModel.updateSystemNodeDefinition(wsndId, data);
+
+    const isStatusOnly = Object.keys(data).length === 1 && Object.prototype.hasOwnProperty.call(data, 'is_active');
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'WORKFLOW_SYSTEM_NODE_DEFINITIONS',
+      actionName: isStatusOnly ? 'UPDATE_SYSTEM_NODE_DEFINITION_STATUS' : 'UPDATE_SYSTEM_NODE_DEFINITION',
+      entityId: parseInt(wsndId, 10)
+    });
 
     const rows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
     const updated = rows[0] || null;
@@ -347,6 +365,13 @@ exports.createSystemNodeIoDefinition = async function (req, res) {
     const result = await AiModelRegistryModel.insertSystemNodeIoDefinition(data);
     const wsniodId = result.insertId;
 
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'WORKFLOW_SYSTEM_NODE_IO_DEFINITIONS',
+      actionName: 'CREATE_SYSTEM_NODE_IO_DEFINITION',
+      entityId: wsniodId
+    });
+
     const rows = await AiModelRegistryModel.getSystemNodeIoDefinitionById(wsniodId);
     const created = rows[0] || null;
     if (!created) {
@@ -384,6 +409,12 @@ exports.updateSystemNodeIoDefinition = async function (req, res) {
 
     if (Object.keys(data).length > 0) {
       await AiModelRegistryModel.updateSystemNodeIoDefinition(wsniodId, data);
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'WORKFLOW_SYSTEM_NODE_IO_DEFINITIONS',
+        actionName: 'UPDATE_SYSTEM_NODE_IO_DEFINITION',
+        entityId: parseInt(wsniodId, 10)
+      });
     }
 
     const rows = await AiModelRegistryModel.getSystemNodeIoDefinitionById(wsniodId);
@@ -407,6 +438,12 @@ exports.deleteSystemNodeIoDefinition = async function (req, res) {
   try {
     const wsniodId = req.params.wsniodId;
     await AiModelRegistryModel.deleteSystemNodeIoDefinition(wsniodId);
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'WORKFLOW_SYSTEM_NODE_IO_DEFINITIONS',
+      actionName: 'DELETE_SYSTEM_NODE_IO_DEFINITION',
+      entityId: parseInt(wsniodId, 10)
+    });
     return res.status(HTTP_STATUS_CODES.OK).json({ message: 'Deleted' });
   } catch (error) {
     WorkflowErrorHandler.handleWorkflowErrors(error, res);

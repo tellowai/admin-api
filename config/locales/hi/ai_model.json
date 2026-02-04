@@ -11,5 +11,13 @@
   "AI_MODEL_UPDATED_SUCCESSFULLY": "AI मॉडल सफलतापूर्वक अपडेट किया गया",
   "AI_MODEL_ALREADY_EXISTS": "इस ID के साथ AI मॉडल पहले से मौजूद है",
   "AI_MODEL_CREATE_FAILED": "AI मॉडल बनाने में विफल",
-  "AI_MODEL_UPDATE_FAILED": "AI मॉडल अपडेट करने में विफल"
+  "AI_MODEL_UPDATE_FAILED": "AI मॉडल अपडेट करने में विफल",
+  "VALIDATION_REQUIRED": "आवश्यक फ़ील्ड गायब हैं: नाम, प्रोवाइडर मॉडल ID और प्रोवाइडर।",
+  "PLATFORM_CREATED_SUCCESSFULLY": "प्लेटफ़ॉर्म सफलतापूर्वक बनाया गया",
+  "PLATFORM_CREATE_FAILED": "प्लेटफ़ॉर्म बनाने में विफल",
+  "PLATFORM_UPDATED_SUCCESSFULLY": "प्लेटफ़ॉर्म सफलतापूर्वक अपडेट किया गया",
+  "PROVIDER_NAME_SLUG_REQUIRED": "नाम और स्लग आवश्यक हैं।",
+  "PROVIDER_UPDATED_SUCCESSFULLY": "प्रोवाइडर सफलतापूर्वक अपडेट किया गया।",
+  "IO_UPDATED_SUCCESSFULLY": "IO परिभाषा सफलतापूर्वक अपडेट की गई।",
+  "IO_DELETED_SUCCESSFULLY": "IO परिभाषा सफलतापूर्वक हटाई गई।"
 } 
