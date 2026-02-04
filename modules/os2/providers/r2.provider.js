@@ -102,6 +102,33 @@ class R2StorageProvider extends StorageProvider {
     return url;
   }
 
+  async generatePresignedDownloadUrlFromBucket(bucket, key, options = {}) {
+    // Resolve bucket aliases
+    let targetBucket = bucket;
+    if (bucket === 'public') targetBucket = this.publicBucket;
+    else if (bucket === 'private') targetBucket = this.bucket;
+    else if (bucket === 'ephemeral') targetBucket = this.ephemeral.bucket;
+
+    // Check if it's the public bucket, return public URL directly
+    if (targetBucket === this.publicBucket && this.publicBucketUrl) {
+      // Remove leading slash from key if present to avoid double slash
+      const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+      return `${this.publicBucketUrl}/${cleanKey}`;
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: targetBucket,
+      Key: key
+    });
+
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: options.expiresIn || config.os2.download.defaultDownloadExpiresIn,
+      signatureVersion: 'v4'
+    });
+
+    return url;
+  }
+
   async generatePublicBucketPresignedDownloadUrl(key, options = {}) {
     const command = new GetObjectCommand({
       Bucket: this.publicBucket,

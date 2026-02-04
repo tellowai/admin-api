@@ -14,7 +14,7 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
       platform_model_id,
       version,
       description,
-      is_active,
+      status,
       parameter_schema,
       pricing_config,
       icon_url,
@@ -40,18 +40,22 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
     queryParams.push(searchParams.amp_id);
   }
 
-  // Filter by Status
+  // Filter by Status (active / inactive / or specific enum: deprecated, disabled, archived)
   if (searchParams.status) {
-    if (searchParams.status === 'active') conditions.push(`is_active = 1`);
-    if (searchParams.status === 'inactive') conditions.push(`is_active = 0`);
+    if (searchParams.status === 'active') conditions.push(`status = 'active'`);
+    else if (searchParams.status === 'inactive') conditions.push(`status != 'active'`);
+    else {
+      conditions.push(`status = ?`);
+      queryParams.push(searchParams.status);
+    }
   }
 
   if (conditions.length > 0) {
     query += ` AND ${conditions.join(' AND ')}`;
   }
 
-  // Sorting (most recently updated first)
-  query += ` ORDER BY updated_at DESC`;
+  // Sorting (most recently updated first, then newest ID)
+  query += ` ORDER BY updated_at DESC, amr_id DESC`;
 
   // Pagination
   if (paginationParams) {
@@ -69,7 +73,9 @@ exports.createAiModel = async function (data) {
   const processedData = {
     ...data,
     parameter_schema: data.parameter_schema ? JSON.stringify(data.parameter_schema) : '{}',
-    pricing_config: data.pricing_config ? JSON.stringify(data.pricing_config) : '{}'
+    pricing_config: data.pricing_config ? JSON.stringify(data.pricing_config) : '{}',
+    created_at: new Date(),
+    updated_at: new Date()
   };
 
   const columns = Object.keys(processedData);

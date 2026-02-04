@@ -19,6 +19,10 @@ module.exports = function (app) {
     .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.read)
     .patch(AuthMiddleware.isAdminUser, AiRegistryCtrl.update);
 
+  // AI model status (active/inactive) – separate from general update
+  app.route(baseUrl + '/models/:amrId/status')
+    .patch(AuthMiddleware.isAdminUser, AiRegistryCtrl.updateStatus);
+
   // --- IO Definitions ---
 
   app.route(baseUrl + '/models/:amrId/io-definitions')

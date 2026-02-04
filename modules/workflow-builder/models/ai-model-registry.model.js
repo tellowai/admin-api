@@ -53,7 +53,7 @@ exports.listActiveModels = async function (searchQuery = null, limit = 20, offse
       parameter_schema,
       pricing_config
     FROM ai_model_registry
-    WHERE is_active = TRUE AND archived_at IS NULL
+    WHERE status = 'active' AND archived_at IS NULL
   `;
 
   const params = [];

@@ -13,6 +13,7 @@ class StorageFactory {
         throw new Error(`Unsupported storage provider: ${config.storage.provider}`);
     }
   }
+
 }
 
 module.exports = StorageFactory; 
