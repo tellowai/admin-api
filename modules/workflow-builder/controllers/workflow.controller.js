@@ -138,11 +138,14 @@ async function enrichNodesWithAiModels(nodes) {
     byAmrId.set(row.amr_id, {
       amr_id: row.amr_id,
       name: row.name,
+      label: row.name,
       platform_model_id: row.platform_model_id,
       provider: providerMap.get(row.amp_id)?.name || null,
       version: row.version,
       description: row.description,
       icon_url: row.icon_url,
+      icon: row.icon ?? row.icon_url ?? null,
+      color_hex: row.color_hex || '#8b5cf6',
       parameter_schema: parseJsonField(row.parameter_schema),
       pricing_config: parseJsonField(row.pricing_config),
       inputs: ioByModel[row.amr_id]?.inputs || [],
@@ -204,6 +207,7 @@ async function enrichNodesWithSystemNodes(nodes) {
     byWsndId.set(row.wsnd_id, {
       wsnd_id: row.wsnd_id,
       name: row.name,
+      label: row.name,
       type_slug: row.type_slug,
       icon: row.icon,
       color_hex: row.color_hex,
