@@ -73,8 +73,20 @@ async function enrichNodesWithAssetUrls(nodes) {
   }
 }
 
+function parseJsonField(value) {
+  if (value == null) return value;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (e) {
+    return value;
+  }
+}
+
 /**
  * Enrich nodes of type AI_MODEL with ai_model_registry row (by amr_id) as node.ai_model.
+ * Batch-fetches parameter_schema and io definitions (inputs/outputs), appends to each ai_model.
  */
 async function enrichNodesWithAiModels(nodes) {
   if (!nodes || nodes.length === 0) return;
@@ -82,8 +94,52 @@ async function enrichNodesWithAiModels(nodes) {
     .filter(n => n.type === 'AI_MODEL' && n.amr_id != null)
     .map(n => n.amr_id);
   if (amrIds.length === 0) return;
-  const rows = await AiModelRegistryModel.getByAmrIds(amrIds);
-  const byAmrId = new Map(rows.map(r => [r.amr_id, r]));
+
+  const uniqueAmrIds = [...new Set(amrIds)];
+  const [modelsRows, ioDefinitions, socketTypes] = await Promise.all([
+    AiModelRegistryModel.getByAmrIdsWithParameterSchema(uniqueAmrIds),
+    AiModelRegistryModel.getIODefinitionsByModelIds(uniqueAmrIds),
+    AiModelRegistryModel.getAllSocketTypes()
+  ]);
+
+  const socketTypeMap = new Map(socketTypes.map(st => [st.amst_id, st]));
+  const ioByModel = {};
+  for (const io of ioDefinitions) {
+    if (!ioByModel[io.amr_id]) {
+      ioByModel[io.amr_id] = { inputs: [], outputs: [] };
+    }
+    const socketType = socketTypeMap.get(io.amst_id);
+    const ioDef = {
+      name: io.name,
+      label: io.label || io.name,
+      type: socketType?.name?.toLowerCase() || 'text',
+      color: socketType?.color_hex || '#94a3b8',
+      isRequired: io.is_required === 1,
+      isList: io.is_list === 1,
+      defaultValue: io.default_value
+    };
+    if (io.direction === 'INPUT') {
+      ioByModel[io.amr_id].inputs.push(ioDef);
+    } else {
+      ioByModel[io.amr_id].outputs.push(ioDef);
+    }
+  }
+
+  const byAmrId = new Map();
+  for (const row of modelsRows) {
+    byAmrId.set(row.amr_id, {
+      amr_id: row.amr_id,
+      name: row.name,
+      platform_model_id: row.platform_model_id,
+      version: row.version,
+      description: row.description,
+      icon_url: row.icon_url,
+      parameter_schema: parseJsonField(row.parameter_schema),
+      inputs: ioByModel[row.amr_id]?.inputs || [],
+      outputs: ioByModel[row.amr_id]?.outputs || []
+    });
+  }
+
   for (const node of nodes) {
     if (node.type === 'AI_MODEL' && node.amr_id != null) {
       node.ai_model = byAmrId.get(node.amr_id) || null;

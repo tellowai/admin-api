@@ -94,6 +94,32 @@ exports.getByAmrIds = async function (amrIds) {
 };
 
 /**
+ * Get AI model registry rows by amr_id including parameter_schema (for workflow node enrichment).
+ * Single query. Returns raw rows.
+ */
+exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
+  if (!amrIds || amrIds.length === 0) return [];
+
+  const unique = [...new Set(amrIds)].filter(id => id != null);
+  if (unique.length === 0) return [];
+
+  const query = `
+    SELECT 
+      amr_id,
+      name,
+      platform_model_id,
+      version,
+      description,
+      icon_url,
+      parameter_schema
+    FROM ai_model_registry
+    WHERE amr_id IN (?)
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+};
+
+/**
  * Get socket types by IDs. Single query. Returns raw rows.
  */
 exports.getSocketTypesByIds = async function (ids) {
@@ -137,12 +163,13 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 
       wsnd_id,
       type_slug,
       name,
+      status,
       description,
       icon,
       color_hex,
       config_schema
     FROM workflow_system_node_definitions
-    WHERE is_active = TRUE
+    WHERE status = 'active' and archived_at IS NULL
   `;
 
   const params = [];

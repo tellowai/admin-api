@@ -741,7 +741,7 @@ exports.createClipWorkflowInTransaction = async function (connection, tacId, wor
  * Simple queries, no joins.
  */
 exports.ensureTemplateAiClip = async function (templateId, clipIndex, assetType = 'video') {
-  const clipIndexDb = clipIndex >= 1 ? clipIndex : clipIndex + 1;
+  const clipIndexDb = clipIndex + 1;
   const existingQuery = `
     SELECT tac_id FROM template_ai_clips
     WHERE template_id = ? AND clip_index = ? AND deleted_at IS NULL

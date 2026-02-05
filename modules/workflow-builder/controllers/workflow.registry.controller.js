@@ -161,6 +161,7 @@ exports.listSystemNodes = async function (req, res) {
       wsnd_id: node.wsnd_id,
       type_slug: node.type_slug,
       name: node.name,
+      status: node.status,
       description: node.description,
       icon: node.icon,
       color_hex: node.color_hex,
