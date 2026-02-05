@@ -106,12 +106,14 @@ exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
   const query = `
     SELECT 
       amr_id,
+      amp_id,
       name,
       platform_model_id,
       version,
       description,
       icon_url,
-      parameter_schema
+      parameter_schema,
+      pricing_config
     FROM ai_model_registry
     WHERE amr_id IN (?)
   `;
@@ -157,6 +159,9 @@ exports.getCategoriesByIds = async function (ids) {
 /**
  * List active system node definitions with pagination. Single query. Returns raw rows.
  */
+/**
+ * List active system node definitions with pagination. Single query. Returns raw rows.
+ */
 exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 20, offset = 0) {
   let query = `
     SELECT 
@@ -164,12 +169,13 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 
       type_slug,
       name,
       status,
+      version,
       description,
       icon,
       color_hex,
       config_schema
     FROM workflow_system_node_definitions
-    WHERE status = 'active' and archived_at IS NULL
+    WHERE status = 'active'
   `;
 
   const params = [];
@@ -214,7 +220,7 @@ exports.getSystemNodeIODefinitionsByNodeIds = async function (nodeIds) {
 /**
  * List system node definitions for admin. Single query. Returns raw rows.
  */
-exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, isActive = null, limit = 20, offset = 0) {
+exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, status = null, limit = 20, offset = 0) {
   let query = `
     SELECT 
       wsnd_id,
@@ -224,7 +230,9 @@ exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, 
       icon,
       color_hex,
       config_schema,
-      is_active,
+      status,
+      version,
+      archived_at,
       created_at,
       updated_at
     FROM workflow_system_node_definitions
@@ -237,10 +245,9 @@ exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, 
     const term = `%${searchQuery.toLowerCase()}%`;
     params.push(term, term);
   }
-  if (isActive === 'active') {
-    query += ` AND is_active = 1 `;
-  } else if (isActive === 'inactive') {
-    query += ` AND is_active = 0 `;
+  if (status) {
+    query += ` AND status = ? `;
+    params.push(status);
   }
 
   query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ? `;
@@ -262,13 +269,40 @@ exports.getSystemNodeDefinitionById = async function (wsndId) {
       icon,
       color_hex,
       config_schema,
-      is_active,
+      status,
+      version,
+      archived_at,
       created_at,
       updated_at
     FROM workflow_system_node_definitions
     WHERE wsnd_id = ?
   `;
   return await mysqlQueryRunner.runQueryInSlave(query, [wsndId]);
+};
+
+/**
+ * Get system node definitions by ids (for enriching workflow GET response). Active only.
+ * @param {number[]} wsndIds - wsnd_id list
+ * @returns {Promise<Array>} Raw rows with wsnd_id, type_slug, name, icon, color_hex, config_schema, etc.
+ */
+exports.getSystemNodeDefinitionsByIds = async function (wsndIds) {
+  if (!wsndIds || wsndIds.length === 0) return [];
+  const unique = [...new Set(wsndIds)].filter(id => id != null);
+  const placeholders = unique.map(() => '?').join(', ');
+  const query = `
+    SELECT 
+      wsnd_id,
+      type_slug,
+      name,
+      description,
+      icon,
+      color_hex,
+      config_schema,
+      version
+    FROM workflow_system_node_definitions
+    WHERE wsnd_id IN (${placeholders})
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, unique);
 };
 
 /**

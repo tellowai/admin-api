@@ -161,6 +161,7 @@ exports.listSystemNodes = async function (req, res) {
       wsnd_id: node.wsnd_id,
       type_slug: node.type_slug,
       name: node.name,
+      version: node.version,
       status: node.status,
       description: node.description,
       icon: node.icon,
@@ -183,13 +184,14 @@ exports.listSystemNodes = async function (req, res) {
 /**
  * List system node definitions for admin (paginated, optional status filter)
  */
+/**
+ * List system node definitions for admin (paginated, optional status filter)
+ */
 exports.listSystemNodeDefinitionsAdmin = async function (req, res) {
   try {
     const rawQ = req.query.search;
     const search = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
-    // Only filter by status when explicitly 'active' or 'inactive'; otherwise return all
-    const status =
-      req.query.status === 'active' || req.query.status === 'inactive' ? req.query.status : null;
+    const status = req.query.status && String(req.query.status).trim() !== '' ? String(req.query.status).trim() : null;
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const nodesRaw = await AiModelRegistryModel.listSystemNodeDefinitionsForAdmin(
       search,
@@ -253,7 +255,12 @@ function prepareSystemNodeDefinitionPayload(body) {
       ? JSON.stringify(body.config_schema)
       : (body.config_schema || '{}');
   }
-  if (body.is_active !== undefined) data.is_active = body.is_active ? 1 : 0;
+  if (body.status !== undefined) data.status = body.status;
+  if (body.version !== undefined) data.version = body.version;
+  // If explicitly archiving
+  if (body.status === 'archived') {
+    data.archived_at = new Date();
+  }
   return data;
 }
 
@@ -267,6 +274,11 @@ exports.createSystemNodeDefinition = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'type_slug and name are required' });
     }
     const data = prepareSystemNodeDefinitionPayload(body);
+
+    // Defaults
+    if (!data.status) data.status = 'draft';
+    if (!data.version) data.version = '1.0.0';
+
     const result = await AiModelRegistryModel.insertSystemNodeDefinition(data);
     const wsndId = result.insertId;
 
@@ -295,42 +307,211 @@ exports.createSystemNodeDefinition = async function (req, res) {
 /**
  * Update system node definition
  */
+/**
+ * Update system node definition (Versioning Support)
+ */
 exports.updateSystemNodeDefinition = async function (req, res) {
   try {
     const wsndId = req.params.wsndId;
+    const updateData = { ...req.body };
+
+    // Fetch existing node
     const existingRows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
     if (!existingRows.length) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'System node definition not found' });
     }
+    const existingNode = existingRows[0];
 
-    const data = prepareSystemNodeDefinitionPayload(req.body);
-    if (Object.keys(data).length === 0) {
-      const row = existingRows[0];
-      return res.status(HTTP_STATUS_CODES.OK).json({
-        ...row,
-        config_schema: parseJsonField(row.config_schema)
+    // Check if status allows editing (only active and draft are editable)
+    const editableStatuses = ['active', 'draft'];
+    if (!editableStatuses.includes(existingNode.status)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({
+        message: `System nodes with status '${existingNode.status}' cannot be updated.`
       });
     }
 
-    await AiModelRegistryModel.updateSystemNodeDefinition(wsndId, data);
+    // Extract special fields
+    const incomingIoDefinitions = updateData.io_definitions;
+    delete updateData.io_definitions;
 
-    const isStatusOnly = Object.keys(data).length === 1 && Object.prototype.hasOwnProperty.call(data, 'is_active');
-    await publishNewAdminActivityLog({
-      adminUserId: req.user.userId,
-      entityType: 'WORKFLOW_SYSTEM_NODE_DEFINITIONS',
-      actionName: isStatusOnly ? 'UPDATE_SYSTEM_NODE_DEFINITION_STATUS' : 'UPDATE_SYSTEM_NODE_DEFINITION',
-      entityId: parseInt(wsndId, 10)
-    });
+    // Prepare pure node data
+    const nodeData = prepareSystemNodeDefinitionPayload(updateData);
 
-    const rows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
-    const updated = rows[0] || null;
-    if (!updated) {
-      return res.status(HTTP_STATUS_CODES.OK).json({ wsnd_id: wsndId });
+    // Clean up readonly/immutable fields explicitly if they slipped past prepare
+    delete nodeData.wsnd_id;
+    delete nodeData.created_at;
+    delete nodeData.updated_at;
+
+    // --- VERSIONING CHECK ---
+    let needsVersioning = false;
+
+    // Versioning only applies if the node is already ACTIVE. 
+    // Draft nodes can change params/IO without bumping version.
+    if (existingNode.status === 'active') {
+
+      // 1. Check Config Schema Change
+      if (nodeData.config_schema) {
+        const newSchemaStr = typeof nodeData.config_schema === 'string'
+          ? nodeData.config_schema
+          : JSON.stringify(nodeData.config_schema);
+
+        const existingSchemaStr = typeof existingNode.config_schema === 'string'
+          ? existingNode.config_schema
+          : JSON.stringify(existingNode.config_schema || {});
+
+        // Compare non-empty schemas
+        if (newSchemaStr !== existingSchemaStr) {
+          if (newSchemaStr !== '{}' || existingSchemaStr !== '{}') {
+            needsVersioning = true;
+          }
+        }
+      }
+
+      // 2. Check IO Definition Change - IF provided
+      if (!needsVersioning && incomingIoDefinitions) {
+        const existingIos = await AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds([wsndId]);
+
+        const scrub = (list) => {
+          if (!Array.isArray(list)) return [];
+          const sorted = [...list].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+          return sorted.map(i => {
+            const { wsniod_id, wsnd_id, updated_at, created_at, socket_type, amst_id, ...rest } = i;
+            // Normalization
+            if (rest.is_required !== undefined) rest.is_required = rest.is_required ? 1 : 0;
+            if (rest.is_list !== undefined) rest.is_list = rest.is_list ? 1 : 0;
+            if (rest.sort_order !== undefined) rest.sort_order = parseInt(rest.sort_order, 10) || 0;
+            if (rest.constraints !== undefined) {
+              // constraint object serialization
+              const c = typeof rest.constraints === 'string' ? JSON.parse(rest.constraints || '{}') : (rest.constraints || {});
+              const sortedKeys = Object.keys(c).sort().reduce((acc, k) => { acc[k] = c[k]; return acc; }, {});
+              rest.constraints = JSON.stringify(sortedKeys);
+            }
+            // For checking equivalent semantic logic, we might ignore amst_id if the socket type *name* is what defines it, 
+            // but usually amst_id change means type change. However, incoming might just have IDs.
+            // Let's rely on matching rest of props. 
+            // If amst_id is present in both, compare it.
+            if (amst_id !== undefined) rest.amst_id = amst_id;
+
+            return rest;
+          });
+        };
+
+        const cur = JSON.stringify(scrub(existingIos));
+        const incoming = JSON.stringify(scrub(incomingIoDefinitions));
+
+        if (cur !== incoming) {
+          needsVersioning = true;
+        }
+      }
     }
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      ...updated,
-      config_schema: parseJsonField(updated.config_schema)
-    });
+
+    if (needsVersioning) {
+      // --- VERSION BUMP FLOW ---
+
+      // 1. Deprecate Old Node
+      await AiModelRegistryModel.updateSystemNodeDefinition(wsndId, { status: 'deprecated' });
+
+      // 2. Compute New Version
+      const oldVersion = existingNode.version || '1.0.0';
+      const parts = oldVersion.replace(/[^0-9.]/g, '').split('.');
+      // Patch increment
+      if (parts.length >= 3) {
+        parts[2] = parseInt(parts[2], 10) + 1;
+      } else {
+        parts.push('1');
+      }
+      const newVersion = parts.slice(0, 3).join('.');
+
+      // 3. Prepare New Node Data
+      const newNodeData = {
+        ...existingNode,
+        ...nodeData, // Overwrites with updates
+        version: newVersion,
+        status: 'active',
+        wsnd_id: undefined,
+        created_at: undefined,
+        updated_at: undefined,
+        // Ensure dates are reset or handled by DB default
+        archived_at: null
+      };
+
+      // 4. Create New Node
+      const result = await AiModelRegistryModel.insertSystemNodeDefinition(newNodeData);
+      const newWsndId = result.insertId;
+
+      // 5. Clone/Create IO Definitions
+      let iosToCreate = incomingIoDefinitions;
+      if (!iosToCreate) {
+        // Copy from old
+        iosToCreate = await AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds([wsndId]);
+      }
+
+      if (iosToCreate && iosToCreate.length > 0) {
+        for (const io of iosToCreate) {
+          // Prepare io payload compatible with insertSystemNodeIoDefinition
+          const ioData = prepareSystemNodeIoPayload(io, newWsndId);
+          await AiModelRegistryModel.insertSystemNodeIoDefinition(ioData);
+        }
+      }
+
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'WORKFLOW_SYSTEM_NODE_DEFINITIONS',
+        actionName: 'VERSION_BUMP_SYSTEM_NODE',
+        entityId: newWsndId,
+        details: `Upgraded from ${wsndId} (${oldVersion}) to ${newWsndId} (${newVersion})`
+      });
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        message: 'System node upgraded to new version',
+        new_wsnd_id: newWsndId,
+        version: newVersion
+      });
+
+    } else {
+      // --- NORMAL UPDATE ---
+
+      // We only update the Node definition here. 
+      // If IO definitions are provided for a Draft/Active (no version bump needed) node, 
+      // we should technically sync them, but the current UI pattern usually splits them unless we strictly enforce "Save All".
+      // To strictly follow "Do same as AI models":
+
+      if (incomingIoDefinitions && existingNode.status === 'draft') {
+        // Full Sync for Draft: Delete all existing IOs and Re-create
+        // This is safer than diffing for drafts to ensure 1:1 match
+        const existingIos = await AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds([wsndId]);
+        for (const io of existingIos) {
+          await AiModelRegistryModel.deleteSystemNodeIoDefinition(io.wsniod_id);
+        }
+        for (const io of incomingIoDefinitions) {
+          const ioData = prepareSystemNodeIoPayload(io, wsndId);
+          await AiModelRegistryModel.insertSystemNodeIoDefinition(ioData);
+        }
+      }
+
+      if (Object.keys(nodeData).length > 0) {
+        await AiModelRegistryModel.updateSystemNodeDefinition(wsndId, nodeData);
+      }
+
+      const isStatusOnly = Object.keys(nodeData).length === 1 && Object.prototype.hasOwnProperty.call(nodeData, 'status');
+      const actionName = isStatusOnly ? 'UPDATE_SYSTEM_NODE_DEFINITION_STATUS' : 'UPDATE_SYSTEM_NODE_DEFINITION';
+
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'WORKFLOW_SYSTEM_NODE_DEFINITIONS',
+        actionName,
+        entityId: parseInt(wsndId, 10)
+      });
+
+      const rows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
+      const updated = rows[0] || null;
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        ...updated,
+        config_schema: parseJsonField(updated ? updated.config_schema : null)
+      });
+    }
+
   } catch (error) {
     WorkflowErrorHandler.handleWorkflowErrors(error, res);
   }
@@ -354,11 +535,26 @@ function prepareSystemNodeIoPayload(body, wsndId) {
 }
 
 /**
+ * Helper to check capability to edit IO (Draft Only)
+ */
+async function ensureDraftStatusForIoEdit(wsndId, res) {
+  const rows = await AiModelRegistryModel.getSystemNodeDefinitionById(wsndId);
+  if (!rows.length || rows[0].status !== 'draft') {
+    res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'IO definitions can only be directly edited for DRAFT nodes. For Active nodes, please update the parent node to trigger versioning.' });
+    return false;
+  }
+  return true;
+}
+
+/**
  * Create system node IO definition
+ * Restricted to DRAFT nodes.
  */
 exports.createSystemNodeIoDefinition = async function (req, res) {
   try {
     const wsndId = parseInt(req.params.wsndId, 10);
+    if (!(await ensureDraftStatusForIoEdit(wsndId, res))) return;
+
     const body = req.body;
     if (!body.amst_id || !body.direction || !body.name) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'amst_id, direction and name are required' });
@@ -390,10 +586,21 @@ exports.createSystemNodeIoDefinition = async function (req, res) {
 
 /**
  * Update system node IO definition
+ * Restricted to DRAFT nodes.
  */
 exports.updateSystemNodeIoDefinition = async function (req, res) {
   try {
     const wsniodId = req.params.wsniodId;
+
+    // Reverse lookup to check parent status
+    // Note: This requires a new model method or two queries. 
+    // For now, let's assume we can fetch IO then fetch Node.
+    const ioRows = await AiModelRegistryModel.getSystemNodeIoDefinitionById(wsniodId);
+    if (!ioRows.length) return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'IO not found' });
+
+    const wsndId = ioRows[0].wsnd_id;
+    if (!(await ensureDraftStatusForIoEdit(wsndId, res))) return;
+
     const body = req.body;
     const data = {};
     if (body.amst_id !== undefined) data.amst_id = body.amst_id;
@@ -435,10 +642,18 @@ exports.updateSystemNodeIoDefinition = async function (req, res) {
 
 /**
  * Delete system node IO definition
+ * Restricted to DRAFT nodes.
  */
 exports.deleteSystemNodeIoDefinition = async function (req, res) {
   try {
     const wsniodId = req.params.wsniodId;
+    // Reverse lookup
+    const ioRows = await AiModelRegistryModel.getSystemNodeIoDefinitionById(wsniodId);
+    if (!ioRows.length) return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'IO not found' });
+    const wsndId = ioRows[0].wsnd_id;
+
+    if (!(await ensureDraftStatusForIoEdit(wsndId, res))) return;
+
     await AiModelRegistryModel.deleteSystemNodeIoDefinition(wsniodId);
     await publishNewAdminActivityLog({
       adminUserId: req.user.userId,

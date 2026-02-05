@@ -125,16 +125,26 @@ async function enrichNodesWithAiModels(nodes) {
     }
   }
 
+  const ampIds = modelsRows.map(r => r.amp_id).filter(id => id != null);
+  const uniqueAmpIds = [...new Set(ampIds)];
+  let providerMap = new Map();
+  if (uniqueAmpIds.length > 0) {
+    const providers = await AiModelRegistryModel.getProvidersByIds(uniqueAmpIds);
+    providerMap = new Map(providers.map(p => [p.amp_id, p]));
+  }
+
   const byAmrId = new Map();
   for (const row of modelsRows) {
     byAmrId.set(row.amr_id, {
       amr_id: row.amr_id,
       name: row.name,
       platform_model_id: row.platform_model_id,
+      provider: providerMap.get(row.amp_id)?.name || null,
       version: row.version,
       description: row.description,
       icon_url: row.icon_url,
       parameter_schema: parseJsonField(row.parameter_schema),
+      pricing_config: parseJsonField(row.pricing_config),
       inputs: ioByModel[row.amr_id]?.inputs || [],
       outputs: ioByModel[row.amr_id]?.outputs || []
     });
@@ -143,6 +153,70 @@ async function enrichNodesWithAiModels(nodes) {
   for (const node of nodes) {
     if (node.type === 'AI_MODEL' && node.amr_id != null) {
       node.ai_model = byAmrId.get(node.amr_id) || null;
+    }
+  }
+}
+
+/**
+ * Enrich nodes of type USER_INPUT, END, etc. with system_node definition (by amr_id = wsnd_id).
+ * Attaches node.system_node with name, type_slug, inputs, outputs, config_schema, color_hex.
+ */
+async function enrichNodesWithSystemNodes(nodes) {
+  if (!nodes || nodes.length === 0) return;
+  const wsndIds = [...new Set(
+    nodes
+      .filter(n => n.type !== 'AI_MODEL' && n.amr_id != null)
+      .map(n => n.amr_id)
+  )];
+  if (wsndIds.length === 0) return;
+
+  const [defRows, ioDefinitions, socketTypes] = await Promise.all([
+    AiModelRegistryModel.getSystemNodeDefinitionsByIds(wsndIds),
+    AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds(wsndIds),
+    AiModelRegistryModel.getAllSocketTypes()
+  ]);
+
+  const socketTypeMap = new Map(socketTypes.map(st => [st.amst_id, st]));
+  const ioByNode = {};
+  for (const io of ioDefinitions) {
+    if (!ioByNode[io.wsnd_id]) {
+      ioByNode[io.wsnd_id] = { inputs: [], outputs: [] };
+    }
+    const socketType = socketTypeMap.get(io.amst_id);
+    const ioDef = {
+      name: io.name,
+      label: io.label || io.name,
+      type: socketType?.slug?.toLowerCase() || 'text',
+      color: socketType?.color_hex || '#94a3b8',
+      isRequired: io.is_required === 1,
+      isList: io.is_list === 1,
+      defaultValue: io.default_value ?? null
+    };
+    if (io.direction === 'INPUT') {
+      ioByNode[io.wsnd_id].inputs.push(ioDef);
+    } else {
+      ioByNode[io.wsnd_id].outputs.push(ioDef);
+    }
+  }
+
+  const byWsndId = new Map();
+  for (const row of defRows) {
+    byWsndId.set(row.wsnd_id, {
+      wsnd_id: row.wsnd_id,
+      name: row.name,
+      type_slug: row.type_slug,
+      icon: row.icon,
+      color_hex: row.color_hex,
+      config_schema: parseJsonField(row.config_schema),
+      inputs: ioByNode[row.wsnd_id]?.inputs || [],
+      outputs: ioByNode[row.wsnd_id]?.outputs || [],
+      version: row.version
+    });
+  }
+
+  for (const node of nodes) {
+    if (node.type !== 'AI_MODEL' && node.amr_id != null) {
+      node.system_node = byWsndId.get(node.amr_id) || null;
     }
   }
 }
@@ -171,6 +245,7 @@ exports.getWorkflow = async function (req, res) {
 
     await enrichNodesWithAssetUrls(nodes);
     await enrichNodesWithAiModels(nodes);
+    await enrichNodesWithSystemNodes(nodes);
 
     // Stitch edges with node UUIDs (Zero-Join Policy)
     const nodeMap = new Map();
@@ -223,6 +298,7 @@ exports.getWorkflowByTacId = async function (req, res) {
     }
     await enrichNodesWithAssetUrls(nodes);
     await enrichNodesWithAiModels(nodes);
+    await enrichNodesWithSystemNodes(nodes);
     const nodeMap = new Map(nodes.map(n => [n.wfn_id, n.uuid]));
     const edges = rawEdges.map(edge => ({
       ...edge,
