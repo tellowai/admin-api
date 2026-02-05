@@ -78,6 +78,7 @@ exports.listActiveModels = async function (req, res) {
     const enrichedModels = models.map(model => ({
       amr_id: model.amr_id,
       name: model.name,
+      version: model.version,
       description: model.description,
       icon_url: model.icon_url,
       provider_name: providerMap.get(model.amp_id)?.name || null,
