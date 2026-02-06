@@ -120,7 +120,11 @@ const createTemplateSchema = Joi.object().keys({
       layer_name: Joi.string().required(),
       field_code: Joi.string().required(),
       user_input_field_name: Joi.string().allow(null, '').optional(),
-      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
+      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
+      reference_image: Joi.object({
+        asset_key: Joi.string().optional(),
+        bucket: Joi.string().optional()
+      }).allow(null).optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
@@ -203,7 +207,11 @@ const updateTemplateSchema = Joi.object().keys({
       layer_name: Joi.string().required(),
       field_code: Joi.string().required(),
       user_input_field_name: Joi.string().allow(null, '').optional(),
-      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
+      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
+      reference_image: Joi.object({
+        asset_key: Joi.string().optional(),
+        bucket: Joi.string().optional()
+      }).allow(null).optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),

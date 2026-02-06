@@ -71,7 +71,7 @@ const logger = require('../../../config/lib/logger');
  *       "message": "Invalid request data"
  *     }
  */
-exports.generatePresignedUrls = async function(req, res) {
+exports.generatePresignedUrls = async function (req, res) {
   try {
     const { files } = req.validatedBody;
     const userId = req.user.userId;
@@ -132,7 +132,7 @@ exports.generatePresignedUrls = async function(req, res) {
       message: error.message || req.t('os2:PRESIGNED_URL_GENERATION_FAILED')
     });
   }
-}; 
+};
 
 
 
@@ -197,7 +197,7 @@ exports.generatePresignedUrls = async function(req, res) {
  *       "message": "Invalid request data"
  *     }
  */
-exports.generatePresignedPublicBucketUrls = async function(req, res) {
+exports.generatePresignedPublicBucketUrls = async function (req, res) {
   try {
     const { files } = req.validatedBody;
     const userId = req.user.userId;
@@ -258,7 +258,7 @@ exports.generatePresignedPublicBucketUrls = async function(req, res) {
       message: error.message || req.t('os2:PRESIGNED_URL_GENERATION_FAILED')
     });
   }
-}; 
+};
 
 
 /**
@@ -322,7 +322,7 @@ exports.generatePresignedPublicBucketUrls = async function(req, res) {
  *       "message": "Invalid request data"
  *     }
  */
-exports.generateEphemeralPresignedUrls = async function(req, res) {
+exports.generateEphemeralPresignedUrls = async function (req, res) {
   try {
     const { files } = req.validatedBody;
     const userId = req.user.userId;

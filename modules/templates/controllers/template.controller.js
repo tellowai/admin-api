@@ -446,6 +446,25 @@ exports.listTemplates = async function (req, res) {
           }
         }
 
+        if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
+          try {
+            template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
+          } catch (err) {
+            logger.error('Error parsing image_input_fields_json:', {
+              error: err.message,
+              value: template.image_input_fields_json
+            });
+          }
+        }
+
+        if (Array.isArray(template.image_input_fields_json)) {
+          template.image_input_fields_json.forEach(field => {
+            if (field.reference_image && field.reference_image.asset_key) {
+              field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
+            }
+          });
+        }
+
         // Load template tags (both auto-generated and manually assigned) - from pre-fetched data
         template.tags = getTemplateTagsWithDetailsFromPrefetched(template.template_id, templateTagsMap, tagDefinitionMap);
 
@@ -676,6 +695,14 @@ exports.getTemplate = async function (req, res) {
       }
     }
 
+    if (Array.isArray(template.image_input_fields_json)) {
+      template.image_input_fields_json.forEach(field => {
+        if (field.reference_image && field.reference_image.asset_key) {
+          field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
+        }
+      });
+    }
+
     // Load template tags with full details
     template.tags = await getTemplateTagsWithDetails(template.template_id);
     template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
@@ -875,6 +902,25 @@ exports.listArchivedTemplates = async function (req, res) {
             });
             template.thumb_frame_url = null;
           }
+        }
+
+        if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
+          try {
+            template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
+          } catch (err) {
+            logger.error('Error parsing image_input_fields_json:', {
+              error: err.message,
+              value: template.image_input_fields_json
+            });
+          }
+        }
+
+        if (Array.isArray(template.image_input_fields_json)) {
+          template.image_input_fields_json.forEach(field => {
+            if (field.reference_image && field.reference_image.asset_key) {
+              field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
+            }
+          });
         }
 
         // Parse JSON fields if they are strings
@@ -2145,7 +2191,8 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
     return {
       ...entry,
       field_code: (req && req.field_code != null && req.field_code !== '') ? req.field_code : entry.field_code,
-      user_input_field_name: (req && req.user_input_field_name != null) ? req.user_input_field_name : entry.user_input_field_name
+      user_input_field_name: (req && req.user_input_field_name != null) ? req.user_input_field_name : entry.user_input_field_name,
+      reference_image: (req && req.reference_image != null) ? req.reference_image : entry.reference_image
     };
   });
 }
