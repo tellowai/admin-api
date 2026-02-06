@@ -2192,7 +2192,10 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
       ...entry,
       field_code: (req && req.field_code != null && req.field_code !== '') ? req.field_code : entry.field_code,
       user_input_field_name: (req && req.user_input_field_name != null) ? req.user_input_field_name : entry.user_input_field_name,
-      reference_image: (req && req.reference_image != null) ? req.reference_image : entry.reference_image
+      reference_image: (req && req.reference_image != null) ? req.reference_image : entry.reference_image,
+      variable_key: (req && (req.variable_key != null && req.variable_key !== '')) ? req.variable_key : entry.variable_key,
+      label: (req && (req.label != null && req.label !== '')) ? req.label : entry.label,
+      clip_index: (req && req.clip_index != null) ? req.clip_index : entry.clip_index
     };
   });
 }
