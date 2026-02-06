@@ -19,6 +19,16 @@ class StorageProvider {
   async generatePresignedDownloadUrlFromBucket(bucket, key, options) {
     throw new Error('Method not implemented');
   }
+
+  /**
+   * Get object content from bucket as string (e.g. for JSON files).
+   * @param {string} bucket - Bucket name or alias ('public', 'private')
+   * @param {string} key - Object key
+   * @returns {Promise<string>} Body as string
+   */
+  async getObjectBodyFromBucket(bucket, key) {
+    throw new Error('Method not implemented');
+  }
 }
 
 module.exports = StorageProvider; 

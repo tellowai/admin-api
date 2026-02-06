@@ -14,52 +14,62 @@ const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const TEMPLATE_CONSTANTS = require('../constants/template.constants');
 const { v7: uuidv7 } = require('uuid');
 const config = require('../../../config/config');
-const fetch = require('node-fetch');
+const axios = require('axios');
 const AiModelModel = require('../../ai-models/models/ai-model.model');
 const TemplateRedisService = require('../services/template.redis.service');
 const NicheModel = require('../../niches/models/niche.model');
 const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.field.definition.model');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 
-// Timeout for fetching Bodymovin JSON (in milliseconds)
+// Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
 
 /**
- * Fetch helper with timeout using AbortController
- * Aborts the request after timeoutMs and lets caller handle the error
+ * Read Bodymovin (Lottie) JSON from storage or from URL.
+ * Uses StorageFactory when key is a storage key; uses axios when key is a full http(s) URL.
+ * @param {Object} storage - Storage provider from StorageFactory.getProvider()
+ * @param {string} bucket - Bucket name or alias ('public', 'private')
+ * @param {string} key - Object key, or full URL (http/https)
+ * @returns {Promise<Object|null>} Parsed Bodymovin JSON or null on failure
  */
-async function fetchWithTimeout(url, timeoutMs) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+async function getBodymovinJson(storage, bucket, key) {
   try {
-    return await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
+    if (/^https?:\/\//i.test(key)) {
+      const response = await axios.get(key, {
+        timeout: BODYMOVIN_FETCH_TIMEOUT_MS,
+        responseType: 'json',
+        validateStatus: (status) => status === 200
+      });
+      return response.data || null;
+    }
+    const bodyString = await storage.getObjectBodyFromBucket(bucket, key);
+    return bodyString ? JSON.parse(bodyString) : null;
+  } catch (error) {
+    logger.warn('Failed to read Bodymovin JSON', { bucket, key, error: error.message });
+    return null;
   }
 }
 
 /**
- * Fetch Bodymovin JSON and extract width and height
+ * Fetch Bodymovin JSON and extract width and height (for callers that pass URL)
  * @param {string} bodymovinUrl - URL to the Bodymovin JSON file
  * @returns {Object} - Object containing width and height, or null if failed
  */
 async function fetchBodymovinDimensions(bodymovinUrl) {
   try {
-    const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
-    if (!response.ok) {
-      logger.warn('Failed to fetch Bodymovin JSON', { url: bodymovinUrl, status: response.status });
-      return null;
-    }
-
-    const bodymovinJson = await response.json();
+    const response = await axios.get(bodymovinUrl, {
+      timeout: BODYMOVIN_FETCH_TIMEOUT_MS,
+      responseType: 'json',
+      validateStatus: (status) => status === 200
+    });
+    const bodymovinJson = response.data;
+    if (!bodymovinJson) return null;
     const width = bodymovinJson.w;
     const height = bodymovinJson.h;
-
     if (!width || !height) {
       logger.warn('Bodymovin JSON missing width or height', { url: bodymovinUrl, width, height });
       return null;
     }
-
     return { width, height };
   } catch (error) {
     logger.error('Error fetching Bodymovin JSON dimensions', { url: bodymovinUrl, error: error.message });
@@ -1411,43 +1421,20 @@ exports.createTemplate = async function (req, res) {
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
     if (resolvedClipsAssetsType === 'non-ai') {
-      // Force non-ai templates to have no clips and derive counts from Bodymovin JSON
+      // Force non-ai templates to have no clips; counts/upload JSONs populated from Bodymovin in common block below
       templateData.clips = [];
       templateData.faces_needed = [];
       // Calculate credits for non-AI templates based on output type and clips
       templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type, templateData.clips);
 
-      try {
-        const key = templateData.bodymovin_json_key;
-        const bucket = templateData.bodymovin_json_bucket;
-
-        if (key && bucket) {
-          const storage = StorageFactory.getProvider();
-          let downloadUrl;
-          if (/^https?:\/\//i.test(key)) {
-            downloadUrl = key;
-          } else {
-            const isPublic = bucket === 'public' || bucket === storage.publicBucket || bucket === (config.os2?.r2?.public?.bucket);
-            downloadUrl = isPublic ? `${config.os2.r2.public.bucketUrl}/${key}` : await storage.generatePresignedDownloadUrl(key);
-          }
-
-          const response = await fetchWithTimeout(downloadUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
-          if (response.ok) {
-            const bodymovinJson = await response.json();
-            const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
-            templateData.image_uploads_required = imageCount;
-            templateData.video_uploads_required = videoCount;
-          } else {
-            templateData.image_uploads_required = 0;
-            templateData.video_uploads_required = 0;
-          }
-        } else {
-          templateData.image_uploads_required = 0;
-          templateData.video_uploads_required = 0;
-        }
-      } catch (_err) {
+      // When no bodymovin, set upload fields to zero/empty; when bodymovin present they are set from JSON in common block
+      const hasBodymovin = templateData.bodymovin_json_key && templateData.bodymovin_json_bucket;
+      if (!hasBodymovin) {
         templateData.image_uploads_required = 0;
         templateData.video_uploads_required = 0;
+        templateData.image_uploads_json = [];
+        templateData.video_uploads_json = [];
+        templateData.image_input_fields_json = [];
       }
     } else {
       // AI templates: derive from clips
@@ -1488,20 +1475,8 @@ exports.createTemplate = async function (req, res) {
     if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
       try {
         const storage = StorageFactory.getProvider();
-        const isPublic = templateData.bodymovin_json_bucket === 'public' ||
-          templateData.bodymovin_json_bucket === storage.publicBucket ||
-          templateData.bodymovin_json_bucket === (config.os2?.r2?.public?.bucket);
-
-        let bodymovinUrl;
-        if (isPublic) {
-          bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${templateData.bodymovin_json_key}`;
-        } else {
-          bodymovinUrl = await storage.generatePresignedDownloadUrl(templateData.bodymovin_json_key);
-        }
-
-        const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
-        if (response.ok) {
-          const bodymovinJson = await response.json();
+        const bodymovinJson = await getBodymovinJson(storage, templateData.bodymovin_json_bucket, templateData.bodymovin_json_key);
+        if (bodymovinJson) {
 
           // Calculate aspect ratio and orientation
           if (bodymovinJson.w && bodymovinJson.h) {
@@ -1515,6 +1490,15 @@ exports.createTemplate = async function (req, res) {
           templateData.total_images_count = total_images_count;
           templateData.total_videos_count = total_videos_count;
           templateData.total_texts_count = total_texts_count;
+
+          // Always populate upload fields from bodymovin JSON
+          const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
+          templateData.image_uploads_required = imageCount;
+          templateData.video_uploads_required = videoCount;
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
+          templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
+          const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
+          templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, templateData.image_input_fields_json);
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template', {
@@ -2075,6 +2059,98 @@ function computeTotalAssetCountsFromBodymovin(bodymovinJson) {
 }
 
 /**
+ * Generate image_uploads_json from Bodymovin (Lottie) JSON
+ * One entry per image asset: { clip_index: 1, step_index, gender: 'unisex' }
+ * @param {Object} bodymovinJson - Parsed Bodymovin JSON
+ * @returns {Array}
+ */
+function generateImageUploadsJsonFromBodymovin(bodymovinJson) {
+  try {
+    const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
+    const imageAssets = assets.filter(a => {
+      if (!a || typeof a.id !== 'string' || !a.p) return false;
+      const name = String(a.p).toLowerCase();
+      return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
+    });
+    return imageAssets.map((_, index) => ({
+      clip_index: 1,
+      step_index: index,
+      gender: 'unisex'
+    }));
+  } catch (_e) {
+    return [];
+  }
+}
+
+/**
+ * Generate video_uploads_json from Bodymovin (Lottie) JSON
+ * One entry per video layer (ty === 9): { clip_index: 1, step_index, gender: 'unisex' }
+ * @param {Object} bodymovinJson - Parsed Bodymovin JSON
+ * @returns {Array}
+ */
+function generateVideoUploadsJsonFromBodymovin(bodymovinJson) {
+  try {
+    const layers = Array.isArray(bodymovinJson?.layers) ? bodymovinJson.layers : [];
+    const videoLayers = layers.filter(l => l && Number(l.ty) === 9);
+    return videoLayers.map((_, index) => ({
+      clip_index: 1,
+      step_index: index,
+      gender: 'unisex'
+    }));
+  } catch (_e) {
+    return [];
+  }
+}
+
+/**
+ * Generate image_input_fields_json from Bodymovin (Lottie) JSON
+ * One entry per image asset: { image_id, layer_name, field_code, user_input_field_name, field_data_type: 'photo' }
+ * Uses field_code like image_0, image_1 by default; UI can send bride_photo, groom_photo etc. and we merge when lengths match.
+ * @param {Object} bodymovinJson - Parsed Bodymovin JSON
+ * @returns {Array}
+ */
+function generateImageInputFieldsJsonFromBodymovin(bodymovinJson) {
+  try {
+    const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
+    const imageAssets = assets.filter(a => {
+      if (!a || typeof a.id !== 'string' || !a.p) return false;
+      const name = String(a.p).toLowerCase();
+      return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
+    });
+    return imageAssets.map((a, index) => ({
+      image_id: String(a.id),
+      layer_name: a.nm || a.p || String(a.id),
+      field_code: `image_${index}`,
+      user_input_field_name: null,
+      field_data_type: 'photo'
+    }));
+  } catch (_e) {
+    return [];
+  }
+}
+
+/**
+ * Merge UI-provided field_code and user_input_field_name into bodymovin-generated image_input_fields_json.
+ * When request sent image_input_fields_json with same length (e.g. bride_photo, groom_photo), preserve those fields.
+ * @param {Array} fromBodymovin - Array from generateImageInputFieldsJsonFromBodymovin
+ * @param {Array} fromRequest - templateData.image_input_fields_json from request (may be undefined)
+ * @returns {Array} Merged array; fromBodymovin unchanged if lengths differ or fromRequest not an array
+ */
+function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
+  if (!Array.isArray(fromRequest) || fromRequest.length !== fromBodymovin.length) {
+    return fromBodymovin;
+  }
+  return fromBodymovin.map((entry, i) => {
+    const req = fromRequest[i];
+    return {
+      ...entry,
+      field_code: (req && req.field_code != null && req.field_code !== '') ? req.field_code : entry.field_code,
+      user_input_field_name: (req && req.user_input_field_name != null) ? req.user_input_field_name : entry.user_input_field_name
+    };
+  });
+}
+
+/**
  * Extract all AI model occurrences from clips for cost calculation
  * Returns array of model occurrences with context (clip, step, quality, duration)
  * @param {Array} clips
@@ -2543,47 +2619,15 @@ exports.updateTemplate = async function (req, res) {
         logger.warn('Failed to cleanup AI clips for non-ai template update', { templateId, error: cleanupError.message });
       }
 
-      // Derive image/video upload counts from Bodymovin JSON if available
-      try {
-        const key = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
-        const bucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
-
-        if (key && bucket) {
-          const storage = StorageFactory.getProvider();
-          let downloadUrl;
-          // If key already looks like a URL, use it as-is
-          if (/^https?:\/\//i.test(key)) {
-            downloadUrl = key;
-          } else {
-            // Treat string literal 'public' as the public bucket selector
-            const isPublic = bucket === 'public' || bucket === storage.publicBucket || bucket === (config.os2?.r2?.public?.bucket);
-            if (isPublic) {
-              downloadUrl = `${config.os2.r2.public.bucketUrl}/${key}`;
-            } else {
-              // Fallback: presign from the default private bucket
-              downloadUrl = await storage.generatePresignedDownloadUrl(key);
-            }
-          }
-
-          const response = await fetchWithTimeout(downloadUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
-          if (response.ok) {
-            const bodymovinJson = await response.json();
-            const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
-            templateData.image_uploads_required = imageCount;
-            templateData.video_uploads_required = videoCount;
-          } else {
-            logger.warn('Failed to fetch Bodymovin JSON for non-ai template update', { templateId, key, status: response.status });
-            templateData.image_uploads_required = 0;
-            templateData.video_uploads_required = 0;
-          }
-        } else {
-          templateData.image_uploads_required = 0;
-          templateData.video_uploads_required = 0;
-        }
-      } catch (jsonError) {
-        logger.warn('Error deriving counts from Bodymovin JSON for non-ai template update', { templateId, error: jsonError.message });
+      // When no bodymovin, set upload fields to zero/empty; when bodymovin present they are set from JSON in common block below
+      const key = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
+      const bucket = templateData.bodymovin_json_bucket || existingTemplate.bodymovin_json_bucket;
+      if (!key || !bucket) {
         templateData.image_uploads_required = 0;
         templateData.video_uploads_required = 0;
+        templateData.image_uploads_json = [];
+        templateData.video_uploads_json = [];
+        templateData.image_input_fields_json = [];
       }
     }
 
@@ -2682,21 +2726,8 @@ exports.updateTemplate = async function (req, res) {
     if (bodymovinKey && bodymovinBucket) {
       try {
         const storage = StorageFactory.getProvider();
-        const isPublic = bodymovinBucket === 'public' ||
-          bodymovinBucket === storage.publicBucket ||
-          bodymovinBucket === (config.os2?.r2?.public?.bucket);
-
-        let bodymovinUrl;
-        if (isPublic) {
-          bodymovinUrl = `${config.os2.r2.public.bucketUrl}/${bodymovinKey}`;
-        } else {
-          bodymovinUrl = await storage.generatePresignedDownloadUrl(bodymovinKey);
-        }
-
-        const response = await fetchWithTimeout(bodymovinUrl, BODYMOVIN_FETCH_TIMEOUT_MS);
-        if (response.ok) {
-          const bodymovinJson = await response.json();
-
+        const bodymovinJson = await getBodymovinJson(storage, bodymovinBucket, bodymovinKey);
+        if (bodymovinJson) {
           // Calculate aspect ratio and orientation
           if (bodymovinJson.w && bodymovinJson.h) {
             const { aspectRatio, orientation } = calculateAspectRatioAndOrientation(bodymovinJson.w, bodymovinJson.h);
@@ -2709,6 +2740,16 @@ exports.updateTemplate = async function (req, res) {
           templateData.total_images_count = total_images_count;
           templateData.total_videos_count = total_videos_count;
           templateData.total_texts_count = total_texts_count;
+
+          // Always populate upload fields from bodymovin JSON
+          const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
+          templateData.image_uploads_required = imageCount;
+          templateData.video_uploads_required = videoCount;
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
+          templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
+          const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
+          const existingFromRequest = templateData.image_input_fields_json;
+          templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, existingFromRequest ?? existingTemplate.image_input_fields_json);
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template update', {

@@ -181,6 +181,8 @@ const updateTemplateSchema = Joi.object().keys({
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   additional_data: Joi.object().allow(null).optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
+  image_uploads_required: Joi.number().integer().min(0).optional(),
+  video_uploads_required: Joi.number().integer().min(0).optional(),
   image_uploads_json: Joi.array().items(
     Joi.object({
       clip_index: Joi.number().integer().min(1).required(),
