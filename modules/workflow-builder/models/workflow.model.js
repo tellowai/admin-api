@@ -2,6 +2,7 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const { v4: uuidv4, v7: uuidv7 } = require('uuid');
+const AiModelRegistryModel = require('./ai-model-registry.model');
 
 /**
  * List workflows for a user with pagination
@@ -160,6 +161,16 @@ exports.saveWorkflowData = async function (workflowId, data) {
 
     // Insert new nodes (support both API shape and React Flow shape: node.data.config_values, node.id)
     if (data.nodes && data.nodes.length > 0) {
+
+      // Load system node definitions dynamically to support all active types
+      // Note: listSystemNodeDefinitions is async, so we must await it.
+      // Since we are inside an async function saveWorkflowData, this is fine.
+      const systemNodes = await AiModelRegistryModel.listSystemNodeDefinitions(null, 1000, 0);
+
+      // Create set of valid slugs
+      const VALID_SYSTEM_SLUGS = new Set(systemNodes.map(n => n.type_slug));
+      VALID_SYSTEM_SLUGS.add('START');
+
       const nodeValues = data.nodes.map(node => {
         // Prefer React Flow shape; Joi validator can default node.config_values to {} and hide data.config_values
         const configValues = node.data?.config_values ?? node.config_values ?? {};
@@ -167,12 +178,47 @@ exports.saveWorkflowData = async function (workflowId, data) {
           const { config_values: _cv, ...rest } = node.data;
           return rest;
         })()) ?? {};
+
+        let dbType = node.type;
+        let dbAmrId = node.amr_id ?? null;
+        let dbSystemNodeType = node.system_node_type ?? null;
+
+        const typeToCheck = node.system_node_type || node.type;
+
+        // Priority 1: Explicit system_node object in data (most reliable if present)
+        if (node.data?.system_node?.type_slug && VALID_SYSTEM_SLUGS.has(node.data.system_node.type_slug)) {
+          dbType = 'SYSTEM_NODE';
+          dbSystemNodeType = node.data.system_node.type_slug;
+          dbAmrId = null;
+        }
+        // Priority 2: Matches a valid known slug or is the legacy "USER_INPUT" type
+        else if (VALID_SYSTEM_SLUGS.has(typeToCheck) || typeToCheck === 'USER_INPUT') {
+          dbType = 'SYSTEM_NODE';
+
+          if (typeToCheck === 'USER_INPUT') {
+            // Dynamic fallback: Use amr_id to find the actual slug from DB definitions (e.g. USER_INPUT_IMAGE)
+            if (dbAmrId) {
+              const matchingDef = systemNodes.find(n => n.wsnd_id === dbAmrId);
+              if (matchingDef) {
+                dbSystemNodeType = matchingDef.type_slug;
+              } else {
+                dbSystemNodeType = 'USER_INPUT_IMAGE'; // Ultimate fallback
+              }
+            } else {
+              dbSystemNodeType = 'USER_INPUT_IMAGE';
+            }
+          } else {
+            dbSystemNodeType = typeToCheck;
+          }
+          dbAmrId = null;
+        }
+
         return [
           node.uuid ?? node.id ?? uuidv4(),
           workflowId,
-          node.type,
-          node.amr_id ?? null,
-          node.system_node_type ?? null,
+          dbType,
+          dbAmrId,
+          dbSystemNodeType,
           node.position?.x ?? node.computedPosition?.x ?? 0,
           node.position?.y ?? node.computedPosition?.y ?? 0,
           node.width ?? node.dimensions?.width ?? 250,

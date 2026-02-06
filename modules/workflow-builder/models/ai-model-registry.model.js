@@ -380,3 +380,31 @@ exports.deleteSystemNodeIoDefinition = async function (wsniodId) {
   const query = `DELETE FROM workflow_system_node_io_definitions WHERE wsniod_id = ?`;
   await mysqlQueryRunner.runQueryInMaster(query, [wsniodId]);
 };
+
+/**
+ * Get system node definitions by type_slugs (for enriching workflow GET response). Active only.
+ * @param {string[]} slugs - type_slug list
+ * @returns {Promise<Array>} Raw rows with wsnd_id, type_slug, name, icon, color_hex, config_schema, etc.
+ */
+exports.getSystemNodeDefinitionsBySlugs = async function (slugs) {
+  if (!slugs || slugs.length === 0) return [];
+  const unique = [...new Set(slugs)].filter(s => s != null);
+  if (unique.length === 0) return [];
+
+  const placeholders = unique.map(() => '?').join(', ');
+  const query = `
+    SELECT 
+      wsnd_id,
+      type_slug,
+      name,
+      description,
+      icon,
+      color_hex,
+      config_schema,
+      version
+    FROM workflow_system_node_definitions
+    WHERE type_slug IN (${placeholders}) AND status = 'active'
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, unique);
+};
+

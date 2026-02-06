@@ -1169,3 +1169,166 @@ exports.createOrRestoreTemplateTags = async function (templateId, templateTagIds
     throw error;
   }
 };
+
+/**
+ * Update template image input fields based on all clips' workflows.
+ * Aggregates USER_INPUT_IMAGE / USER_INPUT_VIDEO nodes from all clips.
+ */
+exports.updateTemplateImageInputsFromClips = async function (templateId) {
+  // 1. Get all clips for the template
+  const clips = await this.getTemplateAiClips(templateId);
+  if (!clips || clips.length === 0) return;
+
+  const validWfIds = clips.map(c => c.wf_id).filter(id => id != null);
+  if (validWfIds.length === 0) return;
+
+  // 2. Fetch current template for existing fields
+  const currentTemplate = await this.getTemplateById(templateId);
+  let currentFields = [];
+  try {
+    if (currentTemplate && typeof currentTemplate.image_input_fields_json === 'string') {
+      currentFields = JSON.parse(currentTemplate.image_input_fields_json);
+    } else if (currentTemplate && Array.isArray(currentTemplate.image_input_fields_json)) {
+      currentFields = currentTemplate.image_input_fields_json;
+    }
+  } catch (e) {
+    console.error(`Error parsing image_input_fields_json for template ${templateId}:`, e);
+  }
+
+  // 3. Batch fetch nodes for all workflows
+  const placeholders = validWfIds.map(() => '?').join(',');
+  const nodesQuery = `
+    SELECT wf_id, system_node_type, config_values, wfn_id
+    FROM workflow_nodes
+    WHERE wf_id IN (${placeholders})
+    AND system_node_type IN ('USER_INPUT_IMAGE', 'USER_INPUT_VIDEO')
+    ORDER BY wfn_id ASC 
+  `;
+  // Note: ORDER BY wfn_id assumption for determinism within a clip
+  const nodes = await mysqlQueryRunner.runQueryInSlave(nodesQuery, validWfIds);
+
+  // 4. Flatten nodes into an ordered list (Sorted by Clip Index -> Node Creation/ID)
+  // This ensures inputs are listed sequentially: Clip 1 inputs, then Clip 2 inputs, etc.
+
+  const wfIdToClipIndex = new Map(clips.map(c => [c.wf_id, c.clip_index]));
+
+  // Sort nodes: First by Clip Index, then by Node ID (wfn_id)
+  nodes.sort((a, b) => {
+    const clipIndexA = wfIdToClipIndex.get(a.wf_id) || 0;
+    const clipIndexB = wfIdToClipIndex.get(b.wf_id) || 0;
+    // Primary sort: Clip Index
+    if (clipIndexA !== clipIndexB) return clipIndexA - clipIndexB;
+    // Secondary sort: Creation order (wfn_id) within the same clip
+    return a.wfn_id - b.wfn_id;
+  });
+
+  const orderedNodes = nodes.map(node => ({
+    clip_index: wfIdToClipIndex.get(node.wf_id),
+    config: typeof node.config_values === 'string' ? JSON.parse(node.config_values) : node.config_values,
+    system_type: node.system_node_type
+  }));
+
+  // 5. Logic for Cases:
+  // Case 1: Equal count -> Do not change at all. (Return)
+  // Case 2: Fewer nodes than fields -> Do not change at all. (Return)
+  // Case 3: More nodes than fields -> Append new fields, copying structure from last one.
+
+  const totalNodes = orderedNodes.length;
+  const currentCount = currentFields.length;
+
+  // Loop through all nodes to update existing fields (Case 1) or append new ones (Case 3)
+  for (let i = 0; i < totalNodes; i++) {
+    const nodeContext = orderedNodes[i];
+    const isVideo = nodeContext.system_type === 'USER_INPUT_VIDEO';
+
+    if (currentFields[i]) {
+      // Existing field: Check for type mismatch
+      const currentIsVideo = currentFields[i].field_data_type === 'video';
+
+      if (isVideo !== currentIsVideo) {
+        // Mismatch detected: Update type and related values
+        currentFields[i].field_data_type = isVideo ? 'video' : 'photo';
+
+        // Fix layer_name extension
+        let layer = currentFields[i].layer_name || '';
+        if (isVideo) {
+          // Change .jpg/.png to .mp4, or default
+          currentFields[i].layer_name = layer.replace(/\.(jpg|png|jpeg)$/i, '.mp4');
+          if (!currentFields[i].layer_name.endsWith('.mp4')) currentFields[i].layer_name = `vid_${i}.mp4`;
+        } else {
+          // Change .mp4 to .jpg
+          currentFields[i].layer_name = layer.replace(/\.mp4$/i, '.jpg');
+          if (!currentFields[i].layer_name.endsWith('.jpg')) currentFields[i].layer_name = `img_${i}.jpg`;
+        }
+
+        // Set default label for type change if not provided by config
+        if (!nodeContext.config?.label) {
+          currentFields[i].label = isVideo ? 'Upload Video' : 'Upload Image';
+        }
+      }
+
+      // Always update label and variable_name from node config (if present)
+      if (nodeContext.config?.label) currentFields[i].label = nodeContext.config.label;
+      if (nodeContext.config?.variable_name) currentFields[i].variable_name = nodeContext.config.variable_name;
+
+      // Always sync clip_index
+      currentFields[i].clip_index = nodeContext.clip_index;
+
+    } else {
+      // Expansion: New field needed
+      let newField = {};
+      if (currentFields.length > 0) {
+        newField = JSON.parse(JSON.stringify(currentFields[currentFields.length - 1])); // Deep clone
+
+        // User requested NOT to increment IDs/names. Keep them identical to the source.
+        // BUT make field_code and user_input_field_name null explicitly.
+        newField.field_code = null;
+        newField.user_input_field_name = null;
+
+        // Do not copy reference_image from the source template
+        delete newField.reference_image;
+
+        // Only update variable/label from node config
+        if (nodeContext.config?.label) newField.label = nodeContext.config.label;
+        if (nodeContext.config?.variable_name) newField.variable_name = nodeContext.config.variable_name;
+
+        // Ensure type correctness for the new clone
+        newField.field_data_type = isVideo ? 'video' : 'photo';
+        // Fix layer name for clone
+        let layer = newField.layer_name || '';
+        if (isVideo) {
+          newField.layer_name = layer.replace(/\.(jpg|png|jpeg)$/i, '.mp4');
+          if (!newField.layer_name.endsWith('.mp4')) newField.layer_name = `vid_${i}.mp4`;
+        } else {
+          newField.layer_name = layer.replace(/\.mp4$/i, '.jpg');
+          if (!newField.layer_name.endsWith('.jpg')) newField.layer_name = `img_${i}.jpg`;
+        }
+
+      } else {
+        // Fallback if template started with 0 fields
+        newField = {
+          label: nodeContext.config?.label || (isVideo ? 'Upload Video' : 'Upload Image'),
+          variable_name: nodeContext.config?.variable_name || `input_${i + 1}`,
+          image_id: `image_${i}`,
+          field_code: `image_${i}`,
+          layer_name: isVideo ? `vid_${i}.mp4` : `img_${i}.jpg`,
+          field_data_type: isVideo ? 'video' : 'photo',
+          user_input_field_name: null
+        };
+      }
+
+      newField.clip_index = nodeContext.clip_index;
+      currentFields.push(newField);
+    }
+  }
+
+  // 6. Update the template (Only for Case 3)
+  const updateQuery = `
+    UPDATE templates
+    SET 
+      image_uploads_required = ?,
+      image_input_fields_json = ?
+    WHERE template_id = ?
+  `;
+  await mysqlQueryRunner.runQueryInMaster(updateQuery, [totalNodes, JSON.stringify(currentFields), templateId]);
+};

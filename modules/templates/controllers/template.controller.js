@@ -2794,9 +2794,9 @@ exports.updateTemplate = async function (req, res) {
           templateData.video_uploads_required = videoCount;
           templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
-          const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
-          const existingFromRequest = templateData.image_input_fields_json;
-          templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, existingFromRequest ?? existingTemplate.image_input_fields_json);
+          // const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
+          // const existingFromRequest = templateData.image_input_fields_json;
+          // templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, existingFromRequest ?? existingTemplate.image_input_fields_json);
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template update', {

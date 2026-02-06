@@ -166,16 +166,42 @@ async function enrichNodesWithAiModels(nodes) {
  */
 async function enrichNodesWithSystemNodes(nodes) {
   if (!nodes || nodes.length === 0) return;
-  const wsndIds = [...new Set(
+
+  const slugs = [...new Set(
     nodes
-      .filter(n => n.type !== 'AI_MODEL' && n.amr_id != null)
+      .filter(n => n.type !== 'AI_MODEL' && n.system_node_type != null)
+      .map(n => n.system_node_type)
+  )];
+
+  const wsndIdsLegacy = [...new Set(
+    nodes
+      .filter(n => n.type !== 'AI_MODEL' && n.system_node_type == null && n.amr_id != null)
       .map(n => n.amr_id)
   )];
-  if (wsndIds.length === 0) return;
 
-  const [defRows, ioDefinitions, socketTypes] = await Promise.all([
-    AiModelRegistryModel.getSystemNodeDefinitionsByIds(wsndIds),
-    AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds(wsndIds),
+  if (slugs.length === 0 && wsndIdsLegacy.length === 0) return;
+
+  let defRows = [];
+
+  if (slugs.length > 0) {
+    const rows = await AiModelRegistryModel.getSystemNodeDefinitionsBySlugs(slugs);
+    defRows = [...defRows, ...rows];
+  }
+
+  if (wsndIdsLegacy.length > 0) {
+    const rows = await AiModelRegistryModel.getSystemNodeDefinitionsByIds(wsndIdsLegacy);
+    defRows = [...defRows, ...rows];
+  }
+
+  // Deduplicate defRows by wsnd_id just in case
+  defRows = [...new Map(defRows.map(item => [item.wsnd_id, item])).values()];
+
+  if (defRows.length === 0) return;
+
+  const allWsndIds = defRows.map(r => r.wsnd_id);
+
+  const [ioDefinitions, socketTypes] = await Promise.all([
+    AiModelRegistryModel.getSystemNodeIODefinitionsByNodeIds(allWsndIds),
     AiModelRegistryModel.getAllSocketTypes()
   ]);
 
@@ -203,8 +229,9 @@ async function enrichNodesWithSystemNodes(nodes) {
   }
 
   const byWsndId = new Map();
+  const bySlug = new Map();
   for (const row of defRows) {
-    byWsndId.set(row.wsnd_id, {
+    const enriched = {
       wsnd_id: row.wsnd_id,
       name: row.name,
       label: row.name,
@@ -215,12 +242,22 @@ async function enrichNodesWithSystemNodes(nodes) {
       inputs: ioByNode[row.wsnd_id]?.inputs || [],
       outputs: ioByNode[row.wsnd_id]?.outputs || [],
       version: row.version
-    });
+    };
+    byWsndId.set(row.wsnd_id, enriched);
+    if (row.type_slug) bySlug.set(row.type_slug, enriched);
   }
 
   for (const node of nodes) {
-    if (node.type !== 'AI_MODEL' && node.amr_id != null) {
-      node.system_node = byWsndId.get(node.amr_id) || null;
+    if (node.type !== 'AI_MODEL') {
+      if (node.system_node_type) {
+        node.system_node = bySlug.get(node.system_node_type) || null;
+        // RESTORE NODE TYPE from slug if 'STATIC_ASSET' to match frontend expectations
+        if ((node.type === 'STATIC_ASSET' || node.type === 'SYSTEM') && node.system_node_type) {
+          node.type = node.system_node_type;
+        }
+      } else if (node.amr_id) {
+        node.system_node = byWsndId.get(node.amr_id) || null;
+      }
     }
   }
 }
@@ -233,7 +270,7 @@ exports.getWorkflow = async function (req, res) {
     const { workflowId } = req.params;
     const userId = req.user.userId;
 
-    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, null);
 
     if (!workflow) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -291,7 +328,7 @@ exports.getWorkflowByTacId = async function (req, res) {
     }
 
     const [workflow, nodes, rawEdges] = await Promise.all([
-      WorkflowModel.getWorkflowById(wfId, userId),
+      WorkflowModel.getWorkflowById(wfId, null),
       WorkflowNodeModel.getNodesByWorkflowId(wfId),
       WorkflowEdgeModel.getEdgesByWorkflowId(wfId)
     ]);
@@ -372,8 +409,12 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
     cleanConnectedInputs(nodes, edges);
 
     let resolvedTacId = tacIdParam;
+    let templateId = body.templateId; // From request if creating new clip
+
     const tacRow = await WorkflowModel.getTacRow(tacIdParam);
-    if (!tacRow) {
+    if (tacRow) {
+      templateId = tacRow.template_id;
+    } else {
       if (body.templateId != null && body.clipIndex !== undefined) {
         const { tac_id } = await TemplateModel.ensureTemplateAiClip(
           body.templateId,
@@ -381,6 +422,7 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
           body.assetType || 'video'
         );
         resolvedTacId = tac_id;
+        // templateId is already body.templateId
       } else {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
           message: req.t('workflow:WORKFLOW_NOT_FOUND')
@@ -394,7 +436,7 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
         message: req.t('workflow:WORKFLOW_NOT_FOUND')
       });
     }
-    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, null);
     if (!workflow) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
         message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
@@ -433,6 +475,11 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
       actionName: 'AUTO_SAVE_WORKFLOW_BY_TAC_ID',
       entityId: workflowId
     });
+
+    // Update template image inputs summary using the resolved templateId
+    if (templateId) {
+      await TemplateModel.updateTemplateImageInputsFromClips(templateId);
+    }
 
     const responseData = {
       workflowId,
@@ -485,7 +532,7 @@ exports.saveWorkflowByTacId = async function (req, res) {
         message: req.t('workflow:WORKFLOW_NOT_FOUND')
       });
     }
-    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, null);
     if (!workflow) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
         message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
@@ -594,7 +641,7 @@ exports.autoSaveWorkflow = async function (req, res) {
     const userId = req.user.userId;
 
     // Verify ownership
-    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, null);
     if (!workflow) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
         message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
@@ -659,7 +706,7 @@ exports.saveWorkflow = async function (req, res) {
     const userId = req.user.userId;
 
     // Similar to autosave but maybe stricter or updating metadata too
-    const workflow = await WorkflowModel.getWorkflowById(workflowId, userId);
+    const workflow = await WorkflowModel.getWorkflowById(workflowId, null);
     if (!workflow) {
       return res.status(HTTP_STATUS_CODES.FORBIDDEN).json({
         message: req.t('workflow:WORKFLOW_ACCESS_DENIED')
@@ -805,10 +852,13 @@ exports.getCrossClipSources = async function (req, res) {
         if (node.type === 'AI_MODEL' && node.amr_id != null) {
           outputs = amrIdToOutputs.get(node.amr_id) || [];
         } else {
-          // System nodes: amr_id is wsnd_id in workflow_nodes; look up by wsnd_id first, then by type slug
-          outputs = (node.amr_id != null && wsndIdToOutputs.get(node.amr_id)) ||
-            typeSlugToOutputs.get((node.type || node.system_node_type || '').toLowerCase()) ||
-            [];
+          // System nodes: amr_id is wsnd_id in workflow_nodes (old) or system_node_type is set (new)
+          outputs = (node.amr_id != null && wsndIdToOutputs.get(node.amr_id));
+          if (!outputs) {
+            outputs = typeSlugToOutputs.get((node.system_node_type || '').toLowerCase()) ||
+              typeSlugToOutputs.get((node.type || '').toLowerCase()) ||
+              [];
+          }
         }
         return { ...node, outputs };
       })
