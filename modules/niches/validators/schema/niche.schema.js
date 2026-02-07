@@ -55,7 +55,7 @@ const matchCustomTextInputFieldsSchema = Joi.object().keys({
     Joi.object().keys({
       layer_name: Joi.string().required(),
       default_text: Joi.string().required(),
-      input_field_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
+      input_field_type: Joi.string().valid('text', 'short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
       linked_layer_names: Joi.array().items(Joi.string()).optional(),
       user_input_field_name: Joi.string().required()
     })

@@ -80,6 +80,9 @@ exports.bulkCreateNicheDataFieldDefinitions = async function(req, res) {
     }));
 
     const result = await NicheDataFieldDefinitionModel.bulkCreateNicheDataFieldDefinitions(fieldsData);
+    const fieldCodes = fieldsData.map(f => f.field_code);
+    const createdDefinitions = await NicheDataFieldDefinitionModel.getByNicheIdAndFieldCodesInOrder(nicheId, fieldCodes);
+    const insertIds = createdDefinitions.map(d => d.ndfd_id);
 
     // Publish activity log command
     await kafkaCtrl.sendMessage(
@@ -99,7 +102,7 @@ exports.bulkCreateNicheDataFieldDefinitions = async function(req, res) {
       message: req.t('niche:FIELD_DEFINITIONS_CREATED'),
       data: {
         created_count: result.affectedRows,
-        field_definition_ids: result.insertIds
+        field_definition_ids: insertIds
       }
     });
 

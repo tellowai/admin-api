@@ -66,7 +66,14 @@ const logger = require('../../../config/lib/logger');
  */
 exports.matchCustomTextInputFields = async function(req, res) {
   try {
-    const { niche_slug, custom_text_input_fields } = req.validatedBody;
+    const { niche_slug, custom_text_input_fields: rawFields } = req.validatedBody;
+    // Normalize 'text' to 'short_text' (UI may send INPUT_FIELD_TYPES.TEXT)
+    const custom_text_input_fields = Array.isArray(rawFields)
+      ? rawFields.map(f => ({
+          ...f,
+          input_field_type: f.input_field_type === 'text' ? 'short_text' : f.input_field_type
+        }))
+      : rawFields;
 
     // Step 1: Get niche by slug from MySQL
     // TODO: Enable Redis caching later
@@ -96,10 +103,12 @@ exports.matchCustomTextInputFields = async function(req, res) {
     //   await RedisNicheModel.setFieldDefinitionsByNicheId(nicheId, fieldDefinitions);
     // }
     
+    // getNicheDataFieldDefinitionsByNicheId already returns only non-archived (archived_at IS NULL)
     let fieldDefinitions = await NicheFieldDefinitionModel.getNicheDataFieldDefinitionsByNicheId(nicheId);
+    const activeFieldDefinitions = fieldDefinitions.filter(fd => fd != null);
 
-    // Step 3: Prepare data for LLM
-    const fieldDefinitionsForLLM = fieldDefinitions.map(fd => ({
+    // Step 3: Prepare data for LLM (only active definitions — do not send archived fields)
+    const fieldDefinitionsForLLM = activeFieldDefinitions.map(fd => ({
       field_code: fd.field_code,
       field_label: fd.field_label,
       field_data_type: fd.field_data_type

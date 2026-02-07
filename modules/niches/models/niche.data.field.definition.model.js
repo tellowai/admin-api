@@ -71,7 +71,7 @@ exports.getNicheDataFieldDefinitionsByNicheId = async function(nicheId) {
 
 exports.bulkCreateNicheDataFieldDefinitions = async function(fieldsData) {
   if (!fieldsData || fieldsData.length === 0) {
-    return { affectedRows: 0, insertIds: [] };
+    return { affectedRows: 0 };
   }
 
   const fields = ['niche_id', 'field_code', 'field_label', 'field_data_type', 'is_visible_in_first_time_flow', 'display_order'];
@@ -93,22 +93,34 @@ exports.bulkCreateNicheDataFieldDefinitions = async function(fieldsData) {
 
   const insertQuery = `
     INSERT INTO niche_data_field_definitions (
-      ${fields.join(', ')}
+      niche_id, field_code, field_label, field_data_type, is_visible_in_first_time_flow, display_order
     ) VALUES ${placeholders.join(', ')}
+    ON DUPLICATE KEY UPDATE
+      field_label = VALUES(field_label),
+      display_order = VALUES(display_order),
+      archived_at = NULL
   `;
 
   const result = await mysqlQueryRunner.runQueryInMaster(insertQuery, values);
-  
-  // Generate insert IDs
-  const insertIds = [];
-  for (let i = 0; i < fieldsData.length; i++) {
-    insertIds.push(result.insertId + i);
-  }
+  return { affectedRows: result.affectedRows };
+};
 
-  return {
-    affectedRows: result.affectedRows,
-    insertIds: insertIds
-  };
+/**
+ * Simple single-table SELECT by niche_id and field_codes, ordered to match fieldCodes.
+ * Used by controllers/services after bulkCreate to fetch created/updated rows (stitching in controller).
+ */
+exports.getByNicheIdAndFieldCodesInOrder = async function(nicheId, fieldCodes) {
+  if (!fieldCodes || fieldCodes.length === 0) return [];
+  const placeholders = fieldCodes.map(() => '?').join(', ');
+  const query = `
+    SELECT ndfd_id, niche_id, field_code, field_label, field_data_type,
+           is_visible_in_first_time_flow, display_order, created_at, updated_at
+    FROM niche_data_field_definitions
+    WHERE niche_id = ? AND field_code IN (${placeholders}) AND archived_at IS NULL
+    ORDER BY FIELD(field_code, ${placeholders})
+  `;
+  const rows = await mysqlQueryRunner.runQueryInMaster(query, [nicheId, ...fieldCodes, ...fieldCodes]);
+  return rows;
 };
 
 exports.bulkUpdateNicheDataFieldDefinitions = async function(fieldsData) {
@@ -116,42 +128,48 @@ exports.bulkUpdateNicheDataFieldDefinitions = async function(fieldsData) {
     return 0;
   }
 
-  let totalAffectedRows = 0;
+  const validRows = fieldsData.filter(f => f && f.ndfd_id != null);
+  if (validRows.length === 0) return 0;
 
-  // Update each field definition individually
-  for (const fieldData of fieldsData) {
-    if (!fieldData.ndfd_id) {
-      continue; // Skip if no ID provided
-    }
-
-    const setClause = [];
-    const values = [];
-
-    Object.entries(fieldData).forEach(([key, value]) => {
-      if (key !== 'ndfd_id' && value !== undefined && value !== null) {
-        setClause.push(`${key} = ?`);
-        values.push(value);
-      }
-    });
-
-    if (setClause.length === 0) {
-      continue; // Skip if nothing to update
-    }
-
-    values.push(fieldData.ndfd_id);
-
-    const query = `
-      UPDATE niche_data_field_definitions 
-      SET ${setClause.join(', ')}, updated_at = NOW()
-      WHERE ndfd_id = ?
-      AND archived_at IS NULL
+  const updatableColumns = ['field_label', 'field_data_type', 'is_visible_in_first_time_flow', 'display_order'];
+  const columnsToUpdate = updatableColumns.filter(col =>
+    validRows.some(row => row[col] !== undefined && row[col] !== null)
+  );
+  if (columnsToUpdate.length === 0) {
+    const idPlaceholders = validRows.map(() => '?').join(', ');
+    const ids = validRows.map(r => r.ndfd_id);
+    const touchQuery = `
+      UPDATE niche_data_field_definitions
+      SET updated_at = NOW()
+      WHERE ndfd_id IN (${idPlaceholders}) AND archived_at IS NULL
     `;
-
-    const result = await mysqlQueryRunner.runQueryInMaster(query, values);
-    totalAffectedRows += result.affectedRows;
+    const result = await mysqlQueryRunner.runQueryInMaster(touchQuery, ids);
+    return result.affectedRows;
   }
 
-  return totalAffectedRows;
+  const setParts = columnsToUpdate.map(col => {
+    const cases = validRows.map(r => `WHEN ? THEN ?`).join(' ');
+    return `${col} = CASE ndfd_id ${cases} END`;
+  });
+  setParts.push('updated_at = NOW()');
+
+  const values = [];
+  columnsToUpdate.forEach(col => {
+    validRows.forEach(r => {
+      values.push(r.ndfd_id, r[col]);
+    });
+  });
+  const idPlaceholders = validRows.map(() => '?').join(', ');
+  const ids = validRows.map(r => r.ndfd_id);
+  values.push(...ids);
+
+  const query = `
+    UPDATE niche_data_field_definitions
+    SET ${setParts.join(', ')}
+    WHERE ndfd_id IN (${idPlaceholders}) AND archived_at IS NULL
+  `;
+  const result = await mysqlQueryRunner.runQueryInMaster(query, values);
+  return result.affectedRows;
 };
 
 exports.archiveNicheDataFieldDefinition = async function(ndfdId) {
