@@ -6,7 +6,19 @@ const moment = require('moment');
 const config = require('../../../config/config');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 
+const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'suspended', 'archived'];
+
 exports.listTemplates = async function (pagination) {
+  const conditions = ['archived_at IS NULL'];
+  const params = [];
+
+  if (pagination.status && TEMPLATE_STATUS_ENUM.includes(pagination.status)) {
+    conditions.push('status = ?');
+    params.push(pagination.status);
+  }
+
+  params.push(pagination.limit, pagination.offset);
+
   const query = `
     SELECT 
       template_id,
@@ -47,15 +59,12 @@ exports.listTemplates = async function (pagination) {
       created_at,
       updated_at
     FROM templates
-    WHERE archived_at IS NULL
+    WHERE ${conditions.join(' AND ')}
     ORDER BY updated_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(
-    query,
-    [pagination.limit, pagination.offset]
-  );
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
 };
 
 exports.getTemplateGenerationMeta = async function (templateId) {
@@ -160,8 +169,20 @@ exports.getTemplatePrompt = async function (templateId) {
   return template;
 };
 
-exports.searchTemplates = async function (searchQuery, page, limit) {
+exports.searchTemplates = async function (searchQuery, page, limit, status = null) {
   const offset = (page - 1) * limit;
+  const conditions = [
+    '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))',
+    'archived_at IS NULL'
+  ];
+  const params = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
+
+  if (status && TEMPLATE_STATUS_ENUM.includes(status)) {
+    conditions.push('status = ?');
+    params.push(status);
+  }
+
+  params.push(limit, offset);
 
   const query = `
     SELECT 
@@ -198,18 +219,12 @@ exports.searchTemplates = async function (searchQuery, page, limit) {
       status,
       created_at
     FROM templates
-    WHERE LOWER(template_name) LIKE LOWER(?)
-    OR LOWER(template_code) LIKE LOWER(?)
-    OR LOWER(prompt) LIKE LOWER(?)
+    WHERE ${conditions.join(' AND ')}
     ORDER BY created_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
-  const searchPattern = `%${searchQuery}%`;
-  return await mysqlQueryRunner.runQueryInSlave(
-    query,
-    [searchPattern, searchPattern, searchPattern, limit, offset]
-  );
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
 };
 
 exports.createTemplate = async function (templateData, clips = null) {

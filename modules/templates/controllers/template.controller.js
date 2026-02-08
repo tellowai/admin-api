@@ -261,7 +261,10 @@ async function getTemplateTagsWithDetails(templateId) {
  */
 exports.listTemplates = async function (req, res) {
   try {
-    const paginationParams = PaginationCtrl.getPaginationParams(req.query);
+    const paginationParams = {
+      ...PaginationCtrl.getPaginationParams(req.query),
+      status: req.query.status || undefined
+    };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
     // Generate presigned URLs if templates exist
@@ -814,41 +817,59 @@ exports.listArchivedTemplates = async function (req, res) {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const templates = await TemplateModel.listArchivedTemplates(paginationParams);
 
-    // Generate presigned URLs if templates exist
+    // Batch fetch related data (no queries in loop); stitch in controller
     if (templates.length) {
       const storage = StorageFactory.getProvider();
+      const templateIds = templates.map(t => t.template_id);
+
+      const allClips = await TemplateModel.getTemplateAiClipsForMultipleTemplates(templateIds);
+      const clipsMap = new Map();
+      allClips.forEach(clip => {
+        if (!clipsMap.has(clip.template_id)) clipsMap.set(clip.template_id, []);
+        clipsMap.get(clip.template_id).push(clip);
+      });
+
+      const allTemplateTags = await TemplateModel.getTemplateTagsForMultipleTemplates(templateIds);
+      const templateTagsMap = new Map();
+      allTemplateTags.forEach(tag => {
+        if (!templateTagsMap.has(tag.template_id)) templateTagsMap.set(tag.template_id, []);
+        templateTagsMap.get(tag.template_id).push(tag);
+      });
+
+      const allTtdIds = [...new Set(allTemplateTags.map(t => t.ttd_id))];
+      const tagDefinitions = allTtdIds.length > 0
+        ? await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(allTtdIds) : [];
+      const tagDefinitionMap = new Map();
+      tagDefinitions.forEach(td => tagDefinitionMap.set(td.ttd_id, td));
+
+      const allFacetIds = [...new Set(tagDefinitions.map(td => td.facet_id).filter(Boolean))];
+      const facets = allFacetIds.length > 0
+        ? await TemplateTagFacetModel.getTemplateTagFacetsByIds(allFacetIds) : [];
+      const facetMap = new Map();
+      facets.forEach(f => facetMap.set(f.facet_id, f));
 
       await Promise.all(templates.map(async (template) => {
-        // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
           template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
         } else {
           template.r2_url = template.cf_r2_url;
         }
 
-        // Load AI clips for all templates
-        template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
-
-        // Generate R2 URLs for AI clip assets
-        if (template.clips && template.clips.length > 0) {
+        template.clips = clipsMap.get(template.template_id) || [];
+        if (template.clips.length > 0) {
           template.clips = template.clips.map(clip => {
-            // Generate R2 URL for template image asset
             if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
               clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
             }
-
-            // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
             }
-
-            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
             if (Array.isArray(clip.workflow)) {
               clip.workflow = clip.workflow.map(step => {
                 if (!step || !Array.isArray(step.data)) return step;
                 step.data = step.data.map(item => {
                   const itemType = String(item?.type || '').toLowerCase();
-                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                  if (itemType === 'file_upload' && item?.value?.asset_key) {
                     item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
                   }
                   return item;
@@ -856,21 +877,14 @@ exports.listArchivedTemplates = async function (req, res) {
                 return step;
               });
             }
-
             return clip;
           });
         }
 
-        // Fallback compute of image uploads required if not present or invalid
-        if (
-          template.image_uploads_required === undefined ||
-          template.image_uploads_required === null ||
-          Number.isNaN(Number(template.image_uploads_required))
-        ) {
+        if (template.image_uploads_required === undefined || template.image_uploads_required === null || Number.isNaN(Number(template.image_uploads_required))) {
           template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
         }
 
-        // Generate R2 URLs for template assets
         if (template.color_video_key && template.color_video_bucket) {
           template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
         }
@@ -881,25 +895,18 @@ exports.listArchivedTemplates = async function (req, res) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
         }
 
-        // Generate presigned download URL for thumb_frame if available
         if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
           try {
             const isPublic = template.thumb_frame_bucket === 'public' ||
               template.thumb_frame_bucket === storage.publicBucket ||
               template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-
             if (isPublic) {
               template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
             } else {
               template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
             }
           } catch (error) {
-            logger.error('Error generating thumb_frame presigned URL:', {
-              error: error.message,
-              template_id: template.template_id,
-              thumb_frame_asset_key: template.thumb_frame_asset_key,
-              thumb_frame_bucket: template.thumb_frame_bucket
-            });
+            logger.error('Error generating thumb_frame presigned URL:', { error: error.message, template_id: template.template_id });
             template.thumb_frame_url = null;
           }
         }
@@ -908,13 +915,9 @@ exports.listArchivedTemplates = async function (req, res) {
           try {
             template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
           } catch (err) {
-            logger.error('Error parsing image_input_fields_json:', {
-              error: err.message,
-              value: template.image_input_fields_json
-            });
+            logger.error('Error parsing image_input_fields_json:', { error: err.message, value: template.image_input_fields_json });
           }
         }
-
         if (Array.isArray(template.image_input_fields_json)) {
           template.image_input_fields_json.forEach(field => {
             if (field.reference_image && field.reference_image.asset_key) {
@@ -923,31 +926,21 @@ exports.listArchivedTemplates = async function (req, res) {
           });
         }
 
-        // Parse JSON fields if they are strings
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
-
-            // Generate R2 URLs for character faces if they exist
             if (template.faces_needed) {
               template.faces_needed = template.faces_needed.map(face => {
-                if (face.character_face_r2_key) {
-                  face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
-                }
+                if (face.character_face_r2_key) face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
                 return face;
               });
             }
           } catch (err) {
-            logger.error('Error parsing faces_needed:', {
-              error: err.message,
-              value: template.faces_needed
-            });
+            logger.error('Error parsing faces_needed:', { error: err.message, value: template.faces_needed });
           }
         } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
           template.faces_needed = template.faces_needed.map(face => {
-            if (face.character_face_r2_key) {
-              face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
-            }
+            if (face.character_face_r2_key) face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
             return face;
           });
         }
@@ -956,69 +949,30 @@ exports.listArchivedTemplates = async function (req, res) {
           try {
             template.additional_data = JSON.parse(template.additional_data);
           } catch (err) {
-            logger.error('Error parsing additional_data:', {
-              error: err.message,
-              value: template.additional_data
-            });
+            logger.error('Error parsing additional_data:', { error: err.message, value: template.additional_data });
           }
         }
-
         if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
           try {
             template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
           } catch (err) {
-            logger.error('Error parsing custom_text_input_fields:', {
-              error: err.message,
-              value: template.custom_text_input_fields
-            });
+            logger.error('Error parsing custom_text_input_fields:', { error: err.message, value: template.custom_text_input_fields });
           }
         }
 
-        // Load template tags (both auto-generated and manually assigned)
-        template.tags = await getTemplateTagsWithDetails(template.template_id);
-
-        // Load manually assigned template tags
-        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
-
-        // Stitch facet information for template tags
-        if (template.template_tags && template.template_tags.length > 0) {
-          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-
-          // Get tag definitions first to get facet_id information
-          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
-
-          // Create lookup map for tag definitions
-          const tagDefinitionMap = new Map();
-          tagDefinitions.forEach(tagDef => {
-            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
-          });
-
-          // Get facet_ids from tag definitions and create facet lookup
-          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
-          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
-
-          // Create lookup map for facets
-          const facetMap = new Map();
-          facets.forEach(facet => {
-            facetMap.set(facet.facet_id, facet);
-          });
-
-          // Stitch the data together
+        template.tags = getTemplateTagsWithDetailsFromPrefetched(template.template_id, templateTagsMap, tagDefinitionMap);
+        template.template_tags = templateTagsMap.get(template.template_id) || [];
+        if (template.template_tags.length > 0) {
           template.template_tags.forEach(tag => {
             const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-
             if (tagDefinition) {
-              // Add tag definition data
               tag.tag_name = tagDefinition.tag_name;
               tag.tag_code = tagDefinition.tag_code;
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
-
-              // Get facet_id from tag definition (template_tags table doesn't store facet_id)
               const facetId = tagDefinition.facet_id;
               if (facetId) {
-                tag.facet_id = facetId; // Ensure facet_id is present
-
+                tag.facet_id = facetId;
                 const facet = facetMap.get(facetId);
                 if (facet) {
                   tag.facet_key = facet.facet_key;
@@ -1067,43 +1021,62 @@ exports.searchTemplates = async function (req, res) {
     }
 
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
-    const templates = await TemplateModel.searchTemplates(q, paginationParams.page, paginationParams.limit);
+    const status = req.query.status || null;
+    const templates = await TemplateModel.searchTemplates(q, paginationParams.page, paginationParams.limit, status);
 
-    // Generate presigned URLs if templates exist
+    // Batch fetch related data (no queries in loop); stitch in controller
     if (templates.length) {
       const storage = StorageFactory.getProvider();
+      const templateIds = templates.map(t => t.template_id);
+
+      const allClips = await TemplateModel.getTemplateAiClipsForMultipleTemplates(templateIds);
+      const clipsMap = new Map();
+      allClips.forEach(clip => {
+        if (!clipsMap.has(clip.template_id)) clipsMap.set(clip.template_id, []);
+        clipsMap.get(clip.template_id).push(clip);
+      });
+
+      const allTemplateTags = await TemplateModel.getTemplateTagsForMultipleTemplates(templateIds);
+      const templateTagsMap = new Map();
+      allTemplateTags.forEach(tag => {
+        if (!templateTagsMap.has(tag.template_id)) templateTagsMap.set(tag.template_id, []);
+        templateTagsMap.get(tag.template_id).push(tag);
+      });
+
+      const allTtdIds = [...new Set(allTemplateTags.map(t => t.ttd_id))];
+      const tagDefinitions = allTtdIds.length > 0
+        ? await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(allTtdIds) : [];
+      const tagDefinitionMap = new Map();
+      tagDefinitions.forEach(td => tagDefinitionMap.set(td.ttd_id, td));
+
+      const allFacetIds = [...new Set(tagDefinitions.map(td => td.facet_id).filter(Boolean))];
+      const facets = allFacetIds.length > 0
+        ? await TemplateTagFacetModel.getTemplateTagFacetsByIds(allFacetIds) : [];
+      const facetMap = new Map();
+      facets.forEach(f => facetMap.set(f.facet_id, f));
 
       await Promise.all(templates.map(async (template) => {
-        // Generate R2 URL for template thumbnail
         if (template.cf_r2_key) {
           template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
         } else {
           template.r2_url = template.cf_r2_url;
         }
 
-        // Load AI clips for all templates
-        template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
-
-        // Generate R2 URLs for AI clip assets
-        if (template.clips && template.clips.length > 0) {
+        template.clips = clipsMap.get(template.template_id) || [];
+        if (template.clips.length > 0) {
           template.clips = template.clips.map(clip => {
-            // Generate R2 URL for template image asset
             if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
               clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
             }
-
-            // Generate R2 URL for video file asset
             if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
               clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
             }
-
-            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
             if (Array.isArray(clip.workflow)) {
               clip.workflow = clip.workflow.map(step => {
                 if (!step || !Array.isArray(step.data)) return step;
                 step.data = step.data.map(item => {
                   const itemType = String(item?.type || '').toLowerCase();
-                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+                  if (itemType === 'file_upload' && item?.value?.asset_key) {
                     item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
                   }
                   return item;
@@ -1111,21 +1084,14 @@ exports.searchTemplates = async function (req, res) {
                 return step;
               });
             }
-
             return clip;
           });
         }
 
-        // Fallback compute of image uploads required if not present or invalid
-        if (
-          template.image_uploads_required === undefined ||
-          template.image_uploads_required === null ||
-          Number.isNaN(Number(template.image_uploads_required))
-        ) {
+        if (template.image_uploads_required === undefined || template.image_uploads_required === null || Number.isNaN(Number(template.image_uploads_required))) {
           template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
         }
 
-        // Generate R2 URLs for template assets
         if (template.color_video_key && template.color_video_bucket) {
           template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
         }
@@ -1136,108 +1102,57 @@ exports.searchTemplates = async function (req, res) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
         }
 
-        // Generate presigned download URL for thumb_frame if available
         if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
           try {
             const isPublic = template.thumb_frame_bucket === 'public' ||
               template.thumb_frame_bucket === storage.publicBucket ||
               template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-
             if (isPublic) {
               template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
             } else {
               template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
             }
           } catch (error) {
-            logger.error('Error generating thumb_frame presigned URL:', {
-              error: error.message,
-              template_id: template.template_id,
-              thumb_frame_asset_key: template.thumb_frame_asset_key,
-              thumb_frame_bucket: template.thumb_frame_bucket
-            });
+            logger.error('Error generating thumb_frame presigned URL:', { error: error.message, template_id: template.template_id });
             template.thumb_frame_url = null;
           }
         }
 
-        // Parse JSON fields if they are strings
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
             template.faces_needed = JSON.parse(template.faces_needed);
           } catch (err) {
-            logger.error('Error parsing faces_needed:', {
-              error: err.message,
-              value: template.faces_needed
-            });
+            logger.error('Error parsing faces_needed:', { error: err.message, value: template.faces_needed });
           }
         }
-
         if (template.additional_data && typeof template.additional_data === 'string') {
           try {
             template.additional_data = JSON.parse(template.additional_data);
           } catch (err) {
-            logger.error('Error parsing additional_data:', {
-              error: err.message,
-              value: template.additional_data
-            });
+            logger.error('Error parsing additional_data:', { error: err.message, value: template.additional_data });
           }
         }
-
         if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
           try {
             template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
           } catch (err) {
-            logger.error('Error parsing custom_text_input_fields:', {
-              error: err.message,
-              value: template.custom_text_input_fields
-            });
+            logger.error('Error parsing custom_text_input_fields:', { error: err.message, value: template.custom_text_input_fields });
           }
         }
 
-        // Load template tags (both auto-generated and manually assigned)
-        template.tags = await getTemplateTagsWithDetails(template.template_id);
-
-        // Load manually assigned template tags
-        template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
-
-        // Stitch facet information for template tags
-        if (template.template_tags && template.template_tags.length > 0) {
-          const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-
-          // Get tag definitions first to get facet_id information
-          const tagDefinitions = await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds);
-
-          // Create lookup map for tag definitions
-          const tagDefinitionMap = new Map();
-          tagDefinitions.forEach(tagDef => {
-            tagDefinitionMap.set(tagDef.ttd_id, tagDef);
-          });
-
-          // Get facet_ids from tag definitions and create facet lookup
-          const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
-          const facets = await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds);
-
-          // Create lookup map for facets
-          const facetMap = new Map();
-          facets.forEach(facet => {
-            facetMap.set(facet.facet_id, facet);
-          });
-
-          // Stitch the data together
+        template.tags = getTemplateTagsWithDetailsFromPrefetched(template.template_id, templateTagsMap, tagDefinitionMap);
+        template.template_tags = templateTagsMap.get(template.template_id) || [];
+        if (template.template_tags.length > 0) {
           template.template_tags.forEach(tag => {
             const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-
             if (tagDefinition) {
-              // Add tag definition data
               tag.tag_name = tagDefinition.tag_name;
               tag.tag_code = tagDefinition.tag_code;
               tag.tag_description = tagDefinition.tag_description;
               tag.is_active = tagDefinition.is_active;
-
-              // Get facet_id from tag definition (template_tags table doesn't store facet_id)
               const facetId = tagDefinition.facet_id;
               if (facetId) {
-                tag.facet_id = facetId; // Ensure facet_id is present
-
+                tag.facet_id = facetId;
                 const facet = facetMap.get(facetId);
                 if (facet) {
                   tag.facet_key = facet.facet_key;

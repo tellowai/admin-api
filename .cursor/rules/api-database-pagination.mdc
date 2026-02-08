@@ -1,0 +1,25 @@
+---
+description: API database and pagination conventions — no joins, no queries in loops, batch queries, pagination returns data only
+globs: modules/**/*.controller.js,modules/**/*.model.js,modules/**/services/*.js
+alwaysApply: false
+---
+
+# API database and pagination conventions
+
+When writing or modifying API controllers, models, and services:
+
+## Queries and data loading
+
+1. **Do not use SQL JOINs.** Use simple single-table queries and stitch related data in the controller or a service layer (e.g. fetch list by IDs, then batch fetch related entities by those IDs, then assign in memory).
+
+2. **Do not use performance-dampening queries.** Prefer indexed filters (e.g. by id, status, `archived_at`), limit/offset pagination, and avoid heavy aggregations or full scans unless necessary.
+
+3. **Do not run queries inside loops.** For lists of entities that need related data:
+   - Collect parent IDs from the list.
+   - Run one batch query per relation (e.g. `getXForMultipleIds(ids)`).
+   - Build maps (e.g. `Map<id, entity[]>`).
+   - In a loop over the list, only assign from the maps and do in-memory stitching (no `await` inside the loop for DB calls).
+
+## Pagination responses
+
+4. **Pagination responses must not include counts or totals.** Return only the data array (e.g. `{ data: items }`). Do not add `total`, `total_pages`, `totalCount`, or similar. Clients can infer “more pages” from the page size (e.g. if `data.length < page_size`, there is no next page).
