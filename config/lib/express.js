@@ -10,6 +10,8 @@ const i18nextBackend = require('i18next-fs-backend')
 var config = require('../config');
 var passport = require('passport');
 var session = require('express-session');
+var RedisStore = require('connect-redis')(session);
+var redisClient = require('./redis').redisClient;
 const multer = require('multer');
 
 
@@ -46,8 +48,12 @@ module.exports.initMiddleware = function (app) {
 
   app.use(i18nextMiddleware.handle(i18next));
 
-  // Authentication configuration
+  // Authentication configuration — use Redis store in production (avoids MemoryStore warning and scales)
+  var sessionStore = redisClient
+    ? new RedisStore({ client: redisClient, prefix: (config.redis.projectPrefix || config.redis.sessionPrefix || '') + 'sess:' })
+    : undefined;
   app.use(session({
+    store: sessionStore,
     resave: false,
     saveUninitialized: true,
     secret: config.redis.sessionSecret

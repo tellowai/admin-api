@@ -2,8 +2,8 @@
 
 module.exports = {
   app: {
-		title: 'Photobop admin API',
-		description: 'Admin API for Photobop app'
+		title: 'Tellow AI admin API',
+		description: 'Admin API for Tellow AI'
 	},
 	port: 5000
 };

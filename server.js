@@ -4,6 +4,11 @@ process.on('warning', (warning) => {
       warning.message.includes('punycode')) {
     return;
   }
+  // express-session MemoryStore warning when no Redis store is used (e.g. Redis unavailable)
+  if (warning.message && typeof warning.message === 'string' &&
+      warning.message.includes('MemoryStore') && warning.message.includes('production')) {
+    return;
+  }
   console.warn(warning);
 });
 
@@ -35,6 +40,7 @@ async function startServer() {
   // initSocketIo(server); 
   
   server.listen(config.appPort, function () {
+    
     console.log(
       chalk.green(config.app.title + " is running on port " + config.appPort)
     );
