@@ -1,0 +1,8 @@
+{
+  "LANGUAGE_LIST_FAILED": "Failed to fetch languages",
+  "LANGUAGE_NOT_FOUND": "Language not found",
+  "LANGUAGE_CREATED": "Language created successfully",
+  "LANGUAGE_UPDATED": "Language updated successfully",
+  "LANGUAGE_ARCHIVED": "Language archived successfully",
+  "LANGUAGE_CODE_EXISTS": "A language with this code already exists"
+}
