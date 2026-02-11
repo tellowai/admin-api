@@ -59,10 +59,25 @@ exports.list = async function (req, res) {
       };
     }), 'amp_id');
 
-    const result = models.map(model => ({
-      ...model,
-      provider: providersMap[model.amp_id] || null
-    }));
+    const result = models.map(model => {
+      // Ensure pricing_config is returned as a proper JSON object, not a string
+      let parsedPricingConfig = model.pricing_config;
+      if (typeof parsedPricingConfig === 'string') {
+        try { parsedPricingConfig = JSON.parse(parsedPricingConfig); } catch (e) { /* keep as-is */ }
+      }
+
+      let parsedParameterSchema = model.parameter_schema;
+      if (typeof parsedParameterSchema === 'string') {
+        try { parsedParameterSchema = JSON.parse(parsedParameterSchema); } catch (e) { /* keep as-is */ }
+      }
+
+      return {
+        ...model,
+        pricing_config: parsedPricingConfig,
+        parameter_schema: parsedParameterSchema,
+        provider: providersMap[model.amp_id] || null
+      };
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json(result);
   } catch (err) {
@@ -151,6 +166,14 @@ exports.read = async function (req, res) {
       }));
     } else {
       model.io_definitions = [];
+    }
+
+    // Ensure JSON columns are returned as objects, not strings
+    if (typeof model.pricing_config === 'string') {
+      try { model.pricing_config = JSON.parse(model.pricing_config); } catch (e) { /* keep as-is */ }
+    }
+    if (typeof model.parameter_schema === 'string') {
+      try { model.parameter_schema = JSON.parse(model.parameter_schema); } catch (e) { /* keep as-is */ }
     }
 
     return res.status(HTTP_STATUS_CODES.OK).json(model);
@@ -297,6 +320,16 @@ exports.update = async function (req, res) {
         created_at: undefined,
         updated_at: undefined
       };
+
+      // Ensure JSON columns are proper objects before createAiModel (which calls JSON.stringify).
+      // existingModel fields come from the DB as strings; if not overridden by updateData
+      // they'd be double-stringified by createAiModel.
+      if (typeof newModelData.pricing_config === 'string') {
+        try { newModelData.pricing_config = JSON.parse(newModelData.pricing_config); } catch (e) { /* keep as-is */ }
+      }
+      if (typeof newModelData.parameter_schema === 'string') {
+        try { newModelData.parameter_schema = JSON.parse(newModelData.parameter_schema); } catch (e) { /* keep as-is */ }
+      }
 
       // 4. Create New Model
       const createResult = await aiRegistryModel.createAiModel(newModelData);
