@@ -37,14 +37,14 @@ exports.getLoggedInUserData = async function (req, res) {
 
   var userId = req.user.userId;
   var options = {
-    select : [
-      'user_id', 
-      'email', 
+    select: [
+      'user_id',
+      'email',
       'mobile',
-      'profile_pic', 
-      'first_name', 
-      'middle_name', 
-      'last_name', 
+      'profile_pic',
+      'first_name',
+      'middle_name',
+      'last_name',
       'display_name',
       'gender',
       'dob',
@@ -55,32 +55,38 @@ exports.getLoggedInUserData = async function (req, res) {
 
   const loggedInUserData = await UserDbo.getUserByUserId(userId, options);
 
-  if(loggedInUserData.mobile) {
+  if (!loggedInUserData) {
+    return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+      message: 'User not found or inactive'
+    });
+  }
+
+  if (loggedInUserData.mobile) {
     loggedInUserData.phone = loggedInUserData.mobile;
   }
 
-  if(loggedInUserData.dob) {
+  if (loggedInUserData.dob) {
     loggedInUserData.dob = moment(loggedInUserData.dob).format('MM/DD/YYYY');
   }
 
   // Fetch user roles and permissions
   try {
     const { roles, permissions } = await RbacModel.getUserRolesAndPermissions(userId);
-    
+
     // Add roles and permissions to response
     loggedInUserData.roles = roles.map(r => ({
       role_id: r.role_id,
       role_name: r.role_name,
       role_description: r.role_description
     }));
-    
+
     loggedInUserData.permissions = permissions.map(p => ({
       permission_id: p.admin_permission_id,
       permission_code: p.permission_code,
       permission_name: p.permission_name,
       permission_description: p.permission_description
     }));
-    
+
     // Add permission codes array for easier frontend checking
     loggedInUserData.permission_codes = permissions.map(p => p.permission_code);
   } catch (error) {
