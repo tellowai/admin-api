@@ -72,6 +72,12 @@ exports.loginWithOAuthGoogle = function (req, res) {
       }
     }
 
+    if (!userData) {
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+        message: req.t('user:AUTHENTICATION_FAILED') || 'Authentication failed'
+      });
+    }
+
     const clientIp = requestIp.getClientIp(req);
 
     // If user doesn't exist --> register user --> then login
