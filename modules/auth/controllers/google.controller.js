@@ -17,7 +17,7 @@ var HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.control
 var DeviceDetector = require("device-detector-js");
 const { OAuth2Client } = require('google-auth-library');
 const googleUtils = require('./passport/strategies/google.strategy');
-const { createId } =  require('@paralleldrive/cuid2');
+const { createId } = require('@paralleldrive/cuid2');
 var EmailCtrl = require('../../core/controllers/email.controller');
 var emailConfig = require('../config/email.json');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
@@ -36,34 +36,34 @@ const moment = require('moment');
   **/
 
 exports.loginWithOAuthGoogle = function (req, res) {
-  passport.authenticate('google', function(err, userData) {
+  passport.authenticate('google', function (err, userData) {
 
-    if(err) {
+    if (err) {
 
       const errMsg = req.t('SOMETHING_WENT_WRONG') + ' ' +
         req.t('PLEASE_TRY_AGAIN');
-      
-        var responsePayload = {
-        message : req.t('facebook:AUTH_CODE_ALREADY_USED')
+
+      var responsePayload = {
+        message: req.t('facebook:AUTH_CODE_ALREADY_USED')
       };
 
-      if(err.name && err.name == 'TokenError') {
+      if (err.name && err.name == 'TokenError') {
         return res.status(
           HTTP_CODES.BAD_REQUEST
         ).json(responsePayload);
       } else if (err.name && err.name == 'UserVerifyError') {
-        var query = {error:err.name}
-        
+        var query = { error: err.name }
+
         return res.status(
           HTTP_CODES.UNAUTHORIZED
         ).redirect(url.format({
-          pathname:config.creatorsWebDomainLoginUrl,
-          query:query
+          pathname: config.creatorsWebDomainLoginUrl,
+          query: query
         }));
       } else {
 
         var responsePayload = {
-          message : err
+          message: err
         };
 
         return res.status(
@@ -72,14 +72,14 @@ exports.loginWithOAuthGoogle = function (req, res) {
       }
     }
 
-    const clientIp = requestIp.getClientIp(req); 
+    const clientIp = requestIp.getClientIp(req);
 
     // If user doesn't exist --> register user --> then login
-    if(!userData.existingUserData.length) {
+    if (!userData.existingUserData.length) {
       return res.status(
         HTTP_STATUS_CODES.BAD_REQUEST
       ).json({
-        message : req.t('user:NOT_AN_ADMIN')
+        message: req.t('user:NOT_AN_ADMIN')
       });
     } else {
 
@@ -91,62 +91,71 @@ exports.loginWithOAuthGoogle = function (req, res) {
 
       var userEmail = userData.userDataFromGoogle.email;
       var userId = userData.existingUserData[0].user_id;
+
+      if (!userId) {
+        return res.status(
+          HTTP_STATUS_CODES.BAD_REQUEST
+        ).json({
+          message: req.t('user:USER_NOT_FOUND')
+        });
+      }
+
       var options = {
-        select : ['email', 'user_id']
+        select: ['email', 'user_id']
       };
 
       AuthDbo.getUserDataByEmail(userEmail, options, function (err, loggedInUserData) {
-      
-        if(err) {
+
+        if (err) {
 
           var responsePayload = {
-            message : err.message
+            message: err.message
           };
 
           return res.status(
             err.httpStatusCode
           ).json(responsePayload);
         }
-        
-        // This email exists -> not a new email
-        if(loggedInUserData.length) {
 
-          UserDbo.getAdminUserRoleByUserId(userId,  function (err, adminUserData) {
-            if(err) {
-  
+        // This email exists -> not a new email
+        if (loggedInUserData.length) {
+
+          UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
+            if (err) {
+
               var responsePayload = {
-                message : err.message
+                message: err.message
               };
-    
+
               return res.status(
                 err.httpStatusCode
               ).json(responsePayload);
             }
-  
-            if(!adminUserData) {
-  
+
+            if (!adminUserData) {
+
               var responsePayload = {
-                message : req.t('user:NOT_AN_ADMIN')
+                message: req.t('user:NOT_AN_ADMIN')
               };
-    
+
               return res.status(
                 HTTP_STATUS_CODES.UNAUTHORIZED
               ).json(responsePayload);
             }
-  
+
             var userDataForJWT = {
-              user_id : userId
+              user_id: userId
             };
 
             TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
 
-              if(err) {
-          
+              if (err) {
+
                 const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
                 var responsePayload = {
-                  message : errMsg
+                  message: errMsg
                 };
-          
+
                 res.status(
                   HTTP_STATUS_CODES.BAD_REQUEST
                 ).json(responsePayload);
@@ -158,7 +167,7 @@ exports.loginWithOAuthGoogle = function (req, res) {
                 userLoginDeviceData.clientIp = clientIp;
 
                 AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-          
+
                   // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
                   // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
                 });
@@ -174,25 +183,25 @@ exports.loginWithOAuthGoogle = function (req, res) {
                   }],
                   'logged_in'
                 );
-          
+
                 var responsePayload = {
-                  accessToken : tokenData.jwtToken,
-                  refreshToken : tokenData.encryptedRT,
-                  rsid : tokenData.redisRefreshTokenObj.rsid
+                  accessToken: tokenData.jwtToken,
+                  refreshToken: tokenData.encryptedRT,
+                  rsid: tokenData.redisRefreshTokenObj.rsid
                 };
-                
+
                 return res.cookie('accessToken', tokenData.jwtToken, {
-                  httpOnly : true,
-                  maxAge : config.jwt.expiresInMilliseconds
+                  httpOnly: true,
+                  maxAge: config.jwt.expiresInMilliseconds
                 }).cookie('refreshToken', tokenData.encryptedRT, {
-                  httpOnly : true,
-                  maxAge : config.refreshToken.expiresInMilliseconds
+                  httpOnly: true,
+                  maxAge: config.refreshToken.expiresInMilliseconds
                 }).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, {
-                  httpOnly : true,
-                  maxAge : config.refreshToken.expiresInMilliseconds
+                  httpOnly: true,
+                  maxAge: config.refreshToken.expiresInMilliseconds
                 }).cookie('sessIat', moment().unix(), {
-                  httpOnly : true,
-                  maxAge : config.jwt.expiresInMilliseconds
+                  httpOnly: true,
+                  maxAge: config.jwt.expiresInMilliseconds
                 }).status(
                   HTTP_STATUS_CODES.OK
                 ).redirect(config.clientDomainUrl + "/");
@@ -204,37 +213,37 @@ exports.loginWithOAuthGoogle = function (req, res) {
           // This email does not exist -> new email
           async.waterfall([
             function registerSecondaryEmail(next) {
-              
+
               var rawDataForSecondayEmail = {
-                email : userEmail,
-                user_id : userId
+                email: userEmail,
+                user_id: userId
               }
 
               var secondaryEmailObj = getSecondaryEmailData(rawDataForSecondayEmail)
 
               UserDbo.registerSecondaryEmail(secondaryEmailObj, function (err, registeredUserProvider) {
-        
+
                 // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE JUST TRYING TO INSERT NEW EMAIL
                 // ONLY IF EMAIL DOES NOT EXIST. WHEN THIS EMAIL IS ALREADY EXISTS ON DB
                 // DB THROWS DUP_ENTRY ERROR. WE DO NOT NEED TO HANDLE IT SPECIFICALLY
 
-                return next(null); 
+                return next(null);
               });
             }, function (next) {
-            
+
               var userDataForJWT = {
-                user_id : userId
+                user_id: userId
               };
 
               TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
 
-                if(err) {
-            
+                if (err) {
+
                   const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
                   var responsePayload = {
-                    message : errMsg
+                    message: errMsg
                   };
-            
+
                   return res.status(
                     HTTP_STATUS_CODES.BAD_REQUEST
                   ).json(responsePayload);
@@ -244,33 +253,33 @@ exports.loginWithOAuthGoogle = function (req, res) {
                   userLoginDeviceData.userId = userId;
                   userLoginDeviceData.tokenData = tokenData;
                   userLoginDeviceData.clientIp = clientIp;
-    
+
                   AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-            
+
                     // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
                     // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
                   });
-            
+
                   var tokenPayload = {
-                    accessToken : tokenData.jwtToken,
-                    refreshToken : tokenData.encryptedRT,
-                    rsid : tokenData.redisRefreshTokenObj.rsid
+                    accessToken: tokenData.jwtToken,
+                    refreshToken: tokenData.encryptedRT,
+                    rsid: tokenData.redisRefreshTokenObj.rsid
                   };
 
                   // return next(null, tokenPayload);
-                  
+
                   return res.cookie('accessToken', tokenData.jwtToken, {
-                    httpOnly : true,
-                    maxAge : config.jwt.expiresInMilliseconds,
+                    httpOnly: true,
+                    maxAge: config.jwt.expiresInMilliseconds,
                   }).cookie('refreshToken', tokenData.encryptedRT, {
-                    httpOnly : true,
-                    maxAge : config.refreshToken.expiresInMilliseconds,
+                    httpOnly: true,
+                    maxAge: config.refreshToken.expiresInMilliseconds,
                   }).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, {
-                    httpOnly : true,
-                    maxAge : config.refreshToken.expiresInMilliseconds,
+                    httpOnly: true,
+                    maxAge: config.refreshToken.expiresInMilliseconds,
                   }).cookie('sessIat', moment().unix(), {
-                    httpOnly : true,
-                    maxAge : config.jwt.expiresInMilliseconds,
+                    httpOnly: true,
+                    maxAge: config.jwt.expiresInMilliseconds,
                   }).status(
                     HTTP_STATUS_CODES.OK
                   ).redirect(config.clientDomainUrl + "/");
@@ -278,13 +287,13 @@ exports.loginWithOAuthGoogle = function (req, res) {
               });
             }
           ], function (errObj, tokenPayload) {
-            
-            if(errObj) {
-            
+
+            if (errObj) {
+
               return res.status(
                 errObj.httpStatusCode
               ).json({
-                message : errObj.message
+                message: errObj.message
               });
             }
 
@@ -316,7 +325,7 @@ exports.loginWithGoogleToken = function (req, res) {
   const client = new OAuth2Client(CLIENT_ID);
   const token = req.body.credential;
   let userData = {};
-  const clientIp = requestIp.getClientIp(req); 
+  const clientIp = requestIp.getClientIp(req);
 
 
   async.waterfall([
@@ -329,9 +338,9 @@ exports.loginWithGoogleToken = function (req, res) {
         if (err) {
 
           var responsePayload = {
-            message : req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN')
+            message: req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN')
           };
-    
+
           return res.status(
             HTTP_CODES.BAD_REQUEST
           ).json(responsePayload);
@@ -349,41 +358,41 @@ exports.loginWithGoogleToken = function (req, res) {
       userData.userDataFromGoogle = userDataFromGoogle;
 
       next(null, userData);
-    }, 
+    },
     function checkNoOfAccountsInDb(userData, next) {
       let userDataFromGoogle = userData.userDataFromGoogle;
-      
+
       AuthDbo.getUserDataByEmail(
-        userDataFromGoogle.email, {select: 'email, user_id'}, function (err, matchingAcocunts) {
-    
-        if(err) {
-    
-          return next(err);
-        }
+        userDataFromGoogle.email, { select: 'email, user_id' }, function (err, matchingAcocunts) {
 
-        if(matchingAcocunts.length > 1) {
-          return res.status(
-            HTTP_STATUS_CODES.CONFLICT
-          ).json({
-            message : req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
-            email: userDataFromGoogle.email
-          });
-        }
+          if (err) {
 
-        userData.existingUserData = matchingAcocunts;
+            return next(err);
+          }
+
+          if (matchingAcocunts.length > 1) {
+            return res.status(
+              HTTP_STATUS_CODES.CONFLICT
+            ).json({
+              message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+              email: userDataFromGoogle.email
+            });
+          }
+
+          userData.existingUserData = matchingAcocunts;
 
 
-        next(null, userData);
-      });
+          next(null, userData);
+        });
     },
     // function checkInDb(userData, next) {
     //   let userDataFromGoogle = userData.userDataFromGoogle;
-      
+
     //   AuthDbo.getUserDataByProviderBackedUserId(
     //     userDataFromGoogle.user_id_from_provider, function (err, existingUserData) {
-    
+
     //     if(err) {
-    
+
     //       return next(err);
     //     }
 
@@ -393,21 +402,21 @@ exports.loginWithGoogleToken = function (req, res) {
     //   });
     // }, 
     function login(userData, next) {
-      if(!userData.existingUserData.length) {
+      if (!userData.existingUserData.length) {
         var userObjForRegistration = getRegistrationUserObjFromRawData(userData.userDataFromGoogle);
         var providerObjForRegistration = getRegistrationProviderObjFromRawData(userData.userDataFromGoogle);
-    
+
         async.waterfall([
           function registerUser(callback) {
-    
+
             UserDbo.registerUser(userObjForRegistration, function (err, registeredUserObj) {
-    
-              if(err) {
-    
+
+              if (err) {
+
                 var responsePayload = {
-                  message : err.message
+                  message: err.message
                 };
-    
+
                 return res.status(
                   err.httpStatusCode
                 ).json(responsePayload);
@@ -435,125 +444,125 @@ exports.loginWithGoogleToken = function (req, res) {
                 }],
                 'create_default_project'
               );
-    
-              return callback(null, registeredUserObj); 
+
+              return callback(null, registeredUserObj);
             });
           },
           function registerUserProvider(registeredUserObj, callback) {
-    
+
             UserDbo.registerUserProvider(providerObjForRegistration, function (err, registeredUserProvider) {
-    
-              if(err) {
-    
+
+              if (err) {
+
                 var responsePayload = {
-                  message : err.message
+                  message: err.message
                 };
-    
+
                 return res.status(
                   err.httpStatusCode
                 ).json(responsePayload);
               }
-    
+
               var finalRegisteredUserObj = {
                 registeredUserObj: userObjForRegistration,
                 registeredUserProvider: providerObjForRegistration
               }
-    
-              return callback(null, finalRegisteredUserObj); 
+
+              return callback(null, finalRegisteredUserObj);
             });
           },
           function generateLoginTokens(finalRegisteredUserObj, callback) {
-    
+
             var userDataForJWT = {
-              user_id : finalRegisteredUserObj.registeredUserObj.user_id
+              user_id: finalRegisteredUserObj.registeredUserObj.user_id
             };
             var userId = finalRegisteredUserObj.registeredUserObj.user_id;
-    
+
             TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, async function (err, tokenData) {
-    
-              if(err) {
-    
+
+              if (err) {
+
                 const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
                 var responsePayload = {
-                  message : errMsg
+                  message: errMsg
                 };
-    
+
                 return res.status(
                   err.httpStatusCode
                 ).json(responsePayload);
               } else {
-    
+
                 var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
                 userLoginDeviceData.userId = userId;
                 userLoginDeviceData.tokenData = tokenData;
                 userLoginDeviceData.clientIp = clientIp;
-    
+
                 AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-    
+
                   // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
                   // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
                 });
 
-                if(finalRegisteredUserObj.registeredUserObj.username && finalRegisteredUserObj.registeredUserObj.email) {
+                if (finalRegisteredUserObj.registeredUserObj.username && finalRegisteredUserObj.registeredUserObj.email) {
                   const emailVariables = {
                     username: "@" + finalRegisteredUserObj.registeredUserObj.username,
                   };
-    
+
                   await sendWelcomeEmail(finalRegisteredUserObj.registeredUserObj.email, emailVariables);
                 }
-    
+
                 var tokenPayload = {
                   firstTimeUser: true,
-                  accessToken : tokenData.jwtToken,
-                  refreshToken : tokenData.encryptedRT,
-                  rsid : tokenData.redisRefreshTokenObj.rsid,
+                  accessToken: tokenData.jwtToken,
+                  refreshToken: tokenData.encryptedRT,
+                  rsid: tokenData.redisRefreshTokenObj.rsid,
                   username: finalRegisteredUserObj.registeredUserObj.username,
                   displayName: finalRegisteredUserObj.registeredUserObj.display_name
                 };
-    
+
                 return callback(null, tokenPayload);
               }
             });
           }
         ], function (errObj, finalTokenObject) {
-    
-          if(errObj) {
-    
+
+          if (errObj) {
+
             return res.status(
               errObj.httpStatusCode
             ).json({
-              message : errObj.message
+              message: errObj.message
             });
           }
-    
+
           res.status(
             HTTP_STATUS_CODES.CREATED
           ).json(finalTokenObject);
         });
       } else {
-    
+
         // If user exists 
         // a) check if email provided from fb and in our db are same
         // b) if same --> login
         // c) if not same --> add this email in our db as secondary email
         // d) then login
-    
+
         var userEmail = userData.userDataFromGoogle.email;
         var userId = userData.existingUserData[0].user_id;
         var options = {
-          select : ['email', 'user_id']
+          select: ['email', 'user_id']
         };
         var userDataForJWT = {
-          user_id : userId
+          user_id: userId
         };
-  
+
         TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
 
-          if(err) {
+          if (err) {
 
             const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
             var responsePayload = {
-              message : errMsg
+              message: errMsg
             };
 
             res.status(
@@ -570,7 +579,7 @@ exports.loginWithGoogleToken = function (req, res) {
               // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
               // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
             });
-            
+
             // publish kafka event
             kafkaCtrl.sendMessage(
               TOPICS.AUTH_EVENT_LOGGED_IN,
@@ -584,9 +593,9 @@ exports.loginWithGoogleToken = function (req, res) {
             );
 
             var responsePayload = {
-              accessToken : tokenData.jwtToken,
-              refreshToken : tokenData.encryptedRT,
-              rsid : tokenData.redisRefreshTokenObj.rsid,
+              accessToken: tokenData.jwtToken,
+              refreshToken: tokenData.encryptedRT,
+              rsid: tokenData.redisRefreshTokenObj.rsid,
               username: userData.existingUserData[0].username
             };
 
@@ -598,13 +607,13 @@ exports.loginWithGoogleToken = function (req, res) {
       }
     }
   ], function (errObj, finalTokenObject) {
-  
-    if(errObj) {
+
+    if (errObj) {
 
       return res.status(
         errObj.httpStatusCode
       ).json({
-        message : errObj.message
+        message: errObj.message
       });
     }
 
@@ -615,7 +624,7 @@ exports.loginWithGoogleToken = function (req, res) {
 }
 
 function getRegistrationUserObjFromRawData(userDataFromProvider) {
-  
+
   var userObj = _.cloneDeep(userDataFromProvider);
   delete userObj.user_id_from_provider;
   userObj.is_email_verified = true;
@@ -647,84 +656,84 @@ function getSecondaryEmailData(rawData) {
 }
 
 function getLoggedInDeviceData(userAgenet, payload) {
-  
+
   var userLoginDeviceData = {};
-  
-  if(payload.deviceData) {
+
+  if (payload.deviceData) {
 
     var deviceData = payload.deviceData;
 
     userLoginDeviceData.device = {
-      model : deviceData.model,
-      brand : deviceData.brand
+      model: deviceData.model,
+      brand: deviceData.brand
     }
 
     userLoginDeviceData.os = {
-      os : deviceData.os,
-      os_version : deviceData.os_version
+      os: deviceData.os,
+      os_version: deviceData.os_version
     }
 
     userLoginDeviceData.client = {
-      client_type : deviceData.client_type,
-      client_version : deviceData.client_version,
-      client_major : deviceData.client_major,
-      client_ua : deviceData.client_ua,
-      client_engine : deviceData.client_engine
+      client_type: deviceData.client_type,
+      client_version: deviceData.client_version,
+      client_major: deviceData.client_major,
+      client_ua: deviceData.client_ua,
+      client_engine: deviceData.client_engine
     }
   } else {
 
     var ua = Parser(userAgenet);
 
     var loginClientDeviceData = {
-      brand : ua.device.vendor,
-      model : ua.device.model
+      brand: ua.device.vendor,
+      model: ua.device.model
     };
 
     var loginClientUserDeviceData = {
-      os : ua.os.name,
-      os_version : ua.os.version
+      os: ua.os.name,
+      os_version: ua.os.version
     };
 
     var loginClientData = {
-      client_type : 'browser',
-      client_version : ua.browser.version,
-      client_major : ua.browser.major,
-      client_ua : ua.ua,
-      client_engine : ua.engine
+      client_type: 'browser',
+      client_version: ua.browser.version,
+      client_major: ua.browser.major,
+      client_ua: ua.ua,
+      client_engine: ua.engine
     };
 
-    if(!loginClientDeviceData.brand || loginClientDeviceData.brand == '') {
+    if (!loginClientDeviceData.brand || loginClientDeviceData.brand == '') {
 
       var DD = new DeviceDetector();
       var device = DD.parse(ua.ua);
 
-      if(device.device && device.device.brand) {
+      if (device.device && device.device.brand) {
         loginClientDeviceData.brand = device.device.brand
       }
 
-      if(ua.os.name && ua.os.name.toLocaleLowerCase() == 'mac os') {
-        
+      if (ua.os.name && ua.os.name.toLocaleLowerCase() == 'mac os') {
+
         loginClientDeviceData.model = "MacBook";
       }
     }
 
-    if(!loginClientDeviceData.model || loginClientDeviceData.model == '') {
+    if (!loginClientDeviceData.model || loginClientDeviceData.model == '') {
 
       var DD = new DeviceDetector();
       var device = DD.parse(ua.ua);
 
-      if(device.device && device.device.model) {
+      if (device.device && device.device.model) {
         loginClientDeviceData.model = device.device.model
       }
     }
 
     userLoginDeviceData = {
-      device : loginClientDeviceData,
-      os : loginClientUserDeviceData,
-      client : loginClientData
+      device: loginClientDeviceData,
+      os: loginClientUserDeviceData,
+      client: loginClientData
     }
   }
-  
+
   return userLoginDeviceData;
 }
 
