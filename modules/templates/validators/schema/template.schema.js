@@ -124,7 +124,8 @@ const createTemplateSchema = Joi.object().keys({
       reference_image: Joi.object({
         asset_key: Joi.string().optional(),
         bucket: Joi.string().optional()
-      }).allow(null).optional()
+      }).allow(null).optional(),
+      skip_user_input: Joi.boolean().default(false).optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
@@ -214,7 +215,8 @@ const updateTemplateSchema = Joi.object().keys({
       }).allow(null).optional(),
       variable_key: Joi.string().allow(null, '').optional(),
       label: Joi.string().allow(null, '').optional(),
-      clip_index: Joi.number().integer().min(0).allow(null).optional()
+      clip_index: Joi.number().integer().min(0).allow(null).optional(),
+      skip_user_input: Joi.boolean().default(false).optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),

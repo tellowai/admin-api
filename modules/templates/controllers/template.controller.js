@@ -1478,10 +1478,10 @@ exports.createTemplate = async function (req, res) {
           const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
           templateData.image_uploads_required = imageCount;
           templateData.video_uploads_required = videoCount;
-          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
-          templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
           const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
           templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, templateData.image_input_fields_json);
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, templateData.image_input_fields_json);
+          templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template', {
@@ -2053,7 +2053,7 @@ function computeTotalAssetCountsFromBodymovin(bodymovinJson) {
  * @param {Object} bodymovinJson - Parsed Bodymovin JSON
  * @returns {Array}
  */
-function generateImageUploadsJsonFromBodymovin(bodymovinJson) {
+function generateImageUploadsJsonFromBodymovin(bodymovinJson, imageInputFields = []) {
   try {
     const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
     const imageAssets = assets.filter(a => {
@@ -2061,11 +2061,19 @@ function generateImageUploadsJsonFromBodymovin(bodymovinJson) {
       const name = String(a.p).toLowerCase();
       return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
     });
-    return imageAssets.map((_, index) => ({
-      clip_index: 1,
-      step_index: index,
-      gender: 'unisex'
-    }));
+    return imageAssets.map((asset, index) => {
+      // Find corresponding field config
+      const id = (asset.id != null && asset.id !== '') ? String(asset.id) : `image_${index}`;
+      const fieldConfig = imageInputFields.find(f => f.image_id === id);
+      const skip = fieldConfig ? (fieldConfig.skip_user_input || false) : false;
+
+      return {
+        clip_index: 1,
+        step_index: index,
+        gender: 'unisex',
+        skip_user_input: skip
+      };
+    });
   } catch (_e) {
     return [];
   }
@@ -2107,11 +2115,12 @@ function generateImageInputFieldsJsonFromBodymovin(bodymovinJson) {
       return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
     });
     return imageAssets.map((a, index) => ({
-      image_id: String(a.id),
+      image_id: (a.id != null && a.id !== '') ? String(a.id) : `image_${index}`,
       layer_name: a.nm || a.p || String(a.id),
       field_code: `image_${index}`,
       user_input_field_name: null,
-      field_data_type: 'photo'
+      field_data_type: 'photo',
+      skip_user_input: false
     }));
   } catch (_e) {
     return [];
@@ -2138,7 +2147,8 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
       reference_image: (req && req.reference_image != null) ? req.reference_image : entry.reference_image,
       variable_key: (req && (req.variable_key != null && req.variable_key !== '')) ? req.variable_key : entry.variable_key,
       label: (req && (req.label != null && req.label !== '')) ? req.label : entry.label,
-      clip_index: (req && req.clip_index != null) ? req.clip_index : entry.clip_index
+      clip_index: (req && req.clip_index != null) ? req.clip_index : entry.clip_index,
+      skip_user_input: (req && req.skip_user_input != null) ? req.skip_user_input : entry.skip_user_input
     };
   });
 }
@@ -2738,11 +2748,37 @@ exports.updateTemplate = async function (req, res) {
           const { imageCount } = computeAssetCountsFromBodymovin(bodymovinJson);
           templateData.image_uploads_required = imageCount;
           templateData.video_uploads_required = 0;
-          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
+
+          const existingFromRequest = templateData.image_input_fields_json;
+          // Determine effective image_input_fields_json to use for uploads generation
+          let effectiveImageInputFields = [];
+
+          if (existingFromRequest) {
+            effectiveImageInputFields = existingFromRequest;
+            // Ensure parsed if string (defensive)
+            if (typeof effectiveImageInputFields === 'string') {
+              try { effectiveImageInputFields = JSON.parse(effectiveImageInputFields); } catch (e) { effectiveImageInputFields = []; }
+            }
+          } else if (existingTemplate.image_input_fields_json) {
+            effectiveImageInputFields = existingTemplate.image_input_fields_json;
+            if (typeof effectiveImageInputFields === 'string') {
+              try {
+                effectiveImageInputFields = JSON.parse(effectiveImageInputFields);
+              } catch (e) {
+                effectiveImageInputFields = [];
+              }
+            }
+          }
+
+          // Use the merge logic to get the final image_input_fields_json
+          const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
+          const finalImageInputFields = mergeImageInputFieldsFromRequest(fromBodymovin, effectiveImageInputFields);
+
+          templateData.image_input_fields_json = finalImageInputFields;
+
+          // Generate uploads using the finalized fields (ensures skip_user_input is carried over)
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, finalImageInputFields);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
-          // const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
-          // const existingFromRequest = templateData.image_input_fields_json;
-          // templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, existingFromRequest ?? existingTemplate.image_input_fields_json);
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template update', {
