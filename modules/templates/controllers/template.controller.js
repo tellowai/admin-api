@@ -2746,8 +2746,8 @@ exports.updateTemplate = async function (req, res) {
 
           // Always populate upload fields from bodymovin JSON
           const { imageCount } = computeAssetCountsFromBodymovin(bodymovinJson);
-          templateData.image_uploads_required = imageCount;
-          templateData.video_uploads_required = 0;
+          // image_uploads_required is now calculated from finalImageInputFields below
+          // video_uploads_required is set to 0 below
 
           const existingFromRequest = templateData.image_input_fields_json;
           // Determine effective image_input_fields_json to use for uploads generation
@@ -2775,6 +2775,12 @@ exports.updateTemplate = async function (req, res) {
           const finalImageInputFields = mergeImageInputFieldsFromRequest(fromBodymovin, effectiveImageInputFields);
 
           templateData.image_input_fields_json = finalImageInputFields;
+
+          // Calculate image_uploads_required based on finalImageInputFields
+          // Count fields where skip_user_input is false or undefined
+          const activeImageFields = finalImageInputFields.filter(f => !f.skip_user_input);
+          templateData.image_uploads_required = activeImageFields.length;
+          templateData.video_uploads_required = 0;
 
           // Generate uploads using the finalized fields (ensures skip_user_input is carried over)
           templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, finalImageInputFields);
