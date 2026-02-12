@@ -296,6 +296,15 @@ const ensureAiClipsSchema = Joi.object().keys({
   clips: Joi.array().items(ensureAiClipsClipSchema).min(1).required()
 });
 
+const reorderClipsSchema = Joi.object().keys({
+  clips: Joi.array().items(
+    Joi.object({
+      tac_id: Joi.string().required(),
+      clip_index: Joi.number().integer().min(0).required()
+    })
+  ).min(1).required()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.createDraftTemplateSchema = createDraftTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
@@ -306,3 +315,4 @@ exports.bulkUpdateTemplatesStatusSchema = bulkUpdateTemplatesStatusSchema;
 exports.exportTemplatesSchema = exportTemplatesSchema;
 exports.importTemplatesSchema = importTemplatesSchema;
 exports.ensureAiClipsSchema = ensureAiClipsSchema;
+exports.reorderClipsSchema = reorderClipsSchema;

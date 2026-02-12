@@ -1347,3 +1347,44 @@ exports.updateTemplateImageInputsFromClips = async function (templateId) {
   `;
   await mysqlQueryRunner.runQueryInMaster(updateQuery, [totalNodes, JSON.stringify(currentFields), templateId]);
 };
+
+/**
+ * Update the order (clip_index) of template AI clips.
+ * @param {string} templateId - The template UUID.
+ * @param {Array<{tac_id: string, clip_index: number}>} clips - Array of clip objects with new indices.
+ */
+exports.updateTemplateClipOrder = async function (templateId, clips) {
+  if (!clips || clips.length === 0) return;
+
+  const caseParts = [];
+  const queryParams = [];
+  // For IN clause
+  const inParams = [];
+
+  clips.forEach((clip) => {
+    // DB stores 1-based index, incoming is 0-based
+    const dbIndex = clip.clip_index + 1;
+
+    caseParts.push('WHEN ? THEN ?');
+    queryParams.push(clip.tac_id, dbIndex);
+    inParams.push(clip.tac_id);
+  });
+
+  // Add template_id (for WHERE clause)
+  queryParams.push(templateId);
+
+  // Add tac_ids for IN clause
+  queryParams.push(...inParams);
+
+  const placeholders = inParams.map(() => '?').join(', ');
+
+  const query = `
+    UPDATE template_ai_clips
+    SET clip_index = CASE tac_id ${caseParts.join(' ')} END
+    WHERE template_id = ?
+    AND tac_id IN (${placeholders})
+    AND deleted_at IS NULL
+  `;
+
+  await mysqlQueryRunner.runQueryInMaster(query, queryParams);
+};

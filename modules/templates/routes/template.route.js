@@ -52,6 +52,14 @@ module.exports = function (app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/:templateId/reorder-clips'
+  ).patch(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateReorderClipsData,
+    TemplateCtrl.reorderTemplateClips
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId'
   ).patch(
     AuthMiddleware.isAuthorizedJWT,

@@ -803,6 +803,36 @@ exports.ensureTemplateAiClips = async function (req, res) {
 };
 
 /**
+ * Reorder template AI clips based on a list of tac_ids.
+ * Body: { clip_ids: [ "tac_id_1", "tac_id_2", ... ] }
+ */
+exports.reorderTemplateClips = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const { clips } = req.validatedBody;
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    await TemplateModel.updateTemplateClipOrder(templateId, clips);
+
+    // Also trigger image input field refresh since clip order changed
+    await TemplateModel.updateTemplateImageInputsFromClips(templateId);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Clips reordered successfully'
+    });
+  } catch (error) {
+    logger.error('Error reordering template clips:', { error: error.message, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
  * @api {get} /templates/archived List archived templates
  * @apiVersion 1.0.0
  * @apiName ListArchivedTemplates
