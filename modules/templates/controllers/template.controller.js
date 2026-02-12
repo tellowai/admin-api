@@ -2735,9 +2735,9 @@ exports.updateTemplate = async function (req, res) {
           templateData.total_texts_count = total_texts_count;
 
           // Always populate upload fields from bodymovin JSON
-          const { imageCount, videoCount } = computeAssetCountsFromBodymovin(bodymovinJson);
+          const { imageCount } = computeAssetCountsFromBodymovin(bodymovinJson);
           templateData.image_uploads_required = imageCount;
-          templateData.video_uploads_required = videoCount;
+          templateData.video_uploads_required = 0;
           templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
           // const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
