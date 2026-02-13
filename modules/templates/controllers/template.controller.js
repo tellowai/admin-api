@@ -20,6 +20,7 @@ const TemplateRedisService = require('../services/template.redis.service');
 const NicheModel = require('../../niches/models/niche.model');
 const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.field.definition.model');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
+const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -3262,76 +3263,24 @@ exports.bulkUnarchiveTemplates = async function (req, res) {
  * @apiParam {String} templateId Template ID to copy
  */
 exports.copyTemplate = async function (req, res) {
+  const { templateId } = req.params;
+  let connection;
+
   try {
-    const { templateId } = req.params;
+    connection = await mysqlQueryRunner.getConnectionFromMaster();
+    await connection.beginTransaction();
 
-    // Get the original template with all its data
-    const originalTemplate = await TemplateModel.getTemplateByIdWithAssets(templateId);
+    const newTemplateId = await TemplateModel.copyTemplateInTransaction(connection, templateId);
 
-    if (!originalTemplate) {
+    if (!newTemplateId) {
+      await connection.rollback();
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
       });
     }
 
-    // Generate new template ID
-    const newTemplateId = uuidv7();
+    await connection.commit();
 
-    // Generate unique template code: copy first 4 letters from original + 2 random numbers
-    const generateTemplateCode = (originalCode) => {
-      const numbers = '0123456789';
-      let newCode = '';
-
-      // Copy first 4 characters from original template code
-      newCode = originalCode.substring(0, 4);
-
-      // Generate 2 random numbers
-      for (let i = 0; i < 2; i++) {
-        newCode += numbers.charAt(Math.floor(Math.random() * numbers.length));
-      }
-
-      return newCode;
-    };
-
-    // Prepare new template data
-    const newTemplateData = {
-      template_id: newTemplateId,
-      template_name: `${originalTemplate.template_name} copy`,
-      template_code: generateTemplateCode(originalTemplate.template_code),
-      template_gender: originalTemplate.template_gender,
-      template_output_type: originalTemplate.template_output_type,
-      template_clips_assets_type: originalTemplate.template_clips_assets_type,
-      description: originalTemplate.description,
-      prompt: originalTemplate.prompt,
-      faces_needed: originalTemplate.faces_needed,
-      cf_r2_key: originalTemplate.cf_r2_key,
-      cf_r2_url: originalTemplate.cf_r2_url,
-      cf_r2_bucket: originalTemplate.cf_r2_bucket,
-      color_video_bucket: originalTemplate.color_video_bucket,
-      color_video_key: originalTemplate.color_video_key,
-      mask_video_bucket: originalTemplate.mask_video_bucket,
-      mask_video_key: originalTemplate.mask_video_key,
-      bodymovin_json_bucket: originalTemplate.bodymovin_json_bucket,
-      bodymovin_json_key: originalTemplate.bodymovin_json_key,
-      custom_text_input_fields: originalTemplate.custom_text_input_fields,
-      credits: originalTemplate.credits,
-      image_uploads_required: originalTemplate.image_uploads_required,
-      video_uploads_required: originalTemplate.video_uploads_required,
-      additional_data: originalTemplate.additional_data,
-      user_assets_layer: originalTemplate.user_assets_layer,
-      thumb_frame_asset_key: originalTemplate.thumb_frame_asset_key,
-      thumb_frame_bucket: originalTemplate.thumb_frame_bucket
-    };
-
-    // Prepare clips data for copying
-    const clipsToCopy = originalTemplate.clips || [];
-
-    // Create the new template with all related data
-    await TemplateModel.createTemplate(newTemplateData, clipsToCopy);
-
-    // Manual template tags are already stored above
-
-    // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
       [{
@@ -3353,10 +3302,20 @@ exports.copyTemplate = async function (req, res) {
         original_template_id: templateId
       }
     });
-
   } catch (error) {
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackErr) {
+        logger.error('Rollback failed on copy template:', { error: rollbackErr.message });
+      }
+    }
     logger.error('Error copying template:', { error: error.message, stack: error.stack });
     TemplateErrorHandler.handleTemplateErrors(error, res);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 };
 

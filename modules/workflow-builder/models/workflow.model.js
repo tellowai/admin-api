@@ -273,6 +273,114 @@ exports.saveWorkflowData = async function (workflowId, data) {
 };
 
 /**
+ * Copy a workflow row (full insert) within a transaction. Used for template copy.
+ * @param {Object} connection - DB connection (from getConnectionFromMaster)
+ * @param {Object} workflowRow - Full workflow row from SELECT * (wf_id will be omitted)
+ * @returns {Promise<number>} New wf_id (insertId)
+ */
+exports.insertWorkflowRowInTransaction = async function (connection, workflowRow) {
+  const newUuid = uuidv7();
+  const viewportState = workflowRow.viewport_state != null
+    ? (typeof workflowRow.viewport_state === 'string' ? workflowRow.viewport_state : JSON.stringify(workflowRow.viewport_state))
+    : null;
+  const inputManifestSummary = workflowRow.input_manifest_summary != null
+    ? (typeof workflowRow.input_manifest_summary === 'string' ? workflowRow.input_manifest_summary : JSON.stringify(workflowRow.input_manifest_summary))
+    : null;
+
+  const query = `
+    INSERT INTO workflows (
+      uuid, user_id, name, description, status, is_template,
+      input_manifest_summary, viewport_state, change_hash,
+      created_at, updated_at, auto_saved_at, published_at, archived_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?)
+  `;
+  const result = await connection.query(query, [
+    newUuid,
+    workflowRow.user_id,
+    workflowRow.name,
+    workflowRow.description ?? null,
+    workflowRow.status ?? 'draft',
+    workflowRow.is_template ?? 0,
+    inputManifestSummary,
+    viewportState,
+    workflowRow.change_hash ?? null,
+    workflowRow.auto_saved_at ?? null,
+    workflowRow.published_at ?? null,
+    workflowRow.archived_at ?? null
+  ]);
+  return result.insertId;
+};
+
+/**
+ * Copy workflow nodes within a transaction. Returns map oldWfnId -> newWfnId.
+ * @param {Object} connection - DB connection
+ * @param {number} newWfId - New workflow ID
+ * @param {Array} nodes - Rows from workflow_nodes (with wfn_id, uuid, type, amr_id, etc.)
+ * @returns {Promise<Map<number, number>>} Map of old wfn_id -> new wfn_id
+ */
+exports.insertWorkflowNodesInTransaction = async function (connection, newWfId, nodes) {
+  if (!nodes || nodes.length === 0) return new Map();
+
+  const nodeValues = nodes.map(node => [
+    uuidv7(),
+    newWfId,
+    node.type,
+    node.amr_id ?? null,
+    node.system_node_type ?? null,
+    node.position_x ?? node.x ?? 0,
+    node.position_y ?? node.y ?? 0,
+    node.width ?? 250,
+    node.height ?? 150,
+    typeof node.config_values === 'string' ? node.config_values : JSON.stringify(node.config_values || {}),
+    typeof node.ui_metadata === 'string' ? node.ui_metadata : JSON.stringify(node.ui_metadata || {})
+  ]);
+
+  const result = await connection.query(
+    `INSERT INTO workflow_nodes 
+      (uuid, wf_id, type, amr_id, system_node_type, position_x, position_y, width, height, config_values, ui_metadata)
+     VALUES ?`,
+    [nodeValues]
+  );
+
+  const insertId = result.insertId;
+  const oldToNew = new Map();
+  nodes.forEach((node, i) => {
+    oldToNew.set(node.wfn_id, insertId + i);
+  });
+  return oldToNew;
+};
+
+/**
+ * Copy workflow edges within a transaction.
+ * @param {Object} connection - DB connection
+ * @param {number} newWfId - New workflow ID
+ * @param {Array} edges - Rows from workflow_edges
+ * @param {Map<number, number>} wfnIdMap - Map old wfn_id -> new wfn_id
+ */
+exports.insertWorkflowEdgesInTransaction = async function (connection, newWfId, edges, wfnIdMap) {
+  if (!edges || edges.length === 0) return;
+
+  const edgeValues = edges.map(edge => [
+    uuidv7(),
+    newWfId,
+    wfnIdMap.get(edge.source_wfn_id) ?? edge.source_wfn_id,
+    edge.source_socket_name ?? edge.sourceHandle ?? '',
+    wfnIdMap.get(edge.target_wfn_id) ?? edge.target_wfn_id,
+    edge.target_socket_name ?? edge.targetHandle ?? '',
+    edge.edge_type ?? edge.type ?? 'default',
+    edge.animated ? 1 : 0,
+    edge.style_config != null ? (typeof edge.style_config === 'string' ? edge.style_config : JSON.stringify(edge.style_config)) : null
+  ]);
+
+  await connection.query(
+    `INSERT INTO workflow_edges 
+      (uuid, wf_id, source_wfn_id, source_socket_name, target_wfn_id, target_socket_name, edge_type, animated, style_config)
+     VALUES ?`,
+    [edgeValues]
+  );
+};
+
+/**
  * Get workflow ID linked to a template_ai_clip (tac_id). Returns null if no workflow linked.
  * Simple query, no joins.
  */

@@ -675,6 +675,142 @@ exports.bulkUnarchiveTemplates = async function (templateIds) {
 };
 
 /**
+ * Compute next available " copy (N)" suffix for template name.
+ * Base = source name with optional " copy (N)" stripped. New name = base + " copy (M)" where M is next available.
+ * @param {Object} connection - DB connection (for transaction)
+ * @param {string} sourceTemplateName - Original template name
+ * @returns {Promise<string>} New template name
+ */
+async function getNextCopyTemplateName(connection, sourceTemplateName) {
+  const copySuffixMatch = sourceTemplateName.match(/\s+copy\s+\((\d+)\)\s*$/);
+  const base = copySuffixMatch
+    ? sourceTemplateName.slice(0, copySuffixMatch.index).trim()
+    : sourceTemplateName.trim();
+
+  const escapedBase = base.replace(/[%_\\]/g, '\\$&');
+  const likePattern = `${escapedBase} copy (%)`;
+
+  const rows = await connection.query(
+    'SELECT template_name FROM templates WHERE template_name LIKE ?',
+    [likePattern]
+  );
+
+  let maxN = 0;
+  const numRegex = /copy\s+\((\d+)\)\s*$/;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const m = (row.template_name || '').match(numRegex);
+    if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+  }
+  return `${base} copy (${maxN + 1})`;
+}
+
+/**
+ * Copy a template and all related data (templates, template_ai_clips, workflows, workflow_nodes, workflow_edges, template_tags)
+ * within an existing transaction. Caller must begin/commit/rollback the transaction.
+ * @param {Object} connection - DB connection (transaction already started)
+ * @param {string} sourceTemplateId - Template ID to copy
+ * @returns {Promise<string|null>} New template_id or null if source not found
+ */
+exports.copyTemplateInTransaction = async function (connection, sourceTemplateId) {
+  const templateRows = await connection.query(
+    'SELECT * FROM templates WHERE template_id = ? AND archived_at IS NULL',
+    [sourceTemplateId]
+  );
+  if (!Array.isArray(templateRows) || templateRows.length === 0) return null;
+
+  const sourceTemplate = templateRows[0];
+  const newTemplateName = await getNextCopyTemplateName(connection, sourceTemplate.template_name);
+  const newTemplateId = uuidv7();
+  const now = moment().format('YYYY-MM-DD HH:mm:ss');
+
+  // New template_code: remove last two characters and append two random digits (e.g. KTVK20 -> KTVK47)
+  const originalCode = sourceTemplate.template_code || '';
+  const baseCode = originalCode.length >= 2 ? originalCode.slice(0, -2) : originalCode;
+  const randomDigits = String(Math.floor(Math.random() * 100)).padStart(2, '0');
+  const newTemplateCode = baseCode + randomDigits;
+
+  const jsonColumns = [
+    'faces_needed', 'additional_data', 'custom_text_input_fields',
+    'image_uploads_json', 'video_uploads_json', 'image_input_fields_json'
+  ];
+  const overrideColumns = ['template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at'];
+  const insertFields = [];
+  const insertValues = [];
+
+  for (const [key, value] of Object.entries(sourceTemplate)) {
+    if (overrideColumns.includes(key)) continue;
+    insertFields.push(key);
+    if (jsonColumns.includes(key) && value != null && typeof value !== 'string') {
+      insertValues.push(JSON.stringify(value));
+    } else {
+      insertValues.push(value);
+    }
+  }
+  insertFields.push('template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at');
+  insertValues.push(newTemplateId, newTemplateName, newTemplateCode, 'draft', now, now, null);
+
+  const placeholders = insertValues.map(() => '?').join(', ');
+  await connection.query(
+    `INSERT INTO templates (${insertFields.join(', ')}) VALUES (${placeholders})`,
+    insertValues
+  );
+
+  const clips = await connection.query(
+    'SELECT tac_id, template_id, clip_index, wf_id, asset_type FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL ORDER BY clip_index',
+    [sourceTemplateId]
+  );
+
+  const clipsList = Array.isArray(clips) ? clips : [];
+  const wfIdMap = new Map();
+  const uniqueWfIds = [...new Set(clipsList.map(c => c.wf_id).filter(id => id != null))];
+
+  for (const wfId of uniqueWfIds) {
+    const wfRows = await connection.query('SELECT * FROM workflows WHERE wf_id = ?', [wfId]);
+    if (!Array.isArray(wfRows) || wfRows.length === 0) continue;
+
+    const newWfId = await WorkflowModel.insertWorkflowRowInTransaction(connection, wfRows[0]);
+    wfIdMap.set(wfId, newWfId);
+
+    const nodes = await connection.query('SELECT * FROM workflow_nodes WHERE wf_id = ?', [wfId]);
+    const wfnIdMap = await WorkflowModel.insertWorkflowNodesInTransaction(connection, newWfId, Array.isArray(nodes) ? nodes : []);
+
+    const edges = await connection.query('SELECT * FROM workflow_edges WHERE wf_id = ?', [wfId]);
+    await WorkflowModel.insertWorkflowEdgesInTransaction(connection, newWfId, Array.isArray(edges) ? edges : [], wfnIdMap);
+  }
+
+  if (clipsList.length > 0) {
+    const clipValues = clipsList.map(clip => [
+      uuidv7(),
+      newTemplateId,
+      clip.clip_index,
+      clip.wf_id != null ? wfIdMap.get(clip.wf_id) : null,
+      clip.asset_type || 'video',
+      now,
+      now
+    ]);
+    await connection.query(
+      `INSERT INTO template_ai_clips (tac_id, template_id, clip_index, wf_id, asset_type, created_at, updated_at) VALUES ?`,
+      [clipValues]
+    );
+  }
+
+  const tags = await connection.query(
+    'SELECT ttd_id, facet_id FROM template_tags WHERE template_id = ? AND deleted_at IS NULL',
+    [sourceTemplateId]
+  );
+  const tagsList = Array.isArray(tags) ? tags : [];
+  if (tagsList.length > 0) {
+    const tagValues = tagsList.map(t => [newTemplateId, t.ttd_id, t.facet_id, now, now]);
+    await connection.query(
+      'INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at) VALUES ?',
+      [tagValues]
+    );
+  }
+
+  return newTemplateId;
+};
+
+/**
  * Create AI clips for a template (transaction-aware version)
  */
 exports.createTemplateAiClipsInTransaction = async function (connection, templateId, clips) {
