@@ -1531,3 +1531,21 @@ exports.updateTemplateClipOrder = async function (templateId, clips) {
 
   await mysqlQueryRunner.runQueryInMaster(query, queryParams);
 };
+
+/**
+ * Update asset_type for existing template AI clips. Only updates rows that belong to the template.
+ * @param {string} templateId - The template UUID.
+ * @param {Array<{tac_id: string, asset_type: string}>} clips - Array of { tac_id, asset_type } ('image' | 'video').
+ */
+exports.updateTemplateClipAssetTypes = async function (templateId, clips) {
+  if (!clips || clips.length === 0) return;
+
+  for (const clip of clips) {
+    const query = `
+      UPDATE template_ai_clips
+      SET asset_type = ?
+      WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
+    `;
+    await mysqlQueryRunner.runQueryInMaster(query, [clip.asset_type, templateId, clip.tac_id]);
+  }
+};

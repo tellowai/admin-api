@@ -2564,10 +2564,22 @@ function ensureCreditsSatisfyMinimum(clientProvidedCredits, minimumCredits, tran
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} [clips] Template clips array with workflows
  */
+function isAssetTypeOnlyClips(clips) {
+  return Array.isArray(clips) && clips.length > 0 && clips.every(
+    c => typeof c.tac_id === 'string' && (c.asset_type === 'image' || c.asset_type === 'video') && Object.keys(c).length === 2
+  );
+}
+
 exports.updateTemplate = async function (req, res) {
   try {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
+
+    // If clips is asset-type-only [{ tac_id, asset_type }, ...], update DB and remove from payload
+    if (isAssetTypeOnlyClips(templateData.clips)) {
+      await TemplateModel.updateTemplateClipAssetTypes(templateId, templateData.clips);
+      delete templateData.clips;
+    }
 
     // Check if template exists and get current template info
     const existingTemplate = await TemplateModel.getTemplateById(templateId);

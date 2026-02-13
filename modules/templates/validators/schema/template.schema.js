@@ -61,6 +61,12 @@ const templateTagSchema = Joi.object({
   ttd_id: Joi.number().integer().positive().required()
 });
 
+// PATCH clips: only tac_id + asset_type per item; no extra keys
+const updateTemplateClipsItemSchema = Joi.object({
+  tac_id: Joi.string().required(),
+  asset_type: Joi.string().valid('image', 'video').required()
+}).unknown(false);
+
 const createTemplateSchema = Joi.object().keys({
   template_name: Joi.string().max(255).required(),
   template_code: Joi.string().max(9).required(),
@@ -234,7 +240,11 @@ const updateTemplateSchema = Joi.object().keys({
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
-  clips: Joi.array().items(clipSchema).optional()
+  // PATCH clips: either asset-type-only [{ tac_id, asset_type }, ...] or full clip objects (legacy)
+  clips: Joi.alternatives().try(
+    Joi.array().items(updateTemplateClipsItemSchema).min(1),
+    Joi.array().items(clipSchema)
+  ).optional()
 });
 
 const bulkArchiveTemplatesSchema = Joi.object().keys({
