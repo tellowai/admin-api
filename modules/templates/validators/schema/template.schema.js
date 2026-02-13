@@ -197,9 +197,21 @@ const updateTemplateSchema = Joi.object().keys({
   ).allow(null).optional(),
   video_uploads_json: Joi.array().items(
     Joi.object({
-      clip_index: Joi.number().integer().min(1).required(),
-      step_index: Joi.number().integer().min(0).required(),
-      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').required()
+      video_id: Joi.string().optional(),
+      layer_name: Joi.string().optional(),
+      field_code: Joi.string().allow(null, '').optional(),
+      user_input_field_name: Joi.string().allow(null, '').optional(),
+      field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').optional(),
+      reference_image: Joi.object({
+        asset_key: Joi.string().optional(),
+        bucket: Joi.string().optional()
+      }).allow(null).optional(),
+      variable_key: Joi.string().allow(null, '').optional(),
+      label: Joi.string().allow(null, '').optional(),
+      clip_index: Joi.number().integer().min(0).allow(null).optional(),
+      skip_user_input: Joi.boolean().default(false).optional(),
+      step_index: Joi.number().integer().min(0).optional(),
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional()
     })
   ).allow(null).optional(),
   image_input_fields_json: Joi.array().items(

@@ -2770,6 +2770,8 @@ exports.updateTemplate = async function (req, res) {
             }
           }
 
+          /*
+          // OLD LOGIC: (Commented out as per request)
           // Use the merge logic to get the final image_input_fields_json
           const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
           const finalImageInputFields = mergeImageInputFieldsFromRequest(fromBodymovin, effectiveImageInputFields);
@@ -2785,6 +2787,30 @@ exports.updateTemplate = async function (req, res) {
           // Generate uploads using the finalized fields (ensures skip_user_input is carried over)
           templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, finalImageInputFields);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
+          */
+
+          // UPDATED LOGIC: Respect whatever client sends
+          if (templateData.image_input_fields_json) {
+            // Ensure it's stored as JSON (if passing to DB that expects JSON type, usually array/object is fine if handled by ORM, or stringify if raw)
+            // Assuming Model handles it.
+            // If client sent image_uploads_required, use it. If not, maybe calculate from json?
+            // User said "we update the array count to image_uploads_required"
+            if (Array.isArray(templateData.image_input_fields_json)) {
+              const count = templateData.image_input_fields_json.length;
+              // If client didn't send required count, we derive it from the array length (or respect client's explicit value if present?)
+              // Frontend sends explicit value. We should trust it or default to array length.
+              if (templateData.image_uploads_required === undefined) {
+                templateData.image_uploads_required = count;
+              }
+            }
+          }
+
+          if (templateData.video_uploads_json && Array.isArray(templateData.video_uploads_json)) {
+            const count = templateData.video_uploads_json.length;
+            if (templateData.video_uploads_required === undefined) {
+              templateData.video_uploads_required = count;
+            }
+          }
         }
       } catch (error) {
         logger.warn('Failed to process bodymovin JSON for template update', {
