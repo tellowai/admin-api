@@ -1408,8 +1408,10 @@ exports.createTemplate = async function (req, res) {
       // Force non-ai templates to have no clips; counts/upload JSONs populated from Bodymovin in common block below
       templateData.clips = [];
       templateData.faces_needed = [];
-      // Calculate credits for non-AI templates based on output type and clips
+      // Calculate credits for non-AI templates based on output type and clips (Disabled for now)
+      /* 
       templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type, templateData.clips);
+      */
 
       // When no bodymovin, set upload fields to zero/empty; when bodymovin present they are set from JSON in common block
       const hasBodymovin = templateData.bodymovin_json_key && templateData.bodymovin_json_bucket;
@@ -1443,16 +1445,28 @@ exports.createTemplate = async function (req, res) {
           }
         }
 
-        // Credits: derive minimum from AI models used
+        // Credits: derive minimum from AI models used (Disabled for now)
+        /*
         const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
-        if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+        const autoCredits = minimumCredits || 1;
+        if (templateData.credits !== undefined && templateData.credits >= autoCredits) {
           // User provided sufficient credits, use them
-          // templateData.credits remains as provided
         } else {
           // User provided insufficient credits or no credits, assign minimum
-          templateData.credits = minimumCredits || 1;
+          templateData.credits = autoCredits;
         }
+        */
       }
+    }
+
+    // Credits: use user provided or default to 1 (either 1 or user provided)
+    if (templateData.credits === undefined || templateData.credits === null || templateData.credits < 1) {
+      templateData.credits = 1;
+    }
+
+    // Default cf_r2_bucket to 'public' if key is provided but bucket is not
+    if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
+      templateData.cf_r2_bucket = 'public';
     }
 
     // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
@@ -2248,6 +2262,7 @@ function hasAiModelsInClips(clips) {
  * @returns {number} - Credits required
  */
 function calculateNonAiTemplateCredits(outputType, clips) {
+  return 1;
   const baseCredits = outputType === 'video' ? TEMPLATE_CONSTANTS.NON_AI_VIDEO_BASE_CREDITS : TEMPLATE_CONSTANTS.NON_AI_IMAGE_BASE_CREDITS;
 
   // For videos, add 0.003 USD per clip
@@ -2625,8 +2640,10 @@ exports.updateTemplate = async function (req, res) {
     if (isNonAi) {
       templateData.clips = [];
       templateData.faces_needed = [];
-      // Calculate credits for non-AI templates based on output type and clips
+      // Calculate credits for non-AI templates based on output type and clips (Disabled for now)
+      /*
       templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, templateData.clips);
+      */
 
       // Ensure any previously saved AI clips are deleted
       try {
@@ -2676,15 +2693,17 @@ exports.updateTemplate = async function (req, res) {
         }
       }
 
-      // Credits: always calculate minimum from AI models used for updates with clips
+      // Credits: always calculate minimum from AI models used for updates with clips (Disabled for now)
+      /*
       const minimumCredits = await calculateMinimumCreditsFromClips(templateData.clips);
-
-      if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+      const autoCredits = minimumCredits || 1;
+      if (templateData.credits !== undefined && templateData.credits >= autoCredits) {
         // User provided sufficient credits, use them
       } else {
-        // User provided insufficient credits or no credits, always assign calculated minimum
-        templateData.credits = minimumCredits || 1;
+        // User provided insufficient credits or no credits, always assign calculated minimum (at least 1)
+        templateData.credits = autoCredits;
       }
+      */
     } else if (templateData.clips !== undefined) {
       // If clips array is explicitly provided but empty, clear faces_needed
       templateData.faces_needed = [];
@@ -2697,33 +2716,56 @@ exports.updateTemplate = async function (req, res) {
         templateData.video_uploads_json = [];
       }
 
-      // Always calculate credits even for empty clips (will be 0 or 1)
+      // Always calculate credits even for empty clips (Disabled for now)
+      /*
       const minimumCredits = await calculateMinimumCreditsFromClips([]);
-      if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+      const autoCredits = minimumCredits || 1;
+      if (templateData.credits !== undefined && templateData.credits >= autoCredits) {
         // User provided sufficient credits, use them
       } else {
-        // User provided insufficient credits or no credits, assign calculated minimum
-        templateData.credits = minimumCredits || 1;
+        // User provided insufficient credits or no credits, assign calculated minimum (at least 1)
+        templateData.credits = autoCredits;
       }
+      */
     } else {
       // No clips provided in update - use resolved template type
+      /*
       if (existingTemplate) {
         if (resolvedClipsAssetsType === 'ai') {
           // User specified AI or auto-detected as AI - get existing clips and calculate credits
           const existingClips = await TemplateModel.getTemplateAiClips(templateId);
           const minimumCredits = await calculateMinimumCreditsFromClips(existingClips || []);
+          const autoCredits = minimumCredits || 1;
 
-          if (templateData.credits !== undefined && templateData.credits >= minimumCredits) {
+          if (templateData.credits !== undefined && templateData.credits >= autoCredits) {
             // User provided sufficient credits, use them
           } else {
-            // User provided insufficient credits or no credits, assign calculated minimum
-            templateData.credits = minimumCredits || 1;
+            // User provided insufficient credits or no credits, assign calculated minimum (at least 1)
+            templateData.credits = autoCredits;
           }
         } else {
           // User specified Non-AI or auto-detected as Non-AI
-          templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, []);
+          const autoCredits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, []);
+
+          if (templateData.credits !== undefined && templateData.credits >= autoCredits) {
+            // User provided sufficient credits, keep them
+          } else {
+            // Use system calculated credits (at least 1)
+            templateData.credits = autoCredits || 1;
+          }
         }
       }
+      */
+    }
+
+    // Credits: ensure at least 1 if provided in update payload
+    if (templateData.credits !== undefined && (templateData.credits === null || templateData.credits < 1)) {
+      templateData.credits = 1;
+    }
+
+    // Default cf_r2_bucket to 'public' if key is provided but bucket is not
+    if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
+      templateData.cf_r2_bucket = 'public';
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
