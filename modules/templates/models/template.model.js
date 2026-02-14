@@ -17,6 +17,14 @@ exports.listTemplates = async function (pagination) {
     params.push(pagination.status);
   }
 
+  if (pagination.language_code) {
+    const codes = pagination.language_code.split(',').filter(Boolean);
+    if (codes.length > 0) {
+      conditions.push(`language_code IN (${codes.map(() => '?').join(',')})`);
+      params.push(...codes);
+    }
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `
@@ -173,7 +181,7 @@ exports.getTemplatePrompt = async function (templateId) {
   return template;
 };
 
-exports.searchTemplates = async function (searchQuery, page, limit, status = null) {
+exports.searchTemplates = async function (searchQuery, page, limit, status = null, language_code = null) {
   const offset = (page - 1) * limit;
   const conditions = [
     '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))',
@@ -184,6 +192,14 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
   if (status && TEMPLATE_STATUS_ENUM.includes(status)) {
     conditions.push('status = ?');
     params.push(status);
+  }
+
+  if (language_code) {
+    const codes = language_code.split(',').filter(Boolean);
+    if (codes.length > 0) {
+      conditions.push(`language_code IN (${codes.map(() => '?').join(',')})`);
+      params.push(...codes);
+    }
   }
 
   params.push(limit, offset);

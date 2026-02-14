@@ -264,7 +264,8 @@ exports.listTemplates = async function (req, res) {
   try {
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
-      status: req.query.status || undefined
+      status: req.query.status || undefined,
+      language_code: req.query.language_code || undefined
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
@@ -1053,7 +1054,8 @@ exports.searchTemplates = async function (req, res) {
 
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const status = req.query.status || null;
-    const templates = await TemplateModel.searchTemplates(q, paginationParams.page, paginationParams.limit, status);
+    const language_code = req.query.language_code || null;
+    const templates = await TemplateModel.searchTemplates(q, paginationParams.page, paginationParams.limit, status, language_code);
 
     // Batch fetch related data (no queries in loop); stitch in controller
     if (templates.length) {
