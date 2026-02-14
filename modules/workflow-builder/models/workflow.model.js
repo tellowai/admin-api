@@ -319,21 +319,29 @@ exports.insertWorkflowRowInTransaction = async function (connection, workflowRow
  * @returns {Promise<Map<number, number>>} Map of old wfn_id -> new wfn_id
  */
 exports.insertWorkflowNodesInTransaction = async function (connection, newWfId, nodes) {
-  if (!nodes || nodes.length === 0) return new Map();
+  if (!nodes || nodes.length === 0) return { idMap: new Map(), uuidMap: new Map() };
 
-  const nodeValues = nodes.map(node => [
-    uuidv7(),
-    newWfId,
-    node.type,
-    node.amr_id ?? null,
-    node.system_node_type ?? null,
-    node.position_x ?? node.x ?? 0,
-    node.position_y ?? node.y ?? 0,
-    node.width ?? 250,
-    node.height ?? 150,
-    typeof node.config_values === 'string' ? node.config_values : JSON.stringify(node.config_values || {}),
-    typeof node.ui_metadata === 'string' ? node.ui_metadata : JSON.stringify(node.ui_metadata || {})
-  ]);
+  // Generate new UUIDs for all nodes first so we can map them
+  const nodeUuidMap = new Map(); // oldUuid -> newUuid
+
+  const nodeValues = nodes.map(node => {
+    const newUuid = uuidv7();
+    nodeUuidMap.set(node.uuid, newUuid);
+
+    return [
+      newUuid,
+      newWfId,
+      node.type,
+      node.amr_id ?? null,
+      node.system_node_type ?? null,
+      node.position_x ?? node.x ?? 0,
+      node.position_y ?? node.y ?? 0,
+      node.width ?? 250,
+      node.height ?? 150,
+      typeof node.config_values === 'string' ? node.config_values : JSON.stringify(node.config_values || {}),
+      typeof node.ui_metadata === 'string' ? node.ui_metadata : JSON.stringify(node.ui_metadata || {})
+    ];
+  });
 
   const result = await connection.query(
     `INSERT INTO workflow_nodes 
@@ -347,7 +355,8 @@ exports.insertWorkflowNodesInTransaction = async function (connection, newWfId, 
   nodes.forEach((node, i) => {
     oldToNew.set(node.wfn_id, insertId + i);
   });
-  return oldToNew;
+
+  return { idMap: oldToNew, uuidMap: nodeUuidMap };
 };
 
 /**

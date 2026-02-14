@@ -778,8 +778,11 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
 
   const clipsList = Array.isArray(clips) ? clips : [];
   const wfIdMap = new Map();
+  const clipTacIdMap = new Map(); // Map old tac_id -> new tac_id
+  const globalNodeUuidMap = new Map(); // Map old node uuid -> new node uuid (across all workflows in this template)
   const uniqueWfIds = [...new Set(clipsList.map(c => c.wf_id).filter(id => id != null))];
 
+  // 1. First Pass: Create new workflows and nodes, build maps
   for (const wfId of uniqueWfIds) {
     const wfRows = await connection.query('SELECT * FROM workflows WHERE wf_id = ?', [wfId]);
     if (!Array.isArray(wfRows) || wfRows.length === 0) continue;
@@ -788,26 +791,94 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
     wfIdMap.set(wfId, newWfId);
 
     const nodes = await connection.query('SELECT * FROM workflow_nodes WHERE wf_id = ?', [wfId]);
-    const wfnIdMap = await WorkflowModel.insertWorkflowNodesInTransaction(connection, newWfId, Array.isArray(nodes) ? nodes : []);
+    const { idMap: wfnIdMap, uuidMap: nodeUuidMap } = await WorkflowModel.insertWorkflowNodesInTransaction(connection, newWfId, Array.isArray(nodes) ? nodes : []);
+
+    // Store node UUID mappings globally for cross-workflow references
+    for (const [oldUuid, newUuid] of nodeUuidMap.entries()) {
+      globalNodeUuidMap.set(oldUuid, newUuid);
+    }
 
     const edges = await connection.query('SELECT * FROM workflow_edges WHERE wf_id = ?', [wfId]);
     await WorkflowModel.insertWorkflowEdgesInTransaction(connection, newWfId, Array.isArray(edges) ? edges : [], wfnIdMap);
   }
 
+  // 2. Insert new clips and map tac_ids
   if (clipsList.length > 0) {
-    const clipValues = clipsList.map(clip => [
-      uuidv7(),
-      newTemplateId,
-      clip.clip_index,
-      clip.wf_id != null ? wfIdMap.get(clip.wf_id) : null,
-      clip.asset_type || 'video',
-      now,
-      now
-    ]);
+    const clipValues = clipsList.map(clip => {
+      const newTacId = uuidv7();
+      clipTacIdMap.set(clip.tac_id, newTacId);
+
+      return [
+        newTacId,
+        newTemplateId,
+        clip.clip_index,
+        clip.wf_id != null ? wfIdMap.get(clip.wf_id) : null,
+        clip.asset_type || 'video',
+        now,
+        now
+      ];
+    });
+
     await connection.query(
       `INSERT INTO template_ai_clips (tac_id, template_id, clip_index, wf_id, asset_type, created_at, updated_at) VALUES ?`,
       [clipValues]
     );
+  }
+
+  // 3. Second Pass: Update REF_CLIP nodes with new IDs
+  // Now that all clips and nodes exist and are mapped, we can fix the references
+  if (uniqueWfIds.length > 0) {
+    const newWfIds = Array.from(wfIdMap.values());
+    if (newWfIds.length > 0) {
+      const placeholders = newWfIds.map(() => '?').join(',');
+
+      // Fetch all nodes that might need updating (REF_CLIP types essentially)
+      // We look for nodes where config_values LIKE '%source_clip_id%' as a heuristic
+      const nodesToUpdate = await connection.query(
+        `SELECT wfn_id, config_values, system_node_type 
+         FROM workflow_nodes 
+         WHERE wf_id IN (${placeholders}) 
+         AND (system_node_type LIKE 'REF_CLIP_%' OR config_values LIKE '%source_clip_id%')`
+        , newWfIds
+      );
+
+      if (Array.isArray(nodesToUpdate) && nodesToUpdate.length > 0) {
+        for (const node of nodesToUpdate) {
+          let config = node.config_values;
+          if (typeof config === 'string') {
+            try {
+              config = JSON.parse(config);
+            } catch (e) {
+              continue;
+            }
+          }
+
+          if (!config || !config.reference_data) continue;
+
+          const refData = config.reference_data;
+          let needsUpdate = false;
+
+          // Update source_clip_id
+          if (refData.source_clip_id && clipTacIdMap.has(refData.source_clip_id)) {
+            refData.source_clip_id = clipTacIdMap.get(refData.source_clip_id);
+            needsUpdate = true;
+          }
+
+          // Update source_node_id
+          if (refData.source_node_id && globalNodeUuidMap.has(refData.source_node_id)) {
+            refData.source_node_id = globalNodeUuidMap.get(refData.source_node_id);
+            needsUpdate = true;
+          }
+
+          if (needsUpdate) {
+            await connection.query(
+              'UPDATE workflow_nodes SET config_values = ? WHERE wfn_id = ?',
+              [JSON.stringify(config), node.wfn_id]
+            );
+          }
+        }
+      }
+    }
   }
 
   const tags = await connection.query(
