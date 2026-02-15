@@ -150,6 +150,126 @@ class AnalyticsModel {
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0]?.total_count || 0;
   }
+
+  // --- Materialized view tables (auth_daily_stats, revenue_daily_stats, template_daily_stats) ---
+  // These use report_date and domain-specific measure columns.
+
+  static async queryAuthDailyStats(whereConditions) {
+    const query = `
+      SELECT
+        report_date as date,
+        sum(total_events) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AUTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAuthDailyStatsGrouped(whereConditions, groupByColumn) {
+    const query = `
+      SELECT
+        report_date as date,
+        ${groupByColumn} as group_key,
+        sum(total_events) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AUTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async getCountAuthDailyStats(whereConditions) {
+    const query = `
+      SELECT sum(total_events) as total_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AUTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0]?.total_count || 0;
+  }
+
+  static async queryRevenueDailyStats(whereConditions) {
+    const query = `
+      SELECT
+        report_date as date,
+        sum(total_purchases) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryRevenueDailyStatsGrouped(whereConditions, groupByColumn) {
+    const query = `
+      SELECT
+        report_date as date,
+        ${groupByColumn} as group_key,
+        sum(total_purchases) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async getCountRevenueDailyStats(whereConditions) {
+    const query = `
+      SELECT sum(total_purchases) as total_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0]?.total_count || 0;
+  }
+
+  static async queryTemplateDailyStats(whereConditions, measureColumn) {
+    const query = `
+      SELECT
+        report_date as date,
+        sum(${measureColumn}) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTemplateDailyStatsGrouped(whereConditions, measureColumn, groupByColumn) {
+    const query = `
+      SELECT
+        report_date as date,
+        ${groupByColumn} as group_key,
+        sum(${measureColumn}) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async getCountTemplateDailyStats(whereConditions, measureColumn) {
+    const query = `
+      SELECT sum(${measureColumn}) as total_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0]?.total_count || 0;
+  }
 }
 
 module.exports = AnalyticsModel;

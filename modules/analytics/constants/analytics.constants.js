@@ -12,39 +12,36 @@ const ANALYTICS_CONSTANTS = {
     LOGINS: "login",
     PURCHASES: "purchases",
 
-    // Summary tables for better performance
-    TEMPLATE_VIEWS_HOURLY: "template_views_hourly_summary",
+    // Daily summary tables (single table per domain; no hourly/monthly)
     TEMPLATE_VIEWS_DAILY: "template_views_daily_summary",
-    TEMPLATE_VIEWS_MONTHLY: "template_views_monthly_summary",
-
-    TEMPLATE_TRIES_HOURLY: "template_tries_hourly_summary",
     TEMPLATE_TRIES_DAILY: "template_tries_daily_summary",
-    TEMPLATE_TRIES_MONTHLY: "template_tries_monthly_summary",
-
-    TEMPLATE_DOWNLOADS_HOURLY: "template_downloads_hourly_summary",
     TEMPLATE_DOWNLOADS_DAILY: "template_downloads_daily_summary",
-    TEMPLATE_DOWNLOADS_MONTHLY: "template_downloads_monthly_summary",
-
-    CHARACTER_CREATIONS_HOURLY: "character_creations_hourly_summary",
     CHARACTER_CREATIONS_DAILY: "character_creations_daily_summary",
-    CHARACTER_CREATIONS_MONTHLY: "character_creations_monthly_summary",
-
-    CHARACTER_TRAININGS_HOURLY: "character_trainings_hourly_summary",
     CHARACTER_TRAININGS_DAILY: "character_trainings_daily_summary",
-    CHARACTER_TRAININGS_MONTHLY: "character_trainings_monthly_summary",
-
-    SIGNUPS_HOURLY: "signup_hourly_summary",
     SIGNUPS_DAILY: "signup_daily_summary",
-    SIGNUPS_MONTHLY: "signup_monthly_summary",
-
-    LOGINS_HOURLY: "login_hourly_summary",
     LOGINS_DAILY: "login_daily_summary",
-    LOGINS_MONTHLY: "login_monthly_summary",
-
-    PURCHASES_HOURLY: "purchases_hourly_summary",
     PURCHASES_DAILY: "purchases_daily_summary",
-    PURCHASES_MONTHLY: "purchases_monthly_summary",
+
+    // Materialized view target tables (daily only)
+    AUTH_DAILY_STATS: "auth_daily_stats",
+    REVENUE_DAILY_STATS: "revenue_daily_stats",
+    TEMPLATE_DAILY_STATS: "template_daily_stats",
   },
+  // Event names in auth_daily_stats
+  AUTH_EVENT_NAMES: {
+    SIGNUP: "signup",
+    LOGIN: "login",
+  },
+  // Template measure columns in template_daily_stats
+  TEMPLATE_MEASURES: {
+    VIEWS: "views",
+    TRIES: "tries",
+    DOWNLOADS: "downloads",
+  },
+  // Allowed group_by columns per domain (for MV tables)
+  AUTH_GROUP_BY_COLUMNS: ["provider"],
+  REVENUE_GROUP_BY_COLUMNS: ["currency", "payment_provider", "plan_name"],
+  TEMPLATE_GROUP_BY_COLUMNS: ["output_type", "generation_type"],
   GENDER_ENUMS: {
     MALE: "male",
     FEMALE: "female",
