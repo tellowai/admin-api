@@ -63,11 +63,17 @@ exports.getPlanUIConfig = async function (planId) {
 }
 
 /**
- * Update payment plan status (active/inactive)
+ * Update payment plan status (active/inactive).
+ * On first activation (is_active = 1), sets first_activated_at to current timestamp if not already set.
  */
 exports.updatePlanStatus = async function (planId, isActive) {
-  const query = 'UPDATE payment_plans SET is_active = ? WHERE pp_id = ?';
-  await mysqlQueryRunner.runQueryInMaster(query, [isActive, planId]);
+  if (isActive === 1) {
+    const query = 'UPDATE payment_plans SET is_active = 1, first_activated_at = COALESCE(first_activated_at, CURRENT_TIMESTAMP) WHERE pp_id = ?';
+    await mysqlQueryRunner.runQueryInMaster(query, [planId]);
+  } else {
+    const query = 'UPDATE payment_plans SET is_active = 0 WHERE pp_id = ?';
+    await mysqlQueryRunner.runQueryInMaster(query, [planId]);
+  }
   return true;
 };
 

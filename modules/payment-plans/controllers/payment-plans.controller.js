@@ -130,8 +130,9 @@ exports.updatePlan = async function (req, res) {
     }
 
     // RESTRICTED UPDATE LOGIC
-    // If plan is ACTIVE, do not allow changes to Red Zone (Pricing, Limits, Gateways)
-    if (existingPlan.is_active === 1) {
+    // Once a plan has ever been activated (first_activated_at set), do not allow changes to Red Zone (Pricing, Limits, Gateways)
+    const hasEverBeenActivated = existingPlan.first_activated_at != null;
+    if (hasEverBeenActivated) {
       const restrictedFields = [
         'original_price', 'current_price', 'currency', 'billing_interval',
         'credits', 'bonus_credits', 'template_count', 'max_creations_per_template', 'validity_days'
@@ -188,7 +189,7 @@ exports.updatePlan = async function (req, res) {
 
       if (errors.length > 0) {
         return res.status(CODES.BAD_REQUEST).json({
-          message: 'Cannot update restricted fields on an Active plan. Please deactivate the plan first.',
+          message: 'Cannot update restricted fields once the plan has been activated. These settings are permanently locked.',
           restricted_fields: errors
         });
       }
