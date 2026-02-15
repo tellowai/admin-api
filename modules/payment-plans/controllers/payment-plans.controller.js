@@ -123,6 +123,77 @@ exports.updatePlan = async function (req, res) {
       return res.status(CODES.BAD_REQUEST).send({ message: req.t('payment_plans:PLAN_ID_REQUIRED') });
     }
 
+    // Fetch existing plan to check status
+    const existingPlan = await PaymentPlansModel.getPlanById(planId);
+    if (!existingPlan) {
+      return res.status(CODES.NOT_FOUND).send({ message: req.t('payment_plans:PLAN_NOT_FOUND') });
+    }
+
+    // RESTRICTED UPDATE LOGIC
+    // If plan is ACTIVE, do not allow changes to Red Zone (Pricing, Limits, Gateways)
+    if (existingPlan.is_active === 1) {
+      const restrictedFields = [
+        'original_price', 'current_price', 'currency', 'billing_interval',
+        'credits', 'bonus_credits', 'template_count', 'max_creations_per_template', 'validity_days'
+      ];
+
+      const errors = [];
+
+      // Check simple fields
+      for (const field of restrictedFields) {
+        if (req.validatedBody[field] !== undefined) {
+          // Compare loosely (==) to handle string/number differences if safe, 
+          // or cast both to string/number. existingPlan values come from DB (likely numbers for prices).
+          // req.validatedBody values come from Joi usually, which might coerce types.
+          // Let's assume strict equality might fail on type, so we try to be smart.
+
+          let incoming = req.validatedBody[field];
+          let existing = existingPlan[field];
+
+          // Normalize null/undefined
+          if (incoming === null) incoming = undefined;
+          if (existing === null) existing = undefined;
+
+          if (incoming !== undefined && incoming != existing) {
+            errors.push(field);
+          }
+        }
+      }
+
+      // Check Gateways
+      if (req.validatedBody.gateways !== undefined) {
+        const currentGateways = await PaymentPlansModel.getPlanGateways(planId);
+
+        // Simple comparison: length check and content check
+        // We normalize both to a comparable format
+        const normalizeGateway = (g) => `${g.payment_gateway}:${g.pg_plan_id}:${g.is_active}`;
+
+        const incomingSet = new Set(req.validatedBody.gateways.map(normalizeGateway));
+        const currentSet = new Set(currentGateways.map(normalizeGateway));
+
+        let gatewaysChanged = incomingSet.size !== currentSet.size;
+        if (!gatewaysChanged) {
+          for (const g of incomingSet) {
+            if (!currentSet.has(g)) {
+              gatewaysChanged = true;
+              break;
+            }
+          }
+        }
+
+        if (gatewaysChanged) {
+          errors.push('gateways');
+        }
+      }
+
+      if (errors.length > 0) {
+        return res.status(CODES.BAD_REQUEST).json({
+          message: 'Cannot update restricted fields on an Active plan. Please deactivate the plan first.',
+          restricted_fields: errors
+        });
+      }
+    }
+
     // req.validatedBody is populated by validor middleware
     await PaymentPlansModel.updatePlan(planId, req.validatedBody);
 
@@ -230,7 +301,7 @@ exports.togglePlanStatus = async function (req, res) {
       // Validate gateways - at least one active gateway required
       const gateways = await PaymentPlansModel.getPlanGateways(planId);
       const activeGateways = gateways.filter(g => g.is_active === 1 && g.pg_plan_id && g.pg_plan_id.trim() !== '');
-      
+
       if (activeGateways.length === 0) {
         errors.push({ field: 'gateways', message: 'At least one active payment gateway with valid plan ID is required' });
       }
