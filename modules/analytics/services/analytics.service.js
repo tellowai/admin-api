@@ -92,6 +92,14 @@ class AnalyticsService {
       const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS);
     }
+    if (baseTableName === 'TEMPLATE_SUCCESSES') {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES);
+    }
+    if (baseTableName === 'TEMPLATE_FAILURES') {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES);
+    }
 
     // Character analytics: single daily table, one query
     const tableName = ANALYTICS_CONSTANTS.TABLES[`${baseTableName}_DAILY`];
@@ -132,10 +140,18 @@ class AnalyticsService {
       const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS, groupBy);
     }
+    if (baseTableName === 'TEMPLATE_SUCCESSES' && templateAllowed.includes(groupBy)) {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES, groupBy);
+    }
+    if (baseTableName === 'TEMPLATE_FAILURES' && templateAllowed.includes(groupBy)) {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES, groupBy);
+    }
     // MV tables don't support other group_by dimensions (e.g. orientation, aspect_ratio for template)
     if (['SIGNUPS', 'LOGINS'].includes(baseTableName) && groupBy && !authAllowed.includes(groupBy)) return [];
     if (baseTableName === 'PURCHASES' && groupBy && !revenueAllowed.includes(groupBy)) return [];
-    if (['TEMPLATE_VIEWS', 'TEMPLATE_TRIES', 'TEMPLATE_DOWNLOADS'].includes(baseTableName) && groupBy && !templateAllowed.includes(groupBy)) return [];
+    if (['TEMPLATE_VIEWS', 'TEMPLATE_TRIES', 'TEMPLATE_DOWNLOADS', 'TEMPLATE_SUCCESSES', 'TEMPLATE_FAILURES'].includes(baseTableName) && groupBy && !templateAllowed.includes(groupBy)) return [];
 
     // Character analytics: single daily table, one query
     const tableName = ANALYTICS_CONSTANTS.TABLES[`${baseTableName}_DAILY`];
@@ -171,6 +187,14 @@ class AnalyticsService {
     if (baseTableName === 'TEMPLATE_DOWNLOADS') {
       const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS);
+    }
+    if (baseTableName === 'TEMPLATE_SUCCESSES') {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES);
+    }
+    if (baseTableName === 'TEMPLATE_FAILURES') {
+      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES);
     }
 
     // Character analytics: single daily table, one query

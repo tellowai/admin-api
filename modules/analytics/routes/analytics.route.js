@@ -57,6 +57,22 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/templates/successes'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplateAnalyticsQuery,
+    AnalyticsCtrl.getTemplateSuccesses
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/templates/failures'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplateAnalyticsQuery,
+    AnalyticsCtrl.getTemplateFailures
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/templates/summary'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

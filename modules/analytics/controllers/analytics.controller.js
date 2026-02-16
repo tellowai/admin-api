@@ -227,6 +227,78 @@ class AnalyticsController {
     }
   }
 
+  static async getTemplateSuccesses(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+
+      let templateSuccesses;
+      if (queryParams.group_by) {
+        templateSuccesses = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_SUCCESSES', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        templateSuccesses = await AnalyticsService.queryMixedDateRange('TEMPLATE_SUCCESSES', utcFilters, additionalFilters);
+      }
+
+      const convertedResults = TimezoneService.convertFromUTC(templateSuccesses, timezone);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: convertedResults
+      });
+    } catch (error) {
+      logger.error('Error fetching template successes analytics:', { error: error.message, stack: error.stack, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTemplateFailures(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const additionalFilters = {};
+      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+
+      let templateFailures;
+      if (queryParams.group_by) {
+        templateFailures = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_FAILURES', utcFilters, additionalFilters, queryParams.group_by);
+      } else {
+        templateFailures = await AnalyticsService.queryMixedDateRange('TEMPLATE_FAILURES', utcFilters, additionalFilters);
+      }
+
+      const convertedResults = TimezoneService.convertFromUTC(templateFailures, timezone);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: convertedResults
+      });
+    } catch (error) {
+      logger.error('Error fetching template failures analytics:', { error: error.message, stack: error.stack, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
   static async getCharacterAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;

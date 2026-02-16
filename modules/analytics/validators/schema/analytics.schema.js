@@ -23,8 +23,8 @@ const characterAnalyticsSchema = Joi.object().keys({
 });
 
 const templateAnalyticsSchema = Joi.object().keys({
-  start_date: Joi.date().iso().required(),
-  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  start_date: Joi.date().required(),
+  end_date: Joi.date().min(Joi.ref('start_date')).required(),
   start_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
   end_time: Joi.string().pattern(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).optional(),
   output_type: Joi.string().valid('image', 'video', 'audio', 'pdf', 'website', 'unknown').optional(),

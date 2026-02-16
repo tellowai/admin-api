@@ -37,6 +37,8 @@ const ANALYTICS_CONSTANTS = {
     VIEWS: "views",
     TRIES: "tries",
     DOWNLOADS: "downloads",
+    SUCCESSES: "successes",
+    FAILURES: "failures",
   },
   // Allowed group_by columns per domain (for MV tables)
   AUTH_GROUP_BY_COLUMNS: ["provider"],
