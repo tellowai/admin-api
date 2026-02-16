@@ -1,6 +1,7 @@
 'use strict';
 
 const i18next = require('i18next');
+const config = require('../../../config/config');
 const AnalyticsService = require('../services/analytics.service');
 const TimezoneService = require('../services/timezone.service');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
@@ -295,6 +296,47 @@ class AnalyticsController {
       });
     } catch (error) {
       logger.error('Error fetching template failures analytics:', { error: error.message, stack: error.stack, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTopTemplatesByGeneration(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        page: queryParams.page || 1,
+        limit: queryParams.limit || 20
+      };
+      let data = await AnalyticsService.getTopTemplatesByGeneration(filters);
+      const publicBucket = config.os2?.r2?.public?.bucket;
+      const publicBucketUrl = config.os2?.r2?.public?.bucketUrl;
+      data = (data || []).map((item) => {
+        let thumb_frame_url = null;
+        if (item.thumb_frame_asset_key && item.thumb_frame_bucket) {
+          const isPublic = item.thumb_frame_bucket === 'public' ||
+            item.thumb_frame_bucket === publicBucket;
+          if (isPublic && publicBucketUrl) {
+            thumb_frame_url = `${publicBucketUrl}/${item.thumb_frame_asset_key}`;
+          }
+        }
+        if (!thumb_frame_url && item.cf_r2_url) {
+          thumb_frame_url = item.cf_r2_url;
+        }
+        const { thumb_frame_bucket, thumb_frame_asset_key, cf_r2_url, ...rest } = item;
+        return { ...rest, thumb_frame_url };
+      });
+      return res.status(HTTP_STATUS_CODES.OK).json({ data });
+    } catch (error) {
+      logger.error('Error fetching top templates by generation:', { error: error.message, stack: error.stack, query: req.validatedQuery });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }

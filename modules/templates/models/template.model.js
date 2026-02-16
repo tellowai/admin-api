@@ -99,6 +99,30 @@ exports.getTemplateGenerationMeta = async function (templateId) {
   return template;
 };
 
+/**
+ * Fetch minimal template fields by IDs for analytics (e.g. top templates by generation).
+ * No status/archived filter — analytics may reference templates that are now archived or inactive.
+ */
+exports.getTemplatesByIdsForAnalytics = async function (templateIds) {
+  if (!Array.isArray(templateIds) || templateIds.length === 0) {
+    return [];
+  }
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT
+      template_id,
+      template_name,
+      template_code,
+      template_gender,
+      template_output_type,
+      thumb_frame_bucket,
+      thumb_frame_asset_key,
+      cf_r2_url
+    FROM templates
+    WHERE template_id IN (${placeholders})
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+};
 
 exports.listArchivedTemplates = async function (pagination) {
   const query = `

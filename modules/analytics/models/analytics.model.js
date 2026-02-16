@@ -270,6 +270,28 @@ class AnalyticsModel {
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0]?.total_count || 0;
   }
+
+  /**
+   * Top templates by generation count (sum of tries in date range).
+   * Single aggregation, no joins. Paginated via LIMIT/OFFSET for scale.
+   */
+  static async getTopTemplatesByGeneration(whereConditions, limit, offset) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const query = `
+      SELECT
+        template_id,
+        sum(tries) as count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY template_id
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;

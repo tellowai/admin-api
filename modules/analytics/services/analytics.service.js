@@ -1,6 +1,7 @@
 'use strict';
 
 const AnalyticsModel = require('../models/analytics.model');
+const TemplateModel = require('../../templates/models/template.model');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
 class AnalyticsService {
@@ -216,6 +217,35 @@ class AnalyticsService {
     if (filters.provider) additionalFilters.provider = filters.provider;
     if (filters.user_id) additionalFilters.user_id = filters.user_id;
     return this.queryMixedDateRange('LOGINS', filters, additionalFilters);
+  }
+
+  static async getTopTemplatesByGeneration(filters) {
+    const { start_date, end_date, page = 1, limit = 20 } = filters;
+    const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
+    const offset = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
+    if (!rows || rows.length === 0) {
+      return [];
+    }
+    const templateIds = rows.map(r => r.template_id).filter(Boolean);
+    const templates = await TemplateModel.getTemplatesByIdsForAnalytics(templateIds);
+    const byId = {};
+    (templates || []).forEach(t => { byId[t.template_id] = t; });
+    return rows.map(row => {
+      const t = byId[row.template_id] || {};
+      return {
+        template_id: row.template_id,
+        count: row.count,
+        template_name: t.template_name ?? row.template_id ?? null,
+        template_code: t.template_code ?? null,
+        template_gender: t.template_gender ?? null,
+        template_output_type: t.template_output_type ?? null,
+        thumb_frame_bucket: t.thumb_frame_bucket ?? null,
+        thumb_frame_asset_key: t.thumb_frame_asset_key ?? null,
+        cf_r2_url: t.cf_r2_url ?? null
+      };
+    });
   }
 
   static async getPurchases(filters) {

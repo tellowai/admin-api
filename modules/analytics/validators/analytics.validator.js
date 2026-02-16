@@ -52,6 +52,19 @@ exports.validateTemplateAnalyticsQuery = function(req, res, next) {
   return next(null);
 };
 
+exports.validateTemplateTopByGenerationQuery = function(req, res, next) {
+  const payload = req.query;
+  const payloadValidation = validationCtrl.validate(analyticsSchema.templateTopByGenerationSchema, payload);
+  if (payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+  req.validatedQuery = payloadValidation.value;
+  return next(null);
+};
+
 exports.validateSignupAnalyticsQuery = function(req, res, next) {
   const payload = req.query;
   

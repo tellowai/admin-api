@@ -73,6 +73,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/templates/top-by-generation'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplateTopByGenerationQuery,
+    AnalyticsCtrl.getTopTemplatesByGeneration
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/templates/summary'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

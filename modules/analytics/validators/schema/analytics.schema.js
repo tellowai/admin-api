@@ -37,6 +37,14 @@ const templateAnalyticsSchema = Joi.object().keys({
   tz: Joi.string().optional()
 });
 
+const templateTopByGenerationSchema = Joi.object().keys({
+  start_date: Joi.date().required(),
+  end_date: Joi.date().min(Joi.ref('start_date')).required(),
+  tz: Joi.string().optional(),
+  page: Joi.number().integer().min(1).optional(),
+  limit: Joi.number().integer().min(1).max(100).optional()
+});
+
 const signupAnalyticsSchema = Joi.object().keys({
   start_date: Joi.date().iso().required(),
   end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
@@ -77,6 +85,7 @@ const purchasesAnalyticsSchema = Joi.object().keys({
 exports.dateRangeSchema = dateRangeSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
+exports.templateTopByGenerationSchema = templateTopByGenerationSchema;
 exports.signupAnalyticsSchema = signupAnalyticsSchema;
 exports.loginAnalyticsSchema = loginAnalyticsSchema;
 exports.purchasesAnalyticsSchema = purchasesAnalyticsSchema;
