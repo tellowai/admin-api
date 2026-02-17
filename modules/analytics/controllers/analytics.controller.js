@@ -321,7 +321,11 @@ class AnalyticsController {
       const publicBucketUrl = config.os2?.r2?.public?.bucketUrl;
       data = (data || []).map((item) => {
         let thumb_frame_url = null;
-        if (item.thumb_frame_asset_key && item.thumb_frame_bucket) {
+        const isImage = (item.template_output_type || '').toLowerCase() === 'image';
+        if (isImage && item.thumb_frame_asset_key && publicBucketUrl) {
+          thumb_frame_url = `${publicBucketUrl}/${item.thumb_frame_asset_key}`;
+        }
+        if (!thumb_frame_url && item.thumb_frame_asset_key && item.thumb_frame_bucket) {
           const isPublic = item.thumb_frame_bucket === 'public' ||
             item.thumb_frame_bucket === publicBucket;
           if (isPublic && publicBucketUrl) {
