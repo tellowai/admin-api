@@ -178,6 +178,7 @@ const updateTemplateSchema = Joi.object().keys({
   cf_r2_key: Joi.string().max(512).allow(null).optional(),
   cf_r2_bucket: Joi.string().max(512).allow(null).optional(),
   cf_r2_url: Joi.string().max(1000).allow(null).optional(),
+  thumb_frame_blurhash: Joi.string().max(255).allow(null).optional(),
   thumb_frame_asset_key: Joi.string().max(512).allow(null).optional(),
   thumb_frame_bucket: Joi.string().max(255).allow(null).optional(),
   color_video_bucket: Joi.string().max(255).allow(null).optional(),

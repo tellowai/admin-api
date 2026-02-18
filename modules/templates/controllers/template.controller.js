@@ -21,6 +21,8 @@ const NicheModel = require('../../niches/models/niche.model');
 const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.field.definition.model');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const { generateBlurHashFromBuffer } = require('../utils/blurhash.utils');
+const { computeTemplateCostFromClips } = require('../utils/workflowCost.utils');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -2765,6 +2767,19 @@ exports.updateTemplate = async function (req, res) {
       templateData.credits = 1;
     }
 
+    // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js
+    if (isNonAi) {
+      templateData.cost_in_dollars = 0;
+    } else if (hasClips) {
+      try {
+        const costUsd = await computeTemplateCostFromClips(templateData.clips, (modelIds) => AiModelModel.getAiModelsByIds(modelIds));
+        templateData.cost_in_dollars = costUsd;
+      } catch (costErr) {
+        logger.warn('Failed to compute template cost from clips', { templateId, error: costErr.message });
+        templateData.cost_in_dollars = 0;
+      }
+    }
+
     // Default cf_r2_bucket to 'public' if key is provided but bucket is not
     if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
       templateData.cf_r2_bucket = 'public';
@@ -2901,6 +2916,59 @@ exports.updateTemplate = async function (req, res) {
           }
         }
         if (templateData.aspect_ratio) break; // Found an aspect ratio, stop searching
+      }
+    }
+
+    // Regenerate thumb_frame_blurhash when thumbnail source changes (thumb_frame for video, cf_r2 for image)
+    const thumbFrameChanged = (templateData.thumb_frame_bucket !== undefined && templateData.thumb_frame_bucket !== existingTemplate.thumb_frame_bucket) ||
+      (templateData.thumb_frame_asset_key !== undefined && templateData.thumb_frame_asset_key !== existingTemplate.thumb_frame_asset_key);
+    const outputType = templateData.template_output_type || existingTemplate.template_output_type;
+    const cfR2Changed = (templateData.cf_r2_url !== undefined && templateData.cf_r2_url !== existingTemplate.cf_r2_url) ||
+      (templateData.cf_r2_key !== undefined && templateData.cf_r2_key !== existingTemplate.cf_r2_key) ||
+      (templateData.cf_r2_bucket !== undefined && templateData.cf_r2_bucket !== existingTemplate.cf_r2_bucket);
+
+    if (thumbFrameChanged || (outputType === 'image' && cfR2Changed)) {
+      let imageBuffer = null;
+      const storage = StorageFactory.getProvider();
+
+      if (thumbFrameChanged) {
+        const bucket = templateData.thumb_frame_bucket !== undefined ? templateData.thumb_frame_bucket : existingTemplate.thumb_frame_bucket;
+        const key = templateData.thumb_frame_asset_key !== undefined ? templateData.thumb_frame_asset_key : existingTemplate.thumb_frame_asset_key;
+        if (bucket && key) {
+          try {
+            imageBuffer = await storage.getObjectBufferFromBucket(bucket, key);
+          } catch (err) {
+            logger.warn('Failed to fetch thumb frame for blurhash', { templateId, bucket, key, error: err.message });
+          }
+        }
+      }
+
+      if (!imageBuffer && outputType === 'image' && cfR2Changed) {
+        const bucket = templateData.cf_r2_bucket !== undefined ? templateData.cf_r2_bucket : existingTemplate.cf_r2_bucket;
+        const key = templateData.cf_r2_key !== undefined ? templateData.cf_r2_key : existingTemplate.cf_r2_key;
+        const url = templateData.cf_r2_url !== undefined ? templateData.cf_r2_url : existingTemplate.cf_r2_url;
+        if (bucket && key) {
+          try {
+            imageBuffer = await storage.getObjectBufferFromBucket(bucket, key);
+          } catch (err) {
+            logger.warn('Failed to fetch cf_r2 image for blurhash', { templateId, bucket, key, error: err.message });
+          }
+        }
+        if (!imageBuffer && url && /^https?:\/\//i.test(url)) {
+          try {
+            const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+            imageBuffer = Buffer.from(response.data);
+          } catch (err) {
+            logger.warn('Failed to fetch cf_r2_url for blurhash', { templateId, error: err.message });
+          }
+        }
+      }
+
+      if (imageBuffer) {
+        const blurhash = await generateBlurHashFromBuffer(imageBuffer);
+        templateData.thumb_frame_blurhash = blurhash || null;
+      } else {
+        templateData.thumb_frame_blurhash = null;
       }
     }
 

@@ -178,6 +178,27 @@ class R2StorageProvider extends StorageProvider {
     return bodyString;
   }
 
+  /**
+   * Get object content from bucket as Buffer (e.g. for images).
+   * Resolves bucket alias 'public' / 'private' to actual bucket name.
+   * @param {string} bucket - Bucket name or alias ('public', 'private', or actual bucket name)
+   * @param {string} key - Object key
+   * @returns {Promise<Buffer>} Body as Buffer
+   */
+  async getObjectBufferFromBucket(bucket, key) {
+    const targetBucket = this.resolveBucketName(bucket);
+    const command = new GetObjectCommand({
+      Bucket: targetBucket,
+      Key: key.startsWith('/') ? key.slice(1) : key
+    });
+    const response = await this.client.send(command);
+    if (!response.Body) {
+      throw new Error('Empty body');
+    }
+    const bytes = await response.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  }
+
   async generatePresignedPublicBucketUploadUrl(key, options = {}) {
     const command = new PutObjectCommand({
       Bucket: this.publicBucket,
