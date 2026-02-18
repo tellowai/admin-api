@@ -770,6 +770,100 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getCredits(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const filters = {
+        ...utcFilters,
+        reason: queryParams.reason,
+        country: queryParams.country,
+        group_by: queryParams.group_by
+      };
+
+      const data = await AnalyticsService.getCreditsDailyStats(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: convertedResults
+      });
+    } catch (error) {
+      logger.error('Error fetching credits analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getCreditsSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const filters = {
+        ...utcFilters,
+        reason: queryParams.reason,
+        country: queryParams.country
+      };
+
+      const [summary, allTimeSummary] = await Promise.all([
+        AnalyticsService.getCreditsSummary(filters),
+        AnalyticsService.getCreditsSummaryAllTime(filters)
+      ]);
+
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: {
+          credits_issued: summary?.total_issued ?? 0,
+          credits_consumed: summary?.total_deducted ?? 0,
+          credits_deducted: summary?.total_deducted ?? 0,
+          system_balance_outstanding: summary?.system_balance_outstanding ?? 0,
+          total_issued: summary?.total_issued ?? 0,
+          total_deducted: summary?.total_deducted ?? 0,
+          users_receiving_count: summary?.users_receiving_count ?? 0,
+          users_spending_count: summary?.users_spending_count ?? 0,
+          date_range: convertedDateRange,
+          all_time: {
+            total_issued: allTimeSummary?.total_issued ?? 0,
+            total_deducted: allTimeSummary?.total_deducted ?? 0,
+            system_balance_outstanding: allTimeSummary?.system_balance_outstanding ?? 0
+          }
+        }
+      });
+    } catch (error) {
+      logger.error('Error fetching credits summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

@@ -26,6 +26,7 @@ const ANALYTICS_CONSTANTS = {
     AUTH_DAILY_STATS: "auth_daily_stats",
     REVENUE_DAILY_STATS: "revenue_daily_stats",
     TEMPLATE_DAILY_STATS: "template_daily_stats",
+    CREDITS_DAILY_STATS: "credits_daily_stats",
   },
   // Event names in auth_daily_stats
   AUTH_EVENT_NAMES: {
@@ -44,6 +45,7 @@ const ANALYTICS_CONSTANTS = {
   AUTH_GROUP_BY_COLUMNS: ["provider"],
   REVENUE_GROUP_BY_COLUMNS: ["currency", "payment_provider", "plan_name"],
   TEMPLATE_GROUP_BY_COLUMNS: ["output_type", "generation_type"],
+  CREDITS_GROUP_BY_COLUMNS: ["reason", "country"],
   GENDER_ENUMS: {
     MALE: "male",
     FEMALE: "female",

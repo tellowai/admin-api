@@ -50,6 +50,18 @@ class AnalyticsService {
     return conditions;
   }
 
+  static buildMVCreditsConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ['reason', 'country'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -257,6 +269,40 @@ class AnalyticsService {
     if (filters.currency) additionalFilters.currency = filters.currency;
     if (filters.user_id) additionalFilters.user_id = filters.user_id;
     return this.queryMixedDateRange('PURCHASES', filters, additionalFilters);
+  }
+
+  static async getCreditsDailyStats(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.reason != null && filters.reason !== '') additionalFilters.reason = filters.reason;
+    if (filters.country != null && filters.country !== '') additionalFilters.country = filters.country;
+    const whereConditions = this.buildMVCreditsConditions(start_date, end_date, additionalFilters);
+    if (filters.group_by && ANALYTICS_CONSTANTS.CREDITS_GROUP_BY_COLUMNS.includes(filters.group_by)) {
+      return AnalyticsModel.queryCreditsDailyStatsGrouped(whereConditions, filters.group_by);
+    }
+    return AnalyticsModel.queryCreditsDailyStats(whereConditions);
+  }
+
+  static async getCreditsSummary(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.reason != null && filters.reason !== '') additionalFilters.reason = filters.reason;
+    if (filters.country != null && filters.country !== '') additionalFilters.country = filters.country;
+    const whereConditions = this.buildMVCreditsConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.getCreditsSummary(whereConditions);
+  }
+
+  /** All-time credits totals: single simple query, no date filter, optional reason/country only. */
+  static async getCreditsSummaryAllTime(filters = {}) {
+    const conditions = [];
+    const allowed = ['reason', 'country'];
+    allowed.forEach(key => {
+      if (filters[key] != null && filters[key] !== '') {
+        const v = String(filters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return AnalyticsModel.getCreditsSummaryAllTime(conditions);
   }
 }
 

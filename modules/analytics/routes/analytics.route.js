@@ -138,4 +138,21 @@ module.exports = function(app) {
     AnalyticsCtrl.getPurchasesSummary
   );
 
+  // Credits analytics (issued, deducted, users from credits_daily_stats)
+  app.route(
+    versionConfig.routePrefix + '/analytics/credits'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateCreditsAnalyticsQuery,
+    AnalyticsCtrl.getCredits
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/credits/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateCreditsAnalyticsQuery,
+    AnalyticsCtrl.getCreditsSummary
+  );
+
 };

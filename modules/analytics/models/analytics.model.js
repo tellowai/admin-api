@@ -271,6 +271,72 @@ class AnalyticsModel {
     return result.data?.[0]?.total_count || 0;
   }
 
+  // --- Credits daily stats (issued, deducted, users) ---
+  static async queryCreditsDailyStats(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        sum(issued) AS issued,
+        sum(deducted) AS deducted,
+        uniqMerge(users_receiving) AS users_receiving_count,
+        uniqMerge(users_spending) AS users_spending_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.CREDITS_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryCreditsDailyStatsGrouped(whereConditions, groupByColumn) {
+    const query = `
+      SELECT
+        report_date AS date,
+        ${groupByColumn} AS group_key,
+        sum(issued) AS issued,
+        sum(deducted) AS deducted,
+        uniqMerge(users_receiving) AS users_receiving_count,
+        uniqMerge(users_spending) AS users_spending_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.CREDITS_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async getCreditsSummary(whereConditions) {
+    const query = `
+      SELECT
+        sum(issued) AS total_issued,
+        sum(deducted) AS total_deducted,
+        (sum(issued) - sum(deducted)) AS system_balance_outstanding,
+        uniqMerge(users_receiving) AS users_receiving_count,
+        uniqMerge(users_spending) AS users_spending_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.CREDITS_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
+  }
+
+  /** All-time totals: single table sum, no date filter, no joins. Optional reason/country only. */
+  static async getCreditsSummaryAllTime(whereConditions = []) {
+    const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const query = `
+      SELECT
+        sum(issued) AS total_issued,
+        sum(deducted) AS total_deducted,
+        (sum(issued) - sum(deducted)) AS system_balance_outstanding
+      FROM ${ANALYTICS_CONSTANTS.TABLES.CREDITS_DAILY_STATS}
+      ${whereClause}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
+  }
+
   /**
    * Top templates by generation count (sum of tries in date range).
    * Single aggregation, no joins. Paginated via LIMIT/OFFSET for scale.
