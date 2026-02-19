@@ -271,13 +271,15 @@ class AnalyticsModel {
     return result.data?.[0]?.total_count || 0;
   }
 
-  // --- Credits daily stats (issued, deducted, users) ---
+  // --- Credits daily stats (issued, reserved, deducted, released, users) ---
   static async queryCreditsDailyStats(whereConditions) {
     const query = `
       SELECT
         report_date AS date,
         sum(issued) AS issued,
+        sum(reserved) AS reserved,
         sum(deducted) AS deducted,
+        sum(released) AS released,
         uniqMerge(users_receiving) AS users_receiving_count,
         uniqMerge(users_spending) AS users_spending_count
       FROM ${ANALYTICS_CONSTANTS.TABLES.CREDITS_DAILY_STATS}
