@@ -340,8 +340,9 @@ class AnalyticsModel {
   }
 
   /**
-   * Stuck credit jobs from raw events: per (user_id, object_id) get reserved_ts and earliest of deducted/released.
-   * Used to compute daily series of stuck_job_count and stuck_user_count (done in service).
+   * Stuck credit jobs: one row per (user_id, object_id) with reserved_ts and optional deducted_ts/released_ts.
+   * - event_name filter limits scan to lifecycle events (matches MergeTree ORDER BY event_name).
+   * - countIf ensures NULL when no event (avoids epoch sentinel from minIf/maxIf).
    */
   static async queryCreditsStuckJobsFromRaw(timestampConditions) {
     const query = `
@@ -349,10 +350,11 @@ class AnalyticsModel {
         user_id,
         object_id,
         maxIf(timestamp, event_name = 'credit_reserved') AS reserved_ts,
-        minIf(timestamp, event_name = 'credit_deducted') AS deducted_ts,
-        minIf(timestamp, event_name = 'credit_released') AS released_ts
+        if(countIf(event_name = 'credit_deducted') > 0, minIf(timestamp, event_name = 'credit_deducted'), NULL) AS deducted_ts,
+        if(countIf(event_name = 'credit_released') > 0, minIf(timestamp, event_name = 'credit_released'), NULL) AS released_ts
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
       WHERE object_type = 'credit'
+        AND event_name IN ('credit_reserved', 'credit_deducted', 'credit_released')
         AND ${timestampConditions.join(' AND ')}
       GROUP BY user_id, object_id
       HAVING reserved_ts IS NOT NULL

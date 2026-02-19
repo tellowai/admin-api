@@ -4,8 +4,12 @@ const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
-/** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). */
+/** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). Defensive: query now uses countIf to return NULL, but parser still normalizes any sentinel. */
 const CLICKHOUSE_EPOCH_SENTINEL_MS = 946684800000;
+
+/** Stuck job: reserved at least this long ago (1h) to count as stuck on a given day. */
+const STUCK_THRESHOLD_MS = 60 * 60 * 1000;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 class AnalyticsService {
   // Build conditions for MV tables (auth_daily_stats, revenue_daily_stats, template_daily_stats)
@@ -333,7 +337,45 @@ class AnalyticsService {
     return d;
   }
 
-  /** Stuck credits: query raw events and return daily series of stuck_job_count and stuck_user_count (1hr threshold). */
+  /**
+   * Returns UTC date string (YYYY-MM-DD) for a Date at midnight UTC.
+   */
+  static _toDateStr(d) {
+    return d.toISOString().slice(0, 10);
+  }
+
+  /**
+   * End-of-day (23:59:59.999) UTC for the given date.
+   */
+  static _endOfDayUtc(year, month, date) {
+    return new Date(Date.UTC(year, month, date, 23, 59, 59, 999));
+  }
+
+  /**
+   * Which days in [startDayUtc, endDayUtc] was this job stuck?
+   * Stuck on day D = reserved by (end of D - 1hr) and not deducted/released by end of D.
+   * Starts from reservation day to avoid scanning earlier days.
+   */
+  static _stuckDaysForJob(reservedTs, finalizedTs, startDayUtc, endDayUtc) {
+    const days = [];
+    const reservedDayUtc = new Date(Date.UTC(reservedTs.getUTCFullYear(), reservedTs.getUTCMonth(), reservedTs.getUTCDate()));
+    const firstDayMs = Math.max(startDayUtc.getTime(), reservedDayUtc.getTime());
+    const lastDayMs = endDayUtc.getTime();
+    for (let dayMs = firstDayMs; dayMs <= lastDayMs; dayMs += MS_PER_DAY) {
+      const d = new Date(dayMs);
+      const endOfDay = this._endOfDayUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+      const cutoff = new Date(endOfDay.getTime() - STUCK_THRESHOLD_MS);
+      if (reservedTs > cutoff) continue;
+      if (finalizedTs && finalizedTs <= endOfDay) break; // no later days can be stuck
+      days.push(this._toDateStr(d));
+    }
+    return days;
+  }
+
+  /**
+   * Stuck credits: daily series of stuck_job_count and stuck_user_count (1hr threshold).
+   * Single pass over rows; O(rows + days) instead of O(days × rows).
+   */
   static async getCreditsStuckCounts(filters) {
     const { start_date, end_date } = filters;
     const start = new Date(start_date);
@@ -347,34 +389,42 @@ class AnalyticsService {
       `timestamp <= '${endStr}'`
     ];
     const rows = await AnalyticsModel.queryCreditsStuckJobsFromRaw(timestampConditions);
-    const STUCK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
-    const dayMs = 24 * 60 * 60 * 1000;
-    const startDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
-    const endDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
-    const result = [];
-    for (let d = new Date(startDay); d <= endDay; d.setTime(d.getTime() + dayMs)) {
-      const endOfDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
-      const cutoff = new Date(endOfDay.getTime() - STUCK_THRESHOLD_MS);
-      const dateStr = d.toISOString().slice(0, 10);
-      const userSet = new Set();
-      let jobCount = 0;
-      for (const row of rows) {
-        const reservedTs = this._parseClickHouseTimestamp(row.reserved_ts);
-        if (!reservedTs || reservedTs > cutoff) continue;
-        const deductedTs = this._parseClickHouseTimestamp(row.deducted_ts);
-        const releasedTs = this._parseClickHouseTimestamp(row.released_ts);
-        const finalizedByEndOfDay = (deductedTs && deductedTs <= endOfDay) || (releasedTs && releasedTs <= endOfDay);
-        if (finalizedByEndOfDay) continue;
-        jobCount += 1;
-        if (row.user_id) userSet.add(String(row.user_id));
-      }
-      result.push({
-        date: dateStr,
-        stuck_job_count: jobCount,
-        stuck_user_count: userSet.size
-      });
+    const startDayUtc = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+    const endDayUtc = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
+
+    // Pre-fill one bucket per day; then single pass over rows
+    const buckets = new Map();
+    for (let t = startDayUtc.getTime(); t <= endDayUtc.getTime(); t += MS_PER_DAY) {
+      const dateStr = this._toDateStr(new Date(t));
+      buckets.set(dateStr, { jobCount: 0, userSet: new Set() });
     }
-    return result;
+
+    for (const row of rows) {
+      const reservedTs = this._parseClickHouseTimestamp(row.reserved_ts);
+      if (!reservedTs) continue;
+      const deductedTs = this._parseClickHouseTimestamp(row.deducted_ts);
+      const releasedTs = this._parseClickHouseTimestamp(row.released_ts);
+      const finalizedTs = [deductedTs, releasedTs].filter(Boolean).sort((a, b) => a - b)[0] || null;
+      const stuckDays = this._stuckDaysForJob(reservedTs, finalizedTs, startDayUtc, endDayUtc);
+      const userId = row.user_id ? String(row.user_id) : null;
+      for (const dateStr of stuckDays) {
+        const b = buckets.get(dateStr);
+        if (b) {
+          b.jobCount += 1;
+          if (userId) b.userSet.add(userId);
+        }
+      }
+    }
+
+    const sortedDates = [...buckets.keys()].sort();
+    return sortedDates.map(dateStr => {
+      const b = buckets.get(dateStr);
+      return {
+        date: dateStr,
+        stuck_job_count: b.jobCount,
+        stuck_user_count: b.userSet.size
+      };
+    });
   }
 }
 
