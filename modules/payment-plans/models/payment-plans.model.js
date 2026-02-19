@@ -56,6 +56,15 @@ exports.getPlanGateways = async function (planId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [planId]);
 }
 
+/**
+ * Batch fetch gateways for multiple plans. Returns flat list; caller should group by payment_plan_id.
+ */
+exports.getGatewaysForPlans = async function (planIds) {
+  if (!planIds || planIds.length === 0) return [];
+  const query = `SELECT * FROM payment_gateway_plans WHERE payment_plan_id IN (?)`;
+  return await mysqlQueryRunner.runQueryInSlave(query, [planIds]);
+}
+
 exports.getPlanUIConfig = async function (planId) {
   const query = `SELECT * FROM payment_plan_ui_config WHERE payment_plan_id = ?`;
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [planId]);
@@ -250,6 +259,88 @@ exports.updatePlan = async function (planId, data) {
     await conn.commit();
     return true;
 
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+};
+
+/**
+ * Copy an existing plan: new pp_id, new gateway rows (new pgp_id, payment_plan_id = new),
+ * new ui_config row (new ui_id, payment_plan_id = new). plan_name becomes "Copy of {original}".
+ * New plan is created with is_active = 0. first_activated_at stays NULL.
+ */
+exports.copyPlan = async function (sourcePlanId) {
+  const conn = await mysqlQueryRunner.getConnectionFromMaster();
+
+  try {
+    const plan = await exports.getPlanById(sourcePlanId);
+    if (!plan) return null;
+
+    const [gateways, uiConfig] = await Promise.all([
+      exports.getPlanGateways(sourcePlanId),
+      exports.getPlanUIConfig(sourcePlanId)
+    ]);
+
+    await conn.beginTransaction();
+
+    const planData = {
+      tier: plan.tier,
+      plan_type: plan.plan_type,
+      plan_name: `Copy of ${(plan.plan_name || '').trim() || 'Plan'}`,
+      plan_heading: plan.plan_heading,
+      plan_subheading: plan.plan_subheading,
+      plan_benefits: plan.plan_benefits,
+      original_price: plan.original_price,
+      current_price: plan.current_price,
+      currency: plan.currency,
+      billing_interval: plan.billing_interval,
+      template_count: plan.template_count,
+      max_creations_per_template: plan.max_creations_per_template,
+      credits: plan.credits,
+      bonus_credits: plan.bonus_credits != null ? plan.bonus_credits : 0,
+      validity_days: plan.validity_days,
+      is_active: 0
+    };
+
+    if (planData.plan_benefits && typeof planData.plan_benefits !== 'string') {
+      planData.plan_benefits = JSON.stringify(planData.plan_benefits);
+    }
+
+    const planRes = await conn.query('INSERT INTO payment_plans SET ?', planData);
+    const newPlanId = planRes.insertId;
+
+    if (gateways && gateways.length > 0) {
+      const gatewayValues = gateways.map(g => [
+        newPlanId,
+        g.payment_gateway,
+        g.pg_plan_id,
+        g.is_active !== undefined ? g.is_active : 1
+      ]);
+      await conn.query(
+        'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, is_active) VALUES ?',
+        [gatewayValues]
+      );
+    }
+
+    if (uiConfig) {
+      const uiFields = [
+        'self_selection_text', 'panel_bg_color', 'panel_glow_color',
+        'panel_border_color', 'button_cta_text', 'button_bg_color',
+        'button_text_color', 'plan_badge', 'plan_badge_bg_color',
+        'plan_badge_border_color', 'plan_badge_text_color', 'plan_badge_icon'
+      ];
+      const uiData = { payment_plan_id: newPlanId };
+      uiFields.forEach(field => {
+        if (uiConfig[field] !== undefined) uiData[field] = uiConfig[field];
+      });
+      await conn.query('INSERT INTO payment_plan_ui_config SET ?', uiData);
+    }
+
+    await conn.commit();
+    return newPlanId;
   } catch (error) {
     await conn.rollback();
     throw error;

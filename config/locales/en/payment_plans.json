@@ -10,5 +10,6 @@
   "PLAN_ACTIVATED": "Payment plan activated successfully.",
   "PLAN_DEACTIVATED": "Payment plan deactivated successfully.",
   "ACTIVATION_FAILED": "Cannot activate plan. Missing required data.",
-  "STATUS_UPDATE_FAILED": "Failed to update plan status."
+  "STATUS_UPDATE_FAILED": "Failed to update plan status.",
+  "COPY_FAILED": "Failed to copy payment plan."
 }

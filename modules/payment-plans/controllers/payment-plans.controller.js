@@ -22,11 +22,22 @@ exports.listPlans = async function (req, res) {
 
     if (plans.length > 0) {
       const planIds = plans.map(p => p.pp_id);
-      const uiConfigs = await PaymentPlansModel.getUIConfigsForPlans(planIds);
+      const [uiConfigs, gatewaysRows] = await Promise.all([
+        PaymentPlansModel.getUIConfigsForPlans(planIds),
+        PaymentPlansModel.getGatewaysForPlans(planIds)
+      ]);
 
       const configMap = new Map();
       uiConfigs.forEach(conf => {
         configMap.set(conf.payment_plan_id, conf);
+      });
+
+      const gatewaysByPlanId = new Map();
+      gatewaysRows.forEach(g => {
+        if (!gatewaysByPlanId.has(g.payment_plan_id)) {
+          gatewaysByPlanId.set(g.payment_plan_id, []);
+        }
+        gatewaysByPlanId.get(g.payment_plan_id).push(g);
       });
 
       plans.forEach(plan => {
@@ -44,6 +55,7 @@ exports.listPlans = async function (req, res) {
           plan.plan_badge_text_color = conf.plan_badge_text_color;
           plan.plan_badge_icon = conf.plan_badge_icon;
         }
+        plan.gateways = gatewaysByPlanId.get(plan.pp_id) || [];
       });
     }
 
@@ -84,6 +96,40 @@ exports.getPlan = async function (req, res) {
     return res.status(CODES.OK).json(result);
   } catch (err) {
     return handleError(res, err, req.t('payment_plans:GET_FAILED'));
+  }
+};
+
+exports.copyPlan = async function (req, res) {
+  try {
+    const planId = req.params.planId;
+    if (!planId) {
+      return res.status(CODES.BAD_REQUEST).json({ message: req.t('payment_plans:PLAN_ID_REQUIRED') });
+    }
+
+    const newPlanId = await PaymentPlansModel.copyPlan(planId);
+
+    if (newPlanId == null) {
+      return res.status(CODES.NOT_FOUND).json({ message: req.t('payment_plans:PLAN_NOT_FOUND') });
+    }
+
+    // Activity Log
+    try {
+      if (req.user && req.user.userId) {
+        await ActivityLogController.publishNewAdminActivityLog({
+          adminUserId: req.user.userId,
+          entityType: 'payment_plans',
+          actionName: 'COPY_PAYMENT_PLAN',
+          entityId: newPlanId,
+          additionalData: JSON.stringify({ source_plan_id: planId })
+        });
+      }
+    } catch (logErr) {
+      logger.error('Failed to log admin activity for copy plan', logErr);
+    }
+
+    return res.status(CODES.CREATED).json({ plan_id: newPlanId });
+  } catch (err) {
+    return handleError(res, err, req.t('payment_plans:COPY_FAILED'));
   }
 };
 

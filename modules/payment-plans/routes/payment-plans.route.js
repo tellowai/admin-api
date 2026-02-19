@@ -50,4 +50,13 @@ module.exports = function (app) {
       PaymentPlansValidator.validateToggleStatusData,
       PaymentPlansCtrl.togglePlanStatus
     );
+
+  // Copy plan - requires manage_pricing
+  app.route(versionConfig.routePrefix + '/payment-plans/:planId/copy')
+    .post(
+      AuthMiddleware.isAdminUser,
+      PermissionMiddleware.hasPermission(PERMISSIONS.MANAGE_PRICING),
+      PaymentPlansValidator.validatePlanIdParam,
+      PaymentPlansCtrl.copyPlan
+    );
 };
