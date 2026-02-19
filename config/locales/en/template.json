@@ -24,6 +24,7 @@
   "PUBLISH_ERROR_OUTPUT_TYPE_MISSING": "Template output type (Image/Video) is missing.",
   "PUBLISH_ERROR_COLOR_VIDEO_MISSING": "Color video asset is missing.",
   "PUBLISH_ERROR_MASK_VIDEO_MISSING": "Mask video asset is missing.",
+  "PUBLISH_ERROR_TRANSPARENT_WEBM_VIDEO_MISSING": "Transparent WebM video asset is missing.",
   "PUBLISH_ERROR_BODYMOVIN_JSON_MISSING": "Bodymovin JSON asset is missing.",
   "PUBLISH_ERROR_AI_CLIPS_MISSING": "AI templates must have at least one clip.",
   "PUBLISH_ERROR_CLIP_WORKFLOW_MISSING": "Clip {{index}} is missing workflow data.",

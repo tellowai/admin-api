@@ -375,6 +375,9 @@ exports.listTemplates = async function (req, res) {
         if (template.mask_video_key && template.mask_video_bucket) {
           template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
         }
+        if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
+          template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
+        }
         if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
         }
@@ -612,6 +615,9 @@ exports.getTemplate = async function (req, res) {
     }
     if (template.mask_video_key && template.mask_video_bucket) {
       template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
+    }
+    if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
+      template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
     }
     if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
       template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
@@ -925,6 +931,9 @@ exports.listArchivedTemplates = async function (req, res) {
         if (template.mask_video_key && template.mask_video_bucket) {
           template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
         }
+        if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
+          template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
+        }
         if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
         }
@@ -1132,6 +1141,9 @@ exports.searchTemplates = async function (req, res) {
         }
         if (template.mask_video_key && template.mask_video_bucket) {
           template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
+        }
+        if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
+          template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
         }
         if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
           template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
@@ -3059,8 +3071,13 @@ async function validateTemplatePublishing(template, t) {
   if (!template.template_code) errors.push(t('template:PUBLISH_ERROR_CODE_MISSING'));
   if (!template.template_type) errors.push(t('template:PUBLISH_ERROR_TYPE_MISSING'));
   if (!template.template_output_type) errors.push(t('template:PUBLISH_ERROR_OUTPUT_TYPE_MISSING'));
-  if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING'));
-  if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING'));
+  const aeEngine = template.ae_rendering_engine || 'transparent_webm';
+  if (aeEngine === 'alpha_mask') {
+    if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING'));
+    if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING'));
+  } else if (aeEngine === 'transparent_webm') {
+    if (!template.transparent_webm_video_key) errors.push(t('template:PUBLISH_ERROR_TRANSPARENT_WEBM_VIDEO_MISSING'));
+  }
   if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING'));
 
   if (template.template_clips_assets_type === 'ai') {
