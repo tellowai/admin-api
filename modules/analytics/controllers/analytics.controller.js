@@ -864,6 +864,36 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getCreditsStuckCounts(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const filters = { ...utcFilters };
+      const data = await AnalyticsService.getCreditsStuckCounts(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: convertedResults
+      });
+    } catch (error) {
+      logger.error('Error fetching credits stuck counts:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

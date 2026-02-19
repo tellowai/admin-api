@@ -155,4 +155,12 @@ module.exports = function(app) {
     AnalyticsCtrl.getCreditsSummary
   );
 
+  app.route(
+    versionConfig.routePrefix + '/analytics/credits/stuck-counts'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateCreditsAnalyticsQuery,
+    AnalyticsCtrl.getCreditsStuckCounts
+  );
+
 };

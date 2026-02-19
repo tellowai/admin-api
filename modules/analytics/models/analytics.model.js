@@ -340,6 +340,28 @@ class AnalyticsModel {
   }
 
   /**
+   * Stuck credit jobs from raw events: per (user_id, object_id) get reserved_ts and earliest of deducted/released.
+   * Used to compute daily series of stuck_job_count and stuck_user_count (done in service).
+   */
+  static async queryCreditsStuckJobsFromRaw(timestampConditions) {
+    const query = `
+      SELECT
+        user_id,
+        object_id,
+        maxIf(timestamp, event_name = 'credit_reserved') AS reserved_ts,
+        minIf(timestamp, event_name = 'credit_deducted') AS deducted_ts,
+        minIf(timestamp, event_name = 'credit_released') AS released_ts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE object_type = 'credit'
+        AND ${timestampConditions.join(' AND ')}
+      GROUP BY user_id, object_id
+      HAVING reserved_ts IS NOT NULL
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
    * Top templates by generation count (sum of tries in date range).
    * Single aggregation, no joins. Paginated via LIMIT/OFFSET for scale.
    */

@@ -4,6 +4,9 @@ const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
+/** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). */
+const CLICKHOUSE_EPOCH_SENTINEL_MS = 946684800000;
+
 class AnalyticsService {
   // Build conditions for MV tables (auth_daily_stats, revenue_daily_stats, template_daily_stats)
   // Uses report_date; optional filters only for allowed columns (safe from injection).
@@ -303,6 +306,75 @@ class AnalyticsService {
       }
     });
     return AnalyticsModel.getCreditsSummaryAllTime(conditions);
+  }
+
+  /**
+   * Parse timestamp from ClickHouse (string "YYYY-MM-DD HH:mm:ss[.sss]", number, or Date).
+   * Treats datetime strings as UTC. Returns null for epoch/sentinel (e.g. "1970-01-01 05:30:00" from minIf when no match).
+   */
+  static _parseClickHouseTimestamp(value) {
+    if (value == null) return null;
+    if (value instanceof Date) {
+      const t = value.getTime();
+      if (Number.isNaN(t) || t < CLICKHOUSE_EPOCH_SENTINEL_MS) return null;
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (value < CLICKHOUSE_EPOCH_SENTINEL_MS) return null;
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    const s = String(value).trim();
+    if (!s || s.startsWith('1970-01-01')) return null; // ClickHouse "no value" often comes as 1970-01-01 in server TZ
+    // ClickHouse returns "YYYY-MM-DD HH:mm:ss.sss" – parse as UTC
+    const iso = s.includes('T') ? s : s.replace(' ', 'T') + (s.endsWith('Z') ? '' : 'Z');
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime()) || d.getTime() < CLICKHOUSE_EPOCH_SENTINEL_MS) return null;
+    return d;
+  }
+
+  /** Stuck credits: query raw events and return daily series of stuck_job_count and stuck_user_count (1hr threshold). */
+  static async getCreditsStuckCounts(filters) {
+    const { start_date, end_date } = filters;
+    const start = new Date(start_date);
+    const end = new Date(end_date);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+    const startStr = start.toISOString().slice(0, 19).replace('T', ' ');
+    const endStr = end.toISOString().slice(0, 19).replace('T', ' ');
+    const timestampConditions = [
+      `timestamp >= '${startStr}'`,
+      `timestamp <= '${endStr}'`
+    ];
+    const rows = await AnalyticsModel.queryCreditsStuckJobsFromRaw(timestampConditions);
+    const STUCK_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+    const dayMs = 24 * 60 * 60 * 1000;
+    const startDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()));
+    const endDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()));
+    const result = [];
+    for (let d = new Date(startDay); d <= endDay; d.setTime(d.getTime() + dayMs)) {
+      const endOfDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
+      const cutoff = new Date(endOfDay.getTime() - STUCK_THRESHOLD_MS);
+      const dateStr = d.toISOString().slice(0, 10);
+      const userSet = new Set();
+      let jobCount = 0;
+      for (const row of rows) {
+        const reservedTs = this._parseClickHouseTimestamp(row.reserved_ts);
+        if (!reservedTs || reservedTs > cutoff) continue;
+        const deductedTs = this._parseClickHouseTimestamp(row.deducted_ts);
+        const releasedTs = this._parseClickHouseTimestamp(row.released_ts);
+        const finalizedByEndOfDay = (deductedTs && deductedTs <= endOfDay) || (releasedTs && releasedTs <= endOfDay);
+        if (finalizedByEndOfDay) continue;
+        jobCount += 1;
+        if (row.user_id) userSet.add(String(row.user_id));
+      }
+      result.push({
+        date: dateStr,
+        stuck_job_count: jobCount,
+        stuck_user_count: userSet.size
+      });
+    }
+    return result;
   }
 }
 
