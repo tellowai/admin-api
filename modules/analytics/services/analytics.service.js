@@ -7,9 +7,10 @@ const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 /** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). Defensive: query now uses countIf to return NULL, but parser still normalizes any sentinel. */
 const CLICKHOUSE_EPOCH_SENTINEL_MS = 946684800000;
 
-/** Stuck job: reserved at least this long ago (1h) to count as stuck on a given day. */
-const STUCK_THRESHOLD_MS = 60 * 60 * 1000;
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+/** Stuck job: reserved at least this long ago (1h) to count as stuck on a given day. 60 * 60 * 1000 */
+const STUCK_THRESHOLD_MS = 3600000;
+/** Milliseconds per day. 24 * 60 * 60 * 1000 */
+const MS_PER_DAY = 86400000;
 
 class AnalyticsService {
   // Build conditions for MV tables (auth_daily_stats, revenue_daily_stats, template_daily_stats)
