@@ -5,6 +5,8 @@ const { v7: uuidv7 } = require('uuid');
 const moment = require('moment');
 const config = require('../../../config/config');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
+const TemplateScenesModel = require('./template.scenes.model');
+const TemplateLayersModel = require('./template.layers.model');
 
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'suspended', 'archived'];
 
@@ -83,23 +85,48 @@ exports.listTemplates = async function (pagination) {
 exports.getTemplateGenerationMeta = async function (templateId) {
   const query = `
     SELECT 
-      template_id,
-      template_name,
-      template_code,
-      template_gender,
-      aspect_ratio,
-      orientation,
-      template_output_type,
-      template_clips_assets_type,
-      language_code,
-      credits,
-      status
+      *
     FROM templates
     WHERE template_id = ?
     AND archived_at IS NULL
   `;
 
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+
+  if (!template) return template;
+
+  // Parse necessary JSON columns if needed
+  if (template.additional_data && typeof template.additional_data === 'string') {
+    try { template.additional_data = JSON.parse(template.additional_data); } catch (e) { }
+  }
+
+  const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+  const sceneIds = scenes.map(s => s.scene_id);
+
+  if (sceneIds.length > 0) {
+    const layers = await TemplateLayersModel.getLayersBySceneIds(sceneIds);
+    const layersByScene = {};
+
+    layers.forEach(layer => {
+      if (layer.layer_config && typeof layer.layer_config === 'string') {
+        try { layer.layer_config = JSON.parse(layer.layer_config); } catch (e) { }
+      }
+      if (!layersByScene[layer.scene_id]) layersByScene[layer.scene_id] = [];
+
+      if (layer.asset_key) {
+        layer.asset_url = `${config.os2.r2.public.bucketUrl}/${layer.asset_key}`;
+      }
+
+      layersByScene[layer.scene_id].push(layer);
+    });
+
+    scenes.forEach(scene => {
+      scene.layers = layersByScene[scene.scene_id] || [];
+    });
+  }
+
+  template.scenes = scenes || [];
+
   return template;
 };
 
@@ -281,8 +308,11 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
 };
 
 exports.createTemplate = async function (templateData, clips = null) {
-  // For templates with clips, use transaction to ensure data consistency
-  const needsTransaction = clips && clips.length > 0;
+  const scenes = templateData.scenes;
+  delete templateData.scenes;
+
+  // Use transaction if we have clips or scenes to ensure data consistency
+  const needsTransaction = (clips && clips.length > 0) || (scenes && scenes.length > 0);
 
   if (needsTransaction) {
     const connection = await mysqlQueryRunner.getConnectionFromMaster();
@@ -319,6 +349,12 @@ exports.createTemplate = async function (templateData, clips = null) {
         await this.createTemplateAiClipsInTransaction(connection, templateData.template_id, clips);
       }
 
+      // Create Scenes and Layers
+      if (scenes && scenes.length > 0) {
+        const createdScenes = await TemplateScenesModel.createTemplateScenesInTransaction(connection, templateData.template_id, scenes);
+        await TemplateLayersModel.createTemplateLayersInTransaction(connection, createdScenes);
+      }
+
       await connection.commit();
       return result;
 
@@ -330,7 +366,7 @@ exports.createTemplate = async function (templateData, clips = null) {
       connection.release();
     }
   } else {
-    // For templates without clips, use regular insert
+    // For templates without clips or scenes, use regular insert
     const fields = [];
     const values = [];
     const placeholders = [];
@@ -364,6 +400,9 @@ exports.updateTemplate = async function (templateId, templateData) {
   // Extract clips data and remove from template data (for regular updates)
   const clips = templateData.clips;
   delete templateData.clips;
+  // Also remove scenes data so it doesn't break update statement
+  const scenes = templateData.scenes;
+  delete templateData.scenes;
 
   Object.entries(templateData).forEach(([key, value]) => {
     if (value !== undefined) {
@@ -377,15 +416,51 @@ exports.updateTemplate = async function (templateId, templateData) {
   // Add templateId to values array
   values.push(templateId);
 
-  const query = `
-    UPDATE templates 
-    SET ${setClause.join(', ')}
-    WHERE template_id = ?
-    AND archived_at IS NULL
-  `;
+  // Use transaction if scenes need to be updated, since we want to delete/recreate
+  if (scenes && scenes.length > 0) {
+    const connection = await mysqlQueryRunner.getConnectionFromMaster();
+    try {
+      await connection.beginTransaction();
 
-  const result = await mysqlQueryRunner.runQueryInMaster(query, values);
-  return result.affectedRows > 0;
+      if (setClause.length > 0) {
+        const query = `
+           UPDATE templates 
+           SET ${setClause.join(', ')}
+           WHERE template_id = ?
+           AND archived_at IS NULL
+         `;
+        const result = await connection.query(query, values);
+        if (result.affectedRows === 0) {
+          await connection.rollback();
+          return false;
+        }
+      }
+
+      // Re-create scenes
+      await TemplateScenesModel.deleteTemplateScenesInTransaction(connection, templateId);
+      const createdScenes = await TemplateScenesModel.createTemplateScenesInTransaction(connection, templateId, scenes);
+      await TemplateLayersModel.createTemplateLayersInTransaction(connection, createdScenes);
+
+      await connection.commit();
+      return true;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } else {
+    // Regular update without transactions
+    if (setClause.length === 0) return true;
+    const query = `
+      UPDATE templates 
+      SET ${setClause.join(', ')}
+      WHERE template_id = ?
+      AND archived_at IS NULL
+    `;
+    const result = await mysqlQueryRunner.runQueryInMaster(query, values);
+    return result.affectedRows > 0;
+  }
 };
 
 /**
@@ -403,6 +478,10 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
     // Extract and remove clips data
     const clipsData = templateData.clips;
     delete templateData.clips;
+
+    // Extract and remove scenes data
+    const scenesData = templateData.scenes;
+    delete templateData.scenes;
 
     Object.entries(templateData).forEach(([key, value]) => {
       if (value !== undefined) {
@@ -440,6 +519,13 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
 
       // Insert new clips
       await this.createTemplateAiClipsInTransaction(connection, templateId, clipsData);
+    }
+
+    // Update Scenes and Layers
+    if (scenesData && scenesData.length > 0) {
+      await TemplateScenesModel.deleteTemplateScenesInTransaction(connection, templateId);
+      const createdScenes = await TemplateScenesModel.createTemplateScenesInTransaction(connection, templateId, scenesData);
+      await TemplateLayersModel.createTemplateLayersInTransaction(connection, createdScenes);
     }
 
     await connection.commit();
@@ -507,6 +593,35 @@ exports.getTemplateById = async function (templateId) {
   `;
 
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  if (!template) return template;
+
+  const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+  const sceneIds = scenes.map(s => s.scene_id);
+
+  if (sceneIds.length > 0) {
+    const layers = await TemplateLayersModel.getLayersBySceneIds(sceneIds);
+    const layersByScene = {};
+
+    layers.forEach(layer => {
+      if (layer.layer_config && typeof layer.layer_config === 'string') {
+        try { layer.layer_config = JSON.parse(layer.layer_config); } catch (e) { }
+      }
+      if (!layersByScene[layer.scene_id]) layersByScene[layer.scene_id] = [];
+
+      if (layer.asset_key) {
+        layer.asset_url = `${config.os2.r2.public.bucketUrl}/${layer.asset_key}`;
+      }
+
+      layersByScene[layer.scene_id].push(layer);
+    });
+
+    scenes.forEach(scene => {
+      scene.layers = layersByScene[scene.scene_id] || [];
+    });
+  }
+
+  template.scenes = scenes || [];
+
   return template;
 };
 

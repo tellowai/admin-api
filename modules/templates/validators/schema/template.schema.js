@@ -57,6 +57,28 @@ const customTextInputFieldSchema = Joi.object({
 });
 
 // Template tag schema
+
+const layerSchema = Joi.object({
+  layer_id: Joi.string().optional(),
+  layer_name: Joi.string().allow(null, '').optional(),
+  type: Joi.string().valid('solid_color', 'video_webm', 'video_transparent_webm', 'user_media_group', 'lottie', 'user_media', 'text').optional(),
+  layer_type: Joi.string().valid('solid_color', 'video_webm', 'video_transparent_webm', 'user_media_group', 'lottie', 'user_media', 'text').optional(),
+  z_index: Joi.number().integer().min(1).required(),
+  asset_bucket: Joi.string().allow(null, '').optional(),
+  asset_key: Joi.string().allow(null, '').optional(),
+  bucket: Joi.string().allow(null, '').optional(),
+  key: Joi.string().allow(null, '').optional(),
+  config: Joi.object().allow(null).optional(),
+  layer_config: Joi.object().allow(null).optional()
+}).unknown(true);
+
+const sceneSchema = Joi.object({
+  scene_id: Joi.string().optional(),
+  scene_name: Joi.string().allow(null, '').optional(),
+  scene_order: Joi.number().integer().min(1).optional(),
+  layers: Joi.array().items(layerSchema).optional()
+}).unknown(true);
+
 const templateTagSchema = Joi.object({
   facet_id: Joi.number().integer().positive().required(),
   ttd_id: Joi.number().integer().positive().required()
@@ -144,7 +166,8 @@ const createTemplateSchema = Joi.object().keys({
       is: 'ai',
       then: Joi.array().items(clipSchema).min(1).required(),
       otherwise: Joi.array().items(clipSchema).max(0).optional()
-    })
+    }),
+  scenes: Joi.array().items(sceneSchema).optional()
 });
 
 // Minimal schema for creating draft template
@@ -249,7 +272,8 @@ const updateTemplateSchema = Joi.object().keys({
   clips: Joi.alternatives().try(
     Joi.array().items(updateTemplateClipsItemSchema).min(1),
     Joi.array().items(clipSchema)
-  ).optional()
+  ).optional(),
+  scenes: Joi.array().items(sceneSchema).optional()
 });
 
 const bulkArchiveTemplatesSchema = Joi.object().keys({
