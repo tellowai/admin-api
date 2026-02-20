@@ -48,6 +48,7 @@ const customTextInputFieldSchema = Joi.object({
   linked_layer_names: Joi.array().items(Joi.string()).default([]).optional(),
   format: Joi.string().allow(null).optional(),
   nfd_field_code: Joi.string().allow(null).optional(), // Matched field code from niche data field definitions
+  variable_name: Joi.string().allow(null, '').optional(),
   new_field: Joi.object({
     field_code: Joi.string().required(),
     field_label: Joi.string().required(),
