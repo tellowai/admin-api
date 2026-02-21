@@ -5,6 +5,8 @@ const TemplateModel = require('../models/template.model');
 const TemplateTagDefinitionModel = require('../models/template.tag.definition.model');
 const TemplateTagFacetModel = require('../models/template.tag.facet.model');
 const TemplateTagsModel = require('../models/template.tags.model');
+const TemplateScenesModel = require('../models/template.scenes.model');
+const TemplateLayersModel = require('../models/template.layers.model');
 const TemplateErrorHandler = require('../middlewares/template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
@@ -773,6 +775,22 @@ exports.getTemplate = async function (req, res) {
       });
     }
 
+    // Auto-initialize default scenes for transparent_webm if empty
+    if ((!template.scenes || template.scenes.length === 0) && (template.ae_rendering_engine === 'transparent_webm' || template.status === 'draft')) {
+      template.scenes = [
+        {
+          scene_name: 'Scene 1',
+          scene_order: 1,
+          layers: [
+            { layer_name: 'Layer 1', layer_type: 'solid_color', z_index: 1, layer_config: { hex: '#000000' } },
+            { layer_name: 'Layer 2', layer_type: 'user_media', z_index: 2, layer_config: {} },
+            { layer_name: 'Layer 3', layer_type: 'video_transparent_webm', z_index: 3, layer_config: {} },
+            { layer_name: 'Layer 4', layer_type: 'text', z_index: 4, layer_config: {} }
+          ]
+        }
+      ];
+    }
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: template
     });
@@ -1419,7 +1437,42 @@ exports.createTemplate = async function (req, res) {
 
     // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
-
+    // Initialize with a default scene and layers if no scenes provided (new architecture)
+    if (!templateData.scenes || templateData.scenes.length === 0) {
+      templateData.ae_rendering_engine = templateData.ae_rendering_engine || 'transparent_webm';
+      templateData.scenes = [
+        {
+          scene_name: 'Scene 1',
+          scene_order: 1,
+          layers: [
+            {
+              layer_name: 'Layer 1',
+              layer_type: 'solid_color',
+              z_index: 1,
+              layer_config: { hex: '#000000' }
+            },
+            {
+              layer_name: 'Layer 2',
+              layer_type: 'user_media',
+              z_index: 2,
+              layer_config: {}
+            },
+            {
+              layer_name: 'Layer 3',
+              layer_type: 'video_transparent_webm',
+              z_index: 3,
+              layer_config: {}
+            },
+            {
+              layer_name: 'Layer 4',
+              layer_type: 'text',
+              z_index: 4,
+              layer_config: {}
+            }
+          ]
+        }
+      ];
+    }
     if (resolvedClipsAssetsType === 'non-ai') {
       // Force non-ai templates to have no clips; counts/upload JSONs populated from Bodymovin in common block below
       templateData.clips = [];
@@ -1617,7 +1670,42 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.template_type = 'premium'; // Default type
     templateData.credits = (templateData?.template_output_type == 'video') ? 50 : 1; // Default credits
     templateData.user_assets_layer = 'bottom'; // Default layer
+    templateData.ae_rendering_engine = 'transparent_webm';
     templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
+
+    // Initialize with a default scene and layers for the new architecture
+    templateData.scenes = [
+      {
+        scene_name: 'Scene 1',
+        scene_order: 1,
+        layers: [
+          {
+            layer_name: 'Layer 1',
+            layer_type: 'solid_color',
+            z_index: 1,
+            layer_config: { hex: '#000000' }
+          },
+          {
+            layer_name: 'Layer 2',
+            layer_type: 'user_media',
+            z_index: 2,
+            layer_config: {}
+          },
+          {
+            layer_name: 'Layer 3',
+            layer_type: 'video_transparent_webm',
+            z_index: 3,
+            layer_config: {}
+          },
+          {
+            layer_name: 'Layer 4',
+            layer_type: 'text',
+            z_index: 4,
+            layer_config: {}
+          }
+        ]
+      }
+    ];
 
     // Create template in database (minimal data)
     await TemplateModel.createTemplate(templateData, []); // Empty clips array
@@ -2630,6 +2718,44 @@ exports.updateTemplate = async function (req, res) {
       }
     }
 
+    // Auto-switch to new scene architecture if template has no scenes and is being updated
+    const existingScenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+    if ((!existingScenes || existingScenes.length === 0) && (!templateData.scenes || templateData.scenes.length === 0)) {
+      templateData.ae_rendering_engine = 'transparent_webm';
+      templateData.scenes = [
+        {
+          scene_name: 'Scene 1',
+          scene_order: 1,
+          layers: [
+            {
+              layer_name: 'Layer 1',
+              layer_type: 'solid_color',
+              z_index: 1,
+              layer_config: { hex: '#000000' }
+            },
+            {
+              layer_name: 'Layer 2',
+              layer_type: 'user_media',
+              z_index: 2,
+              layer_config: {}
+            },
+            {
+              layer_name: 'Layer 3',
+              layer_type: 'video_transparent_webm',
+              z_index: 3,
+              layer_config: {}
+            },
+            {
+              layer_name: 'Layer 4',
+              layer_type: 'text',
+              z_index: 4,
+              layer_config: {}
+            }
+          ]
+        }
+      ];
+    }
+
     // Determine template type: respect user input if provided, otherwise auto-detect
     let resolvedClipsAssetsType;
 
@@ -3072,13 +3198,29 @@ async function validateTemplatePublishing(template, t) {
   if (!template.template_type) errors.push(t('template:PUBLISH_ERROR_TYPE_MISSING'));
   if (!template.template_output_type) errors.push(t('template:PUBLISH_ERROR_OUTPUT_TYPE_MISSING'));
   const aeEngine = template.ae_rendering_engine || 'transparent_webm';
-  if (aeEngine === 'alpha_mask') {
-    if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING'));
-    if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING'));
-  } else if (aeEngine === 'transparent_webm') {
-    if (!template.transparent_webm_video_key) errors.push(t('template:PUBLISH_ERROR_TRANSPARENT_WEBM_VIDEO_MISSING'));
+  const isTransparentWebmMode = aeEngine === 'transparent_webm' || (template.additional_data && template.additional_data.transparent_webm_mode);
+  const hasScenes = template.scenes && template.scenes.length > 0;
+
+  if (!isTransparentWebmMode) {
+    if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING') || 'Color video asset is missing');
+    if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING') || 'Mask video asset is missing');
+    if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING') || 'Bodymovin JSON asset is missing');
+  } else {
+    if (!template.scenes || template.scenes.length === 0) {
+      errors.push('Template must have at least one scene configured');
+    } else {
+      let hasLayers = false;
+      for (const scene of template.scenes) {
+        if (scene.layers && scene.layers.length > 0) {
+          hasLayers = true;
+          break;
+        }
+      }
+      if (!hasLayers) {
+        errors.push('Template scenes must contain at least one layer components');
+      }
+    }
   }
-  if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING'));
 
   if (template.template_clips_assets_type === 'ai') {
     const workflowBuilderVersion = (template.workflow_builder_version || 'v1').toLowerCase();
