@@ -11,5 +11,8 @@
   "PLAN_DEACTIVATED": "Payment plan deactivated successfully.",
   "ACTIVATION_FAILED": "Cannot activate plan. Missing required data.",
   "STATUS_UPDATE_FAILED": "Failed to update plan status.",
-  "COPY_FAILED": "Failed to copy payment plan."
+  "COPY_FAILED": "Failed to copy payment plan.",
+  "GATEWAY_PLAN_IDS_LOCKED_MESSAGE": "Some gateway plan IDs cannot be changed once they are set.",
+  "GATEWAY_PLAN_ID_CANNOT_CHANGE": "{{gateway}} plan ID cannot be changed once set.",
+  "RESTRICTED_FIELDS_LOCKED": "Cannot update restricted fields once the plan has been activated. These settings are permanently locked."
 }

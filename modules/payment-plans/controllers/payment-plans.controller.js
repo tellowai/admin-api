@@ -207,35 +207,47 @@ exports.updatePlan = async function (req, res) {
         }
       }
 
-      // Check Gateways
+      // Gateways: allow setting plan ID only when not yet set; reject changing already-set plan IDs (per-gateway)
       if (req.validatedBody.gateways !== undefined) {
         const currentGateways = await PaymentPlansModel.getPlanGateways(planId);
+        const currentByGateway = new Map(currentGateways.map(g => [g.payment_gateway, g]));
+        const gatewayErrors = {};
 
-        // Simple comparison: length check and content check
-        // We normalize both to a comparable format
-        const normalizeGateway = (g) => `${g.payment_gateway}:${g.pg_plan_id}:${g.is_active}`;
+        for (const incoming of req.validatedBody.gateways) {
+          const key = incoming.payment_gateway;
+          const current = currentByGateway.get(key);
+          const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
+          const incomingId = incoming.pg_plan_id != null ? String(incoming.pg_plan_id).trim() : '';
 
-        const incomingSet = new Set(req.validatedBody.gateways.map(normalizeGateway));
-        const currentSet = new Set(currentGateways.map(normalizeGateway));
-
-        let gatewaysChanged = incomingSet.size !== currentSet.size;
-        if (!gatewaysChanged) {
-          for (const g of incomingSet) {
-            if (!currentSet.has(g)) {
-              gatewaysChanged = true;
-              break;
-            }
+          if (currentId !== '' && incomingId !== currentId) {
+            const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const template = req.t('payment_plans:GATEWAY_PLAN_ID_CANNOT_CHANGE');
+            gatewayErrors[key] = String(template).replace(/\{\{gateway\}\}/g, label);
           }
         }
 
-        if (gatewaysChanged) {
-          errors.push('gateways');
+        if (Object.keys(gatewayErrors).length > 0) {
+          return res.status(CODES.BAD_REQUEST).json({
+            message: req.t('payment_plans:GATEWAY_PLAN_IDS_LOCKED_MESSAGE'),
+            gateway_errors: gatewayErrors
+          });
         }
+
+        // Sanitize: keep existing pg_plan_id for gateways that already have one set
+        const sanitizedGateways = req.validatedBody.gateways.map(g => {
+          const current = currentByGateway.get(g.payment_gateway);
+          const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
+          if (currentId !== '') {
+            return { ...g, pg_plan_id: current.pg_plan_id };
+          }
+          return g;
+        });
+        req.validatedBody.gateways = sanitizedGateways;
       }
 
       if (errors.length > 0) {
         return res.status(CODES.BAD_REQUEST).json({
-          message: 'Cannot update restricted fields once the plan has been activated. These settings are permanently locked.',
+          message: req.t('payment_plans:RESTRICTED_FIELDS_LOCKED'),
           restricted_fields: errors
         });
       }
