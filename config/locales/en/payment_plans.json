@@ -14,5 +14,6 @@
   "COPY_FAILED": "Failed to copy payment plan.",
   "GATEWAY_PLAN_IDS_LOCKED_MESSAGE": "Some gateway plan IDs cannot be changed once they are set.",
   "GATEWAY_PLAN_ID_CANNOT_CHANGE": "{{gateway}} plan ID cannot be changed once set.",
-  "RESTRICTED_FIELDS_LOCKED": "Cannot update restricted fields once the plan has been activated. These settings are permanently locked."
+  "RESTRICTED_FIELDS_LOCKED": "Cannot update restricted fields once the plan has been activated. These settings are permanently locked.",
+  "ORIGINAL_PRICE_NOT_LESS_THAN_CURRENT": "Original price cannot be less than current price."
 }

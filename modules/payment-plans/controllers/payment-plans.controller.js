@@ -177,27 +177,34 @@ exports.updatePlan = async function (req, res) {
 
     // RESTRICTED UPDATE LOGIC
     // Once a plan has ever been activated (first_activated_at set), do not allow changes to Red Zone (Pricing, Limits, Gateways)
+    // Exception: original_price is editable but must be >= current_price.
     const hasEverBeenActivated = existingPlan.first_activated_at != null;
     if (hasEverBeenActivated) {
       const restrictedFields = [
-        'original_price', 'current_price', 'currency', 'billing_interval',
+        'current_price', 'currency', 'billing_interval',
         'credits', 'bonus_credits', 'template_count', 'max_creations_per_template', 'validity_days'
       ];
 
+      // Original price: allowed for activated plans only if >= current price
+      if (req.validatedBody.original_price !== undefined) {
+        const currentPrice = Number(existingPlan.current_price);
+        const newOriginalPrice = Number(req.validatedBody.original_price);
+        if (newOriginalPrice < currentPrice) {
+          return res.status(CODES.BAD_REQUEST).json({
+            message: req.t('payment_plans:ORIGINAL_PRICE_NOT_LESS_THAN_CURRENT') || 'Original price cannot be less than current price',
+            field: 'original_price'
+          });
+        }
+      }
+
       const errors = [];
 
-      // Check simple fields
+      // Check simple fields (original_price not in list — allowed with validation above)
       for (const field of restrictedFields) {
         if (req.validatedBody[field] !== undefined) {
-          // Compare loosely (==) to handle string/number differences if safe, 
-          // or cast both to string/number. existingPlan values come from DB (likely numbers for prices).
-          // req.validatedBody values come from Joi usually, which might coerce types.
-          // Let's assume strict equality might fail on type, so we try to be smart.
-
           let incoming = req.validatedBody[field];
           let existing = existingPlan[field];
 
-          // Normalize null/undefined
           if (incoming === null) incoming = undefined;
           if (existing === null) existing = undefined;
 
