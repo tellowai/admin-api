@@ -875,7 +875,7 @@ async function getNextCopyTemplateName(connection, sourceTemplateName) {
 }
 
 /**
- * Copy a template and all related data (templates, template_ai_clips, workflows, workflow_nodes, workflow_edges, template_tags)
+ * Copy a template and all related data (templates, template_ai_clips, workflows, workflow_nodes, workflow_edges, template_tags, template_scenes, template_layers)
  * within an existing transaction. Caller must begin/commit/rollback the transaction.
  * @param {Object} connection - DB connection (transaction already started)
  * @param {string} sourceTemplateId - Template ID to copy
@@ -1046,6 +1046,52 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
       'INSERT INTO template_tags (template_id, ttd_id, facet_id, created_at, updated_at) VALUES ?',
       [tagValues]
     );
+  }
+
+  // Copy template_scenes and template_layers (new template_id; new scene_id/layer_id with mapping)
+  const sourceScenes = await connection.query(
+    'SELECT scene_id, template_id, scene_name, scene_order FROM template_scenes WHERE template_id = ? ORDER BY scene_order',
+    [sourceTemplateId]
+  );
+  const scenesList = Array.isArray(sourceScenes) ? sourceScenes : [];
+  const sceneIdMap = new Map(); // old scene_id -> new scene_id
+
+  if (scenesList.length > 0) {
+    const sceneValues = scenesList.map(s => {
+      const newSceneId = uuidv7();
+      sceneIdMap.set(s.scene_id, newSceneId);
+      return [newSceneId, newTemplateId, s.scene_name ?? null, s.scene_order ?? 1, now, now];
+    });
+    await connection.query(
+      'INSERT INTO template_scenes (scene_id, template_id, scene_name, scene_order, created_at, updated_at) VALUES ?',
+      [sceneValues]
+    );
+
+    const sourceSceneIds = scenesList.map(s => s.scene_id);
+    const placeholders = sourceSceneIds.map(() => '?').join(',');
+    const sourceLayers = await connection.query(
+      `SELECT layer_id, scene_id, layer_name, layer_type, z_index, asset_bucket, asset_key, layer_config FROM template_layers WHERE scene_id IN (${placeholders}) ORDER BY z_index`,
+      sourceSceneIds
+    );
+    const layersList = Array.isArray(sourceLayers) ? sourceLayers : [];
+    if (layersList.length > 0) {
+      const layerValues = layersList.map(l => {
+        const newLayerId = uuidv7();
+        const newSceneId = sceneIdMap.get(l.scene_id);
+        if (!newSceneId) return null;
+        const layerConfig = l.layer_config;
+        const layerConfigJson = layerConfig != null
+          ? (typeof layerConfig === 'string' ? layerConfig : JSON.stringify(layerConfig))
+          : null;
+        return [newLayerId, newSceneId, l.layer_name, l.layer_type, l.z_index, l.asset_bucket ?? null, l.asset_key ?? null, layerConfigJson, now, now];
+      }).filter(Boolean);
+      if (layerValues.length > 0) {
+        await connection.query(
+          'INSERT INTO template_layers (layer_id, scene_id, layer_name, layer_type, z_index, asset_bucket, asset_key, layer_config, created_at, updated_at) VALUES ?',
+          [layerValues]
+        );
+      }
+    }
   }
 
   return newTemplateId;
