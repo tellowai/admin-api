@@ -850,9 +850,6 @@ exports.reorderTemplateClips = async function (req, res) {
 
     await TemplateModel.updateTemplateClipOrder(templateId, clips);
 
-    // Also trigger image input field refresh since clip order changed
-    await TemplateModel.updateTemplateImageInputsFromClips(templateId);
-
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Clips reordered successfully'
     });

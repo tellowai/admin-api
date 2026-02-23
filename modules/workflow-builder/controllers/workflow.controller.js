@@ -476,11 +476,6 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
       entityId: workflowId
     });
 
-    // Update template image inputs summary using the resolved templateId
-    if (templateId) {
-      await TemplateModel.updateTemplateImageInputsFromClips(templateId);
-    }
-
     const responseData = {
       workflowId,
       savedAt: new Date().toISOString(),
