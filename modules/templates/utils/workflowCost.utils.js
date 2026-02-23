@@ -1,5 +1,12 @@
 'use strict';
 
+let logger;
+try {
+  logger = require('../../../config/lib/logger');
+} catch (e) {
+  logger = { info: (...args) => console.log('[cost_in_dollars]', ...args), warn: (...args) => console.warn('[cost_in_dollars]', ...args) };
+}
+
 /**
  * Workflow cost calculation – same algorithm as admin-ui workflowCost.js.
  * Uses canonical pricing_config only.
@@ -69,7 +76,10 @@ function outputCostFromPricing(pc, outputTypes) {
   if (!output || typeof output !== 'object') return cost;
 
   const hasImage = (outputTypes || []).some(t => (t || '').toLowerCase() === 'image');
-  const hasVideo = (outputTypes || []).some(t => (t || '').toLowerCase() === 'video');
+  const hasVideo = (outputTypes || []).some(t => {
+    const s = (t || '').toLowerCase();
+    return s === 'video' || s === 'video_with_audio' || s === 'video_without_audio';
+  });
   const hasText = (outputTypes || []).some(t => (t || '').toLowerCase() === 'text');
 
   if (hasImage && output.image != null && typeof output.image === 'object') {
@@ -317,11 +327,20 @@ function buildNodesFromClips(clips, modelMap) {
  * Fetches AI models by IDs found in clips; missing models contribute via fallback defaults.
  * @param {Array} clips - Template clips with workflow array
  * @param {Function} getModelsByIds - async (modelIds: string[]) => Promise<Array<{ model_id, costs, input_types, output_types }>>
+ * @param {Object} [options] - { verbose: boolean } When true, logs each step (default true). When false, only logs final total.
  * @returns {Promise<number>} totalUsd
  */
-async function computeTemplateCostFromClips(clips, getModelsByIds) {
+async function computeTemplateCostFromClips(clips, getModelsByIds, options = {}) {
+  const verbose = options.verbose !== false;
+  const logPrefix = '[cost_in_dollars]';
+  const log = (msg) => { logger.info(msg); if (verbose) console.log(msg); };
+
+  if (verbose) log(`${logPrefix} --- cost_in_dollars calculation started ---`);
   const modelIds = extractModelIdsFromClips(clips);
+  if (verbose) log(`${logPrefix} Step 1: Extracted model IDs from clips → [${(modelIds || []).join(', ') || 'none'}]`);
+
   if (modelIds.length === 0) {
+    if (verbose) log(`${logPrefix} Step 2: No AI model steps in clips. cost_in_dollars = 0`);
     return 0;
   }
 
@@ -330,10 +349,30 @@ async function computeTemplateCostFromClips(clips, getModelsByIds) {
   for (const m of models || []) {
     if (m && m.model_id) modelMap.set(String(m.model_id), m);
   }
+  if (verbose) log(`${logPrefix} Step 2: Fetched ${(models || []).length} model(s) by ID; ${modelIds.length - modelMap.size} missing (will use default pricing)`);
 
   const nodes = buildNodesFromClips(clips, modelMap);
+  if (verbose) log(`${logPrefix} Step 3: Built ${nodes.length} cost node(s) from clips (each node = one AI_MODEL step)`);
+
   const result = computeWorkflowCost(nodes);
-  return result.totalUsd;
+
+  if (verbose && nodes.length > 0) {
+    log(`${logPrefix} Step 4: Per-node cost (USD):`);
+    for (const n of nodes) {
+      const nodeResult = result.byNode[n.id];
+      const costUsd = nodeResult ? nodeResult.costUsd : 0;
+      const estimate = nodeResult ? nodeResult.isEstimate : false;
+      const inputs = (n.data && n.data.inputs) ? n.data.inputs.map(i => i.type).join(', ') : '';
+      const outputs = (n.data && n.data.outputs) ? n.data.outputs.map(o => o.type).join(', ') : '';
+      log(`${logPrefix}   - ${n.id} | inputs: [${inputs}] → outputs: [${outputs}] | cost = ${costUsd} USD${estimate ? ' (estimate/default)' : ''}`);
+    }
+  }
+
+  const totalUsd = result.totalUsd;
+  const rounded = Number(Number(totalUsd).toFixed(4));
+  if (verbose) log(`${logPrefix} Step 5: Total cost_in_dollars = ${rounded} USD`);
+
+  return rounded;
 }
 
 exports.computeWorkflowCost = computeWorkflowCost;

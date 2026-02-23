@@ -78,6 +78,7 @@ exports.getByAmrIds = async function (amrIds) {
   const unique = [...new Set(amrIds)].filter(id => id != null);
   if (unique.length === 0) return [];
 
+  const placeholders = unique.map(() => '?').join(',');
   const query = `
     SELECT 
       amr_id,
@@ -87,10 +88,10 @@ exports.getByAmrIds = async function (amrIds) {
       description,
       icon_url
     FROM ai_model_registry
-    WHERE amr_id IN (?)
+    WHERE amr_id IN (${placeholders})
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+  return await mysqlQueryRunner.runQueryInSlave(query, unique);
 };
 
 /**
@@ -103,6 +104,7 @@ exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
   const unique = [...new Set(amrIds)].filter(id => id != null);
   if (unique.length === 0) return [];
 
+  const placeholders = unique.map(() => '?').join(',');
   const query = `
     SELECT 
       amr_id,
@@ -115,10 +117,10 @@ exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
       parameter_schema,
       pricing_config
     FROM ai_model_registry
-    WHERE amr_id IN (?)
+    WHERE amr_id IN (${placeholders})
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, [unique]);
+  return await mysqlQueryRunner.runQueryInSlave(query, unique);
 };
 
 /**

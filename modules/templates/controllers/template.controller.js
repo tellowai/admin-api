@@ -24,7 +24,9 @@ const NicheDataFieldDefinitionModel = require('../../niches/models/niche.data.fi
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const { generateBlurHashFromBuffer } = require('../utils/blurhash.utils');
-const { computeTemplateCostFromClips } = require('../utils/workflowCost.utils');
+const { computeTemplateCostFromClips, extractModelIdsFromClips } = require('../utils/workflowCost.utils');
+const WorkflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
+const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-registry.model');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -2380,6 +2382,109 @@ function calculateNonAiTemplateCredits(outputType, clips) {
 }
 
 /**
+ * For clips that have wf_id but no AI model steps in legacy clip.workflow (workflow-builder templates),
+ * load AI nodes from workflow_nodes and build legacy-style workflow steps so cost/credits can be computed.
+ * Mutates clips in place; returns the same array.
+ * @param {Array} clips
+ * @param {Object} [options] - { logVerbose: boolean } When true, logs enrich steps (default true). When false, silent.
+ */
+async function enrichClipsWorkflowFromWorkflowNodes(clips, options = {}) {
+  const logVerbose = options.logVerbose !== false;
+  if (!Array.isArray(clips) || clips.length === 0) return clips;
+  if (extractModelIdsFromClips(clips).length > 0) return clips;
+
+  const wfIds = [...new Set(clips.map(c => c.wf_id).filter(id => id != null))];
+  if (logVerbose) logger.info('[cost_in_dollars] enrichClips: wfIds from clips', { wfIds, clipCount: clips.length });
+  if (wfIds.length === 0) return clips;
+
+  const nodes = await WorkflowNodeModel.getNodesByWorkflowIds(wfIds);
+  const aiNodes = (nodes || []).filter(n => n.type === 'AI_MODEL' && n.amr_id != null);
+  if (logVerbose) logger.info('[cost_in_dollars] enrichClips: nodes', { totalNodes: (nodes || []).length, aiNodesCount: aiNodes.length });
+  if (aiNodes.length === 0) return clips;
+
+  const amrIds = [...new Set(aiNodes.map(n => n.amr_id).filter(Boolean))];
+  const registryRows = await AiModelRegistryModel.getByAmrIds(amrIds);
+  const platformModelIds = [...new Set((registryRows || []).map(r => r.platform_model_id).filter(Boolean))];
+  if (logVerbose) logger.info('[cost_in_dollars] enrichClips: registry', { amrIds, registryRowsCount: (registryRows || []).length, platformModelIds });
+  if (platformModelIds.length === 0) return clips;
+
+  const aiModels = await AiModelModel.getAiModelsByPlatformModelIds(platformModelIds);
+  const platformToModelId = new Map();
+  for (const m of aiModels || []) {
+    if (m && m.platform_model_id != null) platformToModelId.set(String(m.platform_model_id), m.model_id);
+  }
+  const amrIdToModelId = new Map();
+  for (const r of registryRows || []) {
+    if (r && r.amr_id != null) {
+      const modelId = r.platform_model_id != null ? platformToModelId.get(String(r.platform_model_id)) : null;
+      // Use ai_models model_id when present; otherwise use amr_id as synthetic id so cost can be resolved from registry pricing_config
+      amrIdToModelId.set(Number(r.amr_id), modelId != null ? modelId : String(r.amr_id));
+    }
+  }
+  if (logVerbose) logger.info('[cost_in_dollars] enrichClips: ai_models', { aiModelsCount: (aiModels || []).length, amrIdToModelIdSize: amrIdToModelId.size });
+
+  const nodesByWfId = new Map();
+  for (const n of aiNodes) {
+    const wfId = n.wf_id != null ? Number(n.wf_id) : null;
+    if (wfId == null) continue;
+    if (!nodesByWfId.has(wfId)) nodesByWfId.set(wfId, []);
+    nodesByWfId.get(wfId).push(n);
+  }
+
+  for (const clip of clips) {
+    if (clip.wf_id == null) continue;
+    const wfIdKey = Number(clip.wf_id);
+    const clipNodes = nodesByWfId.get(wfIdKey) || [];
+    if (clipNodes.length === 0) continue;
+    if (!Array.isArray(clip.workflow)) clip.workflow = [];
+    for (const node of clipNodes) {
+      const modelId = node.amr_id != null ? amrIdToModelId.get(Number(node.amr_id)) : null;
+      if (modelId != null) {
+        clip.workflow.push({
+          data: [{ type: 'ai_model', value: modelId }],
+          workflow_code: 'workflow_builder'
+        });
+      }
+    }
+  }
+  const extractedAfter = extractModelIdsFromClips(clips);
+  if (logVerbose) logger.info('[cost_in_dollars] enrichClips: done', { modelIdsAfter: extractedAfter });
+  return clips;
+}
+
+/**
+ * Run cost calculation for a template with full step-by-step logging (visual only).
+ * Does not persist; use when you want to see the cost_in_dollars breakdown anytime.
+ * @param {string} templateId - Template UUID
+ * @returns {Promise<number>} cost_in_dollars (rounded to 4 decimals)
+ */
+async function logTemplateCostBreakdown(templateId) {
+  const clips = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+  const clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clips);
+  const getModelsByIds = async (modelIds) => {
+    const fromAi = await AiModelModel.getAiModelsByIds(modelIds);
+    const found = new Set((fromAi || []).map(m => String(m.model_id)));
+    const missing = modelIds.filter(id => !found.has(String(id)));
+    if (missing.length === 0) return fromAi || [];
+    const amrIds = missing.filter(id => /^\d+$/.test(String(id))).map(id => Number(id));
+    if (amrIds.length === 0) return fromAi || [];
+    const registryRows = await AiModelRegistryModel.getByAmrIdsWithParameterSchema(amrIds);
+    const asModels = (registryRows || []).map(r => {
+      const cap = (r.pricing_config && r.pricing_config.capabilities) ? r.pricing_config.capabilities : {};
+      return {
+        model_id: String(r.amr_id),
+        costs: r.pricing_config || null,
+        input_types: Array.isArray(cap.input_types) ? cap.input_types : ['image', 'text'],
+        output_types: Array.isArray(cap.output_types) ? cap.output_types : []
+      };
+    });
+    return [...(fromAi || []), ...asModels];
+  };
+  return await computeTemplateCostFromClips(clipsToUse, getModelsByIds, { verbose: true });
+}
+exports.logTemplateCostBreakdown = logTemplateCostBreakdown;
+
+/**
  * Calculate credits based on actual model usage occurrences and their costs
  * Each model usage is calculated individually with proper quality/duration pricing
  */
@@ -2776,8 +2881,6 @@ exports.updateTemplate = async function (req, res) {
     // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
-    logger.info('UpdateTemplate resolved template_clips_assets_type', { templateId, resolvedClipsAssetsType, userProvided: templateData.template_clips_assets_type });
-
     // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
     if (isNonAi) {
       templateData.clips = [];
@@ -2908,10 +3011,37 @@ exports.updateTemplate = async function (req, res) {
     // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js
     if (isNonAi) {
       templateData.cost_in_dollars = 0;
-    } else if (hasClips) {
+    } else {
+      let clipsToUse = hasClips ? templateData.clips : (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      if (!hasClips) {
+        clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clipsToUse, { logVerbose: false });
+      }
       try {
-        const costUsd = await computeTemplateCostFromClips(templateData.clips, (modelIds) => AiModelModel.getAiModelsByIds(modelIds));
-        templateData.cost_in_dollars = costUsd;
+        if (clipsToUse.length > 0) {
+          const getModelsByIds = async (modelIds) => {
+            const fromAi = await AiModelModel.getAiModelsByIds(modelIds);
+            const found = new Set((fromAi || []).map(m => String(m.model_id)));
+            const missing = modelIds.filter(id => !found.has(String(id)));
+            if (missing.length === 0) return fromAi || [];
+            const amrIds = missing.filter(id => /^\d+$/.test(String(id))).map(id => Number(id));
+            if (amrIds.length === 0) return fromAi || [];
+            const registryRows = await AiModelRegistryModel.getByAmrIdsWithParameterSchema(amrIds);
+            const asModels = (registryRows || []).map(r => {
+              const cap = (r.pricing_config && r.pricing_config.capabilities) ? r.pricing_config.capabilities : {};
+              return {
+                model_id: String(r.amr_id),
+                costs: r.pricing_config || null,
+                input_types: Array.isArray(cap.input_types) ? cap.input_types : ['image', 'text'],
+                output_types: Array.isArray(cap.output_types) ? cap.output_types : []
+              };
+            });
+            return [...(fromAi || []), ...asModels];
+          };
+          const costUsd = await computeTemplateCostFromClips(clipsToUse, getModelsByIds, { verbose: false });
+          templateData.cost_in_dollars = costUsd;
+        } else {
+          templateData.cost_in_dollars = 0;
+        }
       } catch (costErr) {
         logger.warn('Failed to compute template cost from clips', { templateId, error: costErr.message });
         templateData.cost_in_dollars = 0;
