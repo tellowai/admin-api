@@ -11,20 +11,18 @@ try {
  * Workflow cost calculation – same algorithm as admin-ui workflowCost.js.
  * Uses canonical pricing_config only.
  *
- * Canonical pricing_config shape:
+ * Canonical pricing_config shape (input/output used for pricing; capabilities.input_types / output_types for per-model image vs video):
  *   pricing_config: {
- *     input: {
- *       text: { per_million_tokens: number },
- *       image: { first_megapixel: number, per_additional_megapixel: number },
- *       video: { per_second: number }
- *     },
+ *     input: { text?, image?, video? },
  *     output: {
- *       image: { first_megapixel: number, per_additional_megapixel: number | null },
- *       video_with_audio?: { "720p": { per_second: number, per_segment: { "5s": number, "10s": number } } },
- *       video_without_audio?: { "720p": { per_second: number, per_segment: { "5s": number, "10s": number } } },
- *       text?: { per_million_tokens: number }
- *     }
+ *       image?: { first_megapixel, per_additional_megapixel },
+ *       video_with_audio?: { "720p": { per_second, per_segment: { "5s", "10s" } } },
+ *       video_without_audio?: { "720p": { per_second, per_segment: { "5s", "10s" } } },
+ *       text?: { per_million_tokens }
+ *     },
+ *     capabilities?: { input_types: string[], output_types: string[] }  // e.g. ["image"], ["video_with_audio"]
  *   }
+ * Cost is computed for all clips and every AI_MODEL step in each clip (image and video models supported).
  */
 
 const DEFAULTS = {
@@ -93,10 +91,23 @@ function outputCostFromPricing(pc, outputTypes) {
   }
 
   if (hasVideo) {
-    const vid =
-      (output.video_without_audio && typeof output.video_without_audio === 'object' && output.video_without_audio) ||
-      (output.video_with_audio && typeof output.video_with_audio === 'object' && output.video_with_audio) ||
-      null;
+    // Use pricing key that matches actual output type: video_with_audio vs video_without_audio (not a single fallback)
+    const types = (outputTypes || []).map(t => (t || '').toLowerCase());
+    const useWithAudio = types.includes('video_with_audio');
+    const useWithoutAudio = types.includes('video_without_audio');
+    const useLegacyVideo = types.includes('video') && !useWithAudio && !useWithoutAudio;
+
+    let vid = null;
+    if (useWithAudio && output.video_with_audio && typeof output.video_with_audio === 'object') {
+      vid = output.video_with_audio;
+    } else if (useWithoutAudio && output.video_without_audio && typeof output.video_without_audio === 'object') {
+      vid = output.video_without_audio;
+    } else if (useLegacyVideo) {
+      vid =
+        (output.video_without_audio && typeof output.video_without_audio === 'object' && output.video_without_audio) ||
+        (output.video_with_audio && typeof output.video_with_audio === 'object' && output.video_with_audio) ||
+        null;
+    }
     if (vid) {
       const res = vid['720p'] || vid['1080p'] || vid['512p'] || vid['768p'] || vid['360p'] || vid['540p'];
       if (res && typeof res === 'object') {

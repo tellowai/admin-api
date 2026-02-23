@@ -3005,14 +3005,14 @@ exports.updateTemplate = async function (req, res) {
       */
     }
 
-    // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js
+    // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js.
+    // Uses all template AI clips at once (no page-wise): when payload has clips, use those (full set);
+    // when not, use all clips from DB. Each clip's AI steps are costed by model (image vs video_with_audio / video_without_audio from pricing_config + capabilities).
     if (isNonAi) {
       templateData.cost_in_dollars = 0;
     } else {
       let clipsToUse = hasClips ? templateData.clips : (await TemplateModel.getTemplateAiClips(templateId)) || [];
-      if (!hasClips) {
-        clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clipsToUse, { logVerbose: false });
-      }
+      clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clipsToUse, { logVerbose: false });
       try {
         if (clipsToUse.length > 0) {
           const getModelsByIds = async (modelIds) => {
