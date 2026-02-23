@@ -2931,17 +2931,7 @@ exports.updateTemplate = async function (req, res) {
       // Generate faces_needed from clips data when clips are provided
       templateData.faces_needed = generateFacesNeededFromClips(templateData.clips);
 
-      // Recompute uploads required when clips are provided
-      templateData.image_uploads_required = calculateImageUploadsRequiredFromClips(templateData.clips);
-      templateData.video_uploads_required = calculateVideoUploadsRequiredFromClips(templateData.clips);
-
-      // Generate image_uploads_json and video_uploads_json from clips if not provided
-      if (!templateData.image_uploads_json) {
-        templateData.image_uploads_json = generateImageUploadsJsonFromClips(templateData.clips);
-      }
-      if (!templateData.video_uploads_json) {
-        templateData.video_uploads_json = generateVideoUploadsJsonFromClips(templateData.clips);
-      }
+      // Do not auto-calculate image/video upload fields from clips; user controls image_input_fields_json / image_uploads_json via request
 
       // faces_needed derived from clips; retained for debugging via structured logs if needed
       // Auto-derive template_gender if not explicitly provided in update
