@@ -1530,9 +1530,19 @@ exports.createTemplate = async function (req, res) {
       }
     }
 
-    // Credits: use user provided or default to 1 (either 1 or user provided)
-    if (templateData.credits === undefined || templateData.credits === null || templateData.credits < 1) {
-      templateData.credits = 1;
+    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1
+    const templateType = templateData.template_type || 'premium';
+    if (templateType === 'free') {
+      templateData.credits = 0;
+    } else if (templateType === 'premium' || templateType === 'ai') {
+      const payloadCredits = templateData.credits;
+      templateData.credits = (payloadCredits !== undefined && payloadCredits !== null && payloadCredits > 0)
+        ? payloadCredits
+        : 1;
+    } else {
+      if (templateData.credits === undefined || templateData.credits === null || templateData.credits < 1) {
+        templateData.credits = 1;
+      }
     }
 
     // Default cf_r2_bucket to 'public' if key is provided but bucket is not
@@ -1669,8 +1679,13 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.template_output_type = templateData.template_output_type || 'video';
     templateData.template_clips_assets_type = 'non-ai';
     templateData.status = templateData.status || 'draft';
-    templateData.template_type = 'premium'; // Default type
-    templateData.credits = (templateData?.template_output_type == 'video') ? 50 : 1; // Default credits
+    templateData.template_type = templateData.template_type || 'premium';
+    if (templateData.template_type === 'free') {
+      templateData.credits = 0;
+    } else {
+      const c = templateData.credits;
+      templateData.credits = (c !== undefined && c !== null && c > 0) ? c : 1;
+    }
     templateData.user_assets_layer = 'bottom'; // Default layer
     templateData.ae_rendering_engine = 'transparent_webm';
     templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
@@ -3003,11 +3018,6 @@ exports.updateTemplate = async function (req, res) {
       */
     }
 
-    // Credits: ensure at least 1 if provided in update payload
-    if (templateData.credits !== undefined && (templateData.credits === null || templateData.credits < 1)) {
-      templateData.credits = 1;
-    }
-
     // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js
     if (isNonAi) {
       templateData.cost_in_dollars = 0;
@@ -3054,12 +3064,16 @@ exports.updateTemplate = async function (req, res) {
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
-    // If template type is "free", make credits zero.
-    // For "premium" or "ai", the credits are already recalculated/set in the blocks above
-    // (via calculateNonAiTemplateCredits or calculateMinimumCreditsFromClips).
-    const effectiveTemplateType = templateData.template_type || existingTemplate.template_type;
+    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1 (else keep existing)
+    const effectiveTemplateType = templateData.template_type ?? existingTemplate.template_type ?? 'premium';
     if (effectiveTemplateType === 'free') {
       templateData.credits = 0;
+    } else if (effectiveTemplateType === 'premium' || effectiveTemplateType === 'ai') {
+      if (templateData.credits !== undefined) {
+        templateData.credits = (templateData.credits !== null && templateData.credits > 0)
+          ? templateData.credits
+          : 1;
+      }
     }
 
     // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
