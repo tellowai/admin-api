@@ -2454,7 +2454,8 @@ async function enrichClipsWorkflowFromWorkflowNodes(clips, options = {}) {
       if (modelId != null) {
         clip.workflow.push({
           data: [{ type: 'ai_model', value: modelId }],
-          workflow_code: 'workflow_builder'
+          workflow_code: 'workflow_builder',
+          config_values: node.config_values || {}
         });
       }
     }
@@ -3012,6 +3013,7 @@ exports.updateTemplate = async function (req, res) {
       templateData.cost_in_dollars = 0;
     } else {
       let clipsToUse = hasClips ? templateData.clips : (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      // Set logVerbose: true when debugging cost/enrichClips
       clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clipsToUse, { logVerbose: false });
       try {
         if (clipsToUse.length > 0) {
@@ -3034,6 +3036,7 @@ exports.updateTemplate = async function (req, res) {
             });
             return [...(fromAi || []), ...asModels];
           };
+          // Set verbose: true when debugging cost breakdown table
           const costUsd = await computeTemplateCostFromClips(clipsToUse, getModelsByIds, { verbose: false });
           templateData.cost_in_dollars = costUsd;
         } else {

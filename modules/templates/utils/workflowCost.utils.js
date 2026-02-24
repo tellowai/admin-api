@@ -311,6 +311,20 @@ function buildNodesFromClips(clips, modelMap) {
         outputTypes = inferOutputTypesFromWorkflowCode(step.workflow_code);
       }
 
+      // When model supports both video_with_audio and video_without_audio, pick one based on step config (generate_audio)
+      const hasBothVideo = outputTypes.some(t => (t || '').toLowerCase() === 'video_with_audio') &&
+        outputTypes.some(t => (t || '').toLowerCase() === 'video_without_audio');
+      if (hasBothVideo) {
+        const config = step.config_values ?? step.config ?? {};
+        const generateAudio = config.generate_audio !== false;
+        outputTypes = outputTypes.filter(t => {
+          const lower = (t || '').toLowerCase();
+          if (lower === 'video_with_audio') return generateAudio;
+          if (lower === 'video_without_audio') return !generateAudio;
+          return true;
+        });
+      }
+
       let pricing = null;
       if (model && model.costs) {
         const raw = typeof model.costs === 'string' ? (() => { try { return JSON.parse(model.costs); } catch (_) { return null; } })() : model.costs;
@@ -344,7 +358,7 @@ function buildNodesFromClips(clips, modelMap) {
 async function computeTemplateCostFromClips(clips, getModelsByIds, options = {}) {
   const verbose = options.verbose !== false;
   const logPrefix = '[cost_in_dollars]';
-  const log = (msg) => { logger.info(msg); if (verbose) console.log(msg); };
+  const log = (msg) => { logger.info(msg); };
 
   if (verbose) log(`${logPrefix} --- cost_in_dollars calculation started ---`);
   const modelIds = extractModelIdsFromClips(clips);
@@ -367,21 +381,61 @@ async function computeTemplateCostFromClips(clips, getModelsByIds, options = {})
 
   const result = computeWorkflowCost(nodes);
 
-  if (verbose && nodes.length > 0) {
-    log(`${logPrefix} Step 4: Per-node cost (USD):`);
-    for (const n of nodes) {
-      const nodeResult = result.byNode[n.id];
-      const costUsd = nodeResult ? nodeResult.costUsd : 0;
-      const estimate = nodeResult ? nodeResult.isEstimate : false;
-      const inputs = (n.data && n.data.inputs) ? n.data.inputs.map(i => i.type).join(', ') : '';
-      const outputs = (n.data && n.data.outputs) ? n.data.outputs.map(o => o.type).join(', ') : '';
-      log(`${logPrefix}   - ${n.id} | inputs: [${inputs}] → outputs: [${outputs}] | cost = ${costUsd} USD${estimate ? ' (estimate/default)' : ''}`);
-    }
-  }
-
   const totalUsd = result.totalUsd;
   const rounded = Number(Number(totalUsd).toFixed(4));
-  if (verbose) log(`${logPrefix} Step 5: Total cost_in_dollars = ${rounded} USD`);
+
+  if (verbose && nodes.length > 0) {
+    // Group by clip: node id = "clip-{i}-step-{j}"
+    const byClip = new Map();
+    for (const n of nodes) {
+      const m = n.id.match(/^clip-(\d+)-step-(\d+)$/);
+      if (!m) continue;
+      const clipIdx = parseInt(m[1], 10);
+      const stepIdx = parseInt(m[2], 10);
+      const nodeResult = result.byNode[n.id];
+      const costUsd = nodeResult ? nodeResult.costUsd : 0;
+      if (!byClip.has(clipIdx)) byClip.set(clipIdx, []);
+      byClip.get(clipIdx).push({ stepIdx, costUsd, node: n, isEstimate: nodeResult ? nodeResult.isEstimate : false });
+    }
+
+    const pad = (s, n) => String(s).slice(0, n).padEnd(n, ' ');
+    const clipW = 14;
+    const stepW = 10;
+    const chargeW = 12;
+    const ioW = 44;
+    const rowLen = 3 + clipW + 3 + stepW + 3 + chargeW + 3 + ioW + 2; // │ spaces and padding
+    const border = (char) => ` ${char.repeat(rowLen - 2)} `;
+    const row = (a, b, c, d) => ` │ ${pad(a, clipW)} │ ${pad(b, stepW)} │ ${pad(c, chargeW)} │ ${pad(d, ioW)} │`;
+
+    log(`${logPrefix} ${border('═')}`);
+    log(`${logPrefix} │ ${pad('COST BREAKDOWN (USD)', rowLen - 4)} │`);
+    log(`${logPrefix} ${border('─')}`);
+    log(`${logPrefix} ${row('Clip', 'Step', 'Charge (USD)', 'Inputs → Outputs')}`);
+    log(`${logPrefix} ${border('─')}`);
+
+    for (const clipIdx of [...byClip.keys()].sort((a, b) => a - b)) {
+      const steps = byClip.get(clipIdx);
+      steps.sort((a, b) => a.stepIdx - b.stepIdx);
+      let clipTotal = 0;
+      const wfId = clips[clipIdx] && clips[clipIdx].wf_id != null ? clips[clipIdx].wf_id : null;
+      const clipLabel = wfId != null ? `${clipIdx} (wf: ${wfId})` : `${clipIdx}`;
+
+      for (const { stepIdx, costUsd, node, isEstimate } of steps) {
+        clipTotal += costUsd;
+        const inputs = (node.data && node.data.inputs) ? node.data.inputs.map(i => i.type).join(', ') : '';
+        const outputs = (node.data && node.data.outputs) ? node.data.outputs.map(o => o.type).join(', ') : '';
+        const io = `[${inputs}] → [${outputs}]${isEstimate ? ' (est.)' : ''}`;
+        log(`${logPrefix} ${row(clipLabel, `step ${stepIdx}`, `$${Number(costUsd).toFixed(4)}`, io)}`);
+      }
+      log(`${logPrefix} ${row('', 'total', `$${Number(clipTotal).toFixed(4)}`, '')}`);
+      log(`${logPrefix} ${border('─')}`);
+    }
+
+    log(`${logPrefix} ${row('TOTAL (all clips)', '', `$${rounded}`, '')}`);
+    log(`${logPrefix} ${border('═')}`);
+  } else if (verbose) {
+    log(`${logPrefix} Total cost_in_dollars = ${rounded} USD (no AI steps in clips)`);
+  }
 
   return rounded;
 }
