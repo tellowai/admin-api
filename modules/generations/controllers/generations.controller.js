@@ -20,15 +20,7 @@ exports.listGenerations = async function (req, res) {
       endDate = moment(end_date).endOf('day').toDate();
     }
 
-    // Enforce max 7 days range
-    const maxRangeDays = 7;
-    const diffDays = moment(endDate).diff(moment(startDate), 'days');
-    
-    if (diffDays > maxRangeDays) {
-      return res.status(400).send({
-        message: `Date range cannot exceed ${maxRangeDays} days.`
-      });
-    }
+
     
     // Fallback security on startDate being after endDate
     if (moment(startDate).isAfter(moment(endDate))) {
@@ -48,11 +40,36 @@ exports.listGenerations = async function (req, res) {
 
     const storage = StorageFactory.getProvider();
 
-    // Collect distinct IDs for bulk fetching
+    // Collect distinct event IDs to fetch parent resource_generations
+    const generationIds = [...new Set(generations.map(g => g.media_generation_id).filter(id => id))];
+    
+    // Fetch resource_generations in bulk from ClickHouse
+    const fetchedResourceGenerations = await generationsModel.getResourceGenerationsByIds(generationIds);
+    
+    // Map resource_generations in memory
+    const resourceGenMap = {};
+    if (fetchedResourceGenerations) {
+      fetchedResourceGenerations.forEach(rg => {
+        resourceGenMap[rg.resource_generation_id] = rg;
+      });
+    }
+
+    // Attach base generation details to event objects before user/template step
+    generations.forEach(gen => {
+      const parentGen = resourceGenMap[gen.media_generation_id];
+      if (parentGen) {
+        gen.user_id = parentGen.user_id;
+        gen.template_id = parentGen.template_id;
+        gen.media_type = parentGen.media_type;
+        gen.created_at = parentGen.created_at; // use the true creation time of the generation
+      }
+    });
+
+    // Collect distinct IDs for MySQL bulk fetching
     const userIds = [...new Set(generations.map(g => g.user_id).filter(id => id))];
     const templateIds = [...new Set(generations.map(g => g.template_id).filter(id => id))];
 
-    // Bulk fetch users & templates concurrently
+    // Bulk fetch users & templates concurrently from MySQL
     const [fetchedUsers, fetchedTemplates] = await Promise.all([
       generationsModel.getUsersByIds(userIds),
       generationsModel.getTemplatesByIds(templateIds)

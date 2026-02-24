@@ -1,6 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const { slaveClickhouse } = require('../../../config/lib/clickhouse');
 const moment = require('moment'); // Using moment as it's typically used in this project codebase based on API's media.generations.model.js
 
 /**
@@ -35,26 +36,21 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
 
   const query = `
     SELECT 
-      media_generation_id,
-      user_id,
-      template_id,
-      media_type,
-      output_format,
-      job_status,
-      output_media_bucket,
-      output_media_asset_key,
-      created_at,
-      completed_at,
-      error_message
-    FROM media_generations
-    WHERE created_at >= ? AND created_at <= ?
-    AND deleted_at IS NULL
+      resource_generation_id AS media_generation_id,
+      'completed' AS job_status,
+      JSONExtractString(additional_data, 'output', 'asset_bucket') AS output_media_bucket,
+      JSONExtractString(additional_data, 'output', 'asset_key') AS output_media_asset_key,
+      created_at AS completed_at,
+      '' AS error_message
+    FROM resource_generation_events
+    WHERE event_type = 'COMPLETED'
+      AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
     ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
+    LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
   `;
 
-  const params = [startFormatted, endFormatted, parseInt(limit), parseInt(offset)];
-  return await mysqlQueryRunner.runQueryInSlave(query, params);
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
 };
 
 /**
@@ -74,15 +70,38 @@ exports.getGenerationsCountByDateRange = async function (startDate, endDate) {
 
   const query = `
     SELECT COUNT(*) as total
-    FROM media_generations
-    WHERE created_at >= ? AND created_at <= ?
-    AND deleted_at IS NULL
+    FROM resource_generation_events
+    WHERE event_type = 'COMPLETED'
+      AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
   `;
 
-  const params = [startFormatted, endFormatted];
-  const [result] = await mysqlQueryRunner.runQueryInSlave(query, params);
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data?.[0]?.total || 0;
+};
+
+/**
+ * Fetch bulk resource generations by IDs from ClickHouse
+ * @param {Array<string>} generationIds
+ * @returns {Promise<Array>}
+ */
+exports.getResourceGenerationsByIds = async function (generationIds) {
+  if (!generationIds || generationIds.length === 0) return [];
   
-  return result && result.total ? result.total : 0;
+  // Format the IDs for ClickHouse IN clause (strings wrapped in single quotes)
+  const formattedIds = generationIds.map(id => `'${id}'`).join(',');
+  
+  const query = `
+    SELECT 
+      resource_generation_id,
+      user_id,
+      template_id,
+      media_type,
+      created_at
+    FROM resource_generations
+    WHERE resource_generation_id IN (${formattedIds})
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
 };
 
 /**
