@@ -30,6 +30,26 @@ async function enrichTicketsWithUsers(tickets) {
   });
 }
 
+async function enrichMessagesWithUsers(messages) {
+  if (!messages || messages.length === 0) return [];
+  const senderIds = new Set();
+  messages.forEach(m => {
+    if (m.sender_id && m.sender_id !== 'system') senderIds.add(m.sender_id);
+  });
+  const uniqueSenderIds = Array.from(senderIds);
+  let usersMap = {};
+  if (uniqueSenderIds.length > 0) {
+    const users = await SupportModel.getUsersByIds(uniqueSenderIds);
+    users.forEach(u => {
+      usersMap[u.user_id] = u;
+    });
+  }
+  return messages.map(m => {
+    m.sender = m.sender_id === 'system' ? { first_name: 'Support', last_name: 'Team', email: 'support@kriya.com' } : usersMap[m.sender_id] || { email: m.sender_id };
+    return m;
+  });
+}
+
 exports.listTickets = async function({ page, limit, status, assigned_to, search }) {
   const tickets = await SupportModel.listTickets(page, limit, status, assigned_to, search);
   const total = await SupportModel.countTickets(status, assigned_to, search);
@@ -132,7 +152,7 @@ exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
 
-exports.resolveTicket = async function(ticketId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType) {
+exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType) {
   const updates = {
     status: 'resolved',
     resolution_notes: resolutionNotes
@@ -148,4 +168,23 @@ exports.resolveTicket = async function(ticketId, resolutionNotes, isMoneyRefunde
   }
 
   await SupportModel.updateTicket(ticketId, updates);
+  
+  // Also insert the resolution notes as the final message in the conversation
+  await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes);
+};
+
+exports.getTicketMessages = async function(ticketId) {
+  const messages = await SupportModel.getTicketMessages(ticketId);
+  return await enrichMessagesWithUsers(messages);
+};
+
+exports.sendTicketMessage = async function(ticketId, adminId, message) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+
+  const messageId = await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, message);
+  const newMessage = await SupportModel.getTicketMessageById(messageId);
+  
+  const enriched = await enrichMessagesWithUsers([newMessage]);
+  return enriched[0];
 };

@@ -20,4 +20,8 @@ module.exports = function (app) {
 
   app.route(prefix + "/:ticketId/resolve")
     .post(AuthMiddleware.isAdminUser, SupportCtrl.resolveTicket);
+
+  app.route(prefix + "/:ticketId/messages")
+    .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketMessages)
+    .post(AuthMiddleware.isAdminUser, SupportCtrl.sendTicketMessage);
 };
