@@ -18,7 +18,11 @@ const handleError = (res, err, message) => {
 exports.listPlans = async function (req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
-    const plans = await PaymentPlansModel.listPlans(paginationParams);
+    const isActiveParam = req.query.is_active;
+    const options = {};
+    if (isActiveParam === '1') options.isActive = true;
+    else if (isActiveParam === '0') options.isActive = false;
+    const plans = await PaymentPlansModel.listPlans(paginationParams, options);
 
     if (plans.length > 0) {
       const planIds = plans.map(p => p.pp_id);

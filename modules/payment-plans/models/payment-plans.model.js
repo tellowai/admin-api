@@ -3,9 +3,16 @@
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 /**
- * List payment plans with pagination
+ * List payment plans with pagination.
+ * @param {Object} pagination - { limit, offset }
+ * @param {Object} [options] - { isActive: true|false } filter by status; omit for all
  */
-exports.listPlans = async function (pagination) {
+exports.listPlans = async function (pagination, options = {}) {
+  const whereClause = options.isActive === true
+    ? 'WHERE is_active = 1'
+    : options.isActive === false
+      ? 'WHERE is_active = 0'
+      : '';
   const query = `
     SELECT 
       pp_id,
@@ -26,6 +33,7 @@ exports.listPlans = async function (pagination) {
       created_at,
       updated_at
     FROM payment_plans
+    ${whereClause}
     ORDER BY current_price ASC
     LIMIT ? OFFSET ?
   `;
