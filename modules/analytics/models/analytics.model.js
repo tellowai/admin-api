@@ -562,6 +562,20 @@ class AnalyticsModel {
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  static async queryAERenderingByErrorCategory(whereConditions) {
+    const query = `
+      SELECT
+        error_category,
+        status,
+        total_jobs
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY error_category ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;

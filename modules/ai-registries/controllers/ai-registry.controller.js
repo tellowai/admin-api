@@ -160,10 +160,16 @@ exports.read = async function (req, res) {
       const socketTypes = await aiRegistryModel.getSocketTypesByIds(amstIds);
       const socketTypesMap = _.keyBy(socketTypes, 'amst_id');
 
-      model.io_definitions = ioDefinitions.map(io => ({
-        ...io,
-        socket_type: socketTypesMap[io.amst_id] || null
-      }));
+      model.io_definitions = ioDefinitions.map(io => {
+        const row = { ...io, socket_type: socketTypesMap[io.amst_id] || null };
+        if (typeof row.constraints === 'string') {
+          try { row.constraints = JSON.parse(row.constraints); } catch (e) { row.constraints = {}; }
+        }
+        if (typeof row.default_value === 'string') {
+          try { row.default_value = JSON.parse(row.default_value); } catch (e) { row.default_value = null; }
+        }
+        return row;
+      });
     } else {
       model.io_definitions = [];
     }

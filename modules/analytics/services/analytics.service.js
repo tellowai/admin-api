@@ -522,6 +522,7 @@ class AnalyticsService {
       successful_jobs,
       failed_jobs,
       success_rate_pct: row.total_jobs ? Math.round((successful_jobs / row.total_jobs) * 10000) / 100 : 0,
+      failure_rate_pct: row.total_jobs ? Math.round((failed_jobs / row.total_jobs) * 10000) / 100 : 0,
       avg_job_time_ms: row.total_jobs ? Math.round(row.total_job_time_ms / row.total_jobs) : 0,
       pct_validation: total ? Math.round((row.total_validation_ms / total) * 1000) / 10 : 0,
       pct_asset_download: total ? Math.round((row.total_asset_download_ms / total) * 1000) / 10 : 0,
@@ -635,6 +636,25 @@ class AnalyticsService {
       byDate[d].compute_ms += (Number(r.total_composition_ms) || 0) + (Number(r.total_bundling_ms) || 0) + (Number(r.total_rendering_ms) || 0);
     }
     return Object.values(byDate).sort((a, b) => String(a.date).localeCompare(b.date));
+  }
+
+  static async getAERenderingByErrorCategory(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingByErrorCategory(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byCategory = {};
+    for (const r of rows) {
+      const cat = r.error_category != null && String(r.error_category).trim() !== '' ? String(r.error_category) : '(empty)';
+      if (!byCategory[cat]) byCategory[cat] = { error_category: cat, failed_jobs: 0 };
+      if (r.status === 'failed') byCategory[cat].failed_jobs += Number(r.total_jobs) || 0;
+    }
+    return Object.values(byCategory)
+      .filter((x) => x.failed_jobs > 0)
+      .sort((a, b) => b.failed_jobs - a.failed_jobs);
   }
 
   /** All-time credits totals: single simple query, no date filter, optional reason/country only. */

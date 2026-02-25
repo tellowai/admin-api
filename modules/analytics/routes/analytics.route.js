@@ -252,4 +252,12 @@ module.exports = function(app) {
     AnalyticsCtrl.getAERenderingStepsByDay
   );
 
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/by-error-category'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingByErrorCategory
+  );
+
 };

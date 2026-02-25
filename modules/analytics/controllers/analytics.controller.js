@@ -1169,6 +1169,30 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getAERenderingByErrorCategory(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingByErrorCategory(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching AE rendering by error category:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;
