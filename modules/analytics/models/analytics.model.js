@@ -385,7 +385,7 @@ class AnalyticsModel {
     return result.data || [];
   }
 
-  // --- AI execution daily stats (SimpleAggregateFunction: no sumMerge; select raw rows, aggregate in service) ---
+  // --- AI execution daily stats (SummingMergeTree: use FINAL so merged rows with summed totals are returned) ---
   static async queryAIExecutionSummary(whereConditions) {
     const query = `
       SELECT
@@ -394,7 +394,7 @@ class AnalyticsModel {
         total_duration_ms,
         total_queue_ms,
         total_cost
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -411,7 +411,7 @@ class AnalyticsModel {
         total_duration_ms,
         total_queue_ms,
         total_cost
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY model_name ASC, provider_name ASC, status ASC
     `;
@@ -427,7 +427,7 @@ class AnalyticsModel {
         status,
         total_executions AS total_runs,
         total_duration_ms
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date DESC, model_name ASC, status ASC
     `;
@@ -441,7 +441,7 @@ class AnalyticsModel {
         template_id,
         total_executions AS total_calls,
         total_cost AS total_cost_usd
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY template_id ASC
     `;
@@ -455,7 +455,7 @@ class AnalyticsModel {
         report_date AS date,
         provider_name,
         total_cost
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date ASC, provider_name ASC
     `;
@@ -469,7 +469,7 @@ class AnalyticsModel {
         error_category,
         status,
         total_executions AS total_runs
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY error_category ASC, status ASC
     `;
@@ -477,7 +477,7 @@ class AnalyticsModel {
     return result.data || [];
   }
 
-  // --- AE rendering daily stats (raw rows, aggregate in service) ---
+  // --- AE rendering daily stats (SummingMergeTree: use FINAL for merged rows) ---
   static async queryAERenderingSummary(whereConditions) {
     const query = `
       SELECT
@@ -492,7 +492,7 @@ class AnalyticsModel {
         total_bundling_ms,
         total_rendering_ms,
         total_upload_ms
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -508,7 +508,7 @@ class AnalyticsModel {
         total_job_time_ms,
         total_rendering_ms,
         total_upload_ms
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY ae_version ASC, status ASC
     `;
@@ -523,7 +523,7 @@ class AnalyticsModel {
         ae_version,
         total_jobs,
         total_job_time_ms
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date DESC, ae_version ASC
     `;
@@ -537,7 +537,7 @@ class AnalyticsModel {
         report_date AS date,
         status,
         total_jobs
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date ASC, status ASC
     `;
@@ -555,7 +555,7 @@ class AnalyticsModel {
         total_composition_ms,
         total_bundling_ms,
         total_rendering_ms
-      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date ASC
     `;
