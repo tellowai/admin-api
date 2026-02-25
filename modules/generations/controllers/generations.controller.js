@@ -2,6 +2,7 @@
 
 const path = require('path');
 const generationsModel = require('../models/generations.model');
+const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
 
@@ -159,6 +160,25 @@ exports.listGenerations = async function (req, res) {
     console.error('Error fetching generations:', err);
     return res.status(500).send({
       message: 'Internal server error while fetching generations'
+    });
+  }
+};
+
+exports.getNodeExecutions = async function (req, res) {
+  try {
+    const { mediaGenerationId } = req.params;
+    if (!mediaGenerationId) {
+      return res.status(400).send({ message: 'mediaGenerationId is required' });
+    }
+    const [rows, mediaGeneration] = await Promise.all([
+      generationNodeExecutionsModel.getByMediaGenerationId(mediaGenerationId),
+      generationNodeExecutionsModel.getMediaGenerationTimestamps(mediaGenerationId)
+    ]);
+    res.json({ data: rows, mediaGeneration: mediaGeneration || null });
+  } catch (err) {
+    console.error('Error fetching generation node executions:', err);
+    return res.status(500).send({
+      message: 'Internal server error while fetching node executions'
     });
   }
 };
