@@ -1,7 +1,7 @@
 'use strict';
 
 const SupportModel = require('../models/support.model');
-
+const CreditsModel = require('../../../../api/modules/credits/models/credits.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 
 // A helper to enrich tickets without performing SQL JOINs
@@ -121,20 +121,56 @@ exports.getTicketDetails = async function(ticketId) {
       }
     }
 
-    // 2. Try to fetch from MySQL if it's completed
-    if (genContext.latestStatus === 'COMPLETED' || genContext.latestStatus === 'FAILED' || events.length === 0) {
-      const mysqlData = await SupportModel.getGenerationFromMySQL(finalTicket.generation_id);
+    // 2. Try to fetch from MySQL using generationId (legacy/fallback)
+    if (finalTicket.generation_id) {
+      let mysqlData = await SupportModel.getGenerationFromMySQL(finalTicket.generation_id);
+      
+      // If not in MySQL, build it dynamically from ClickHouse data
+      if (!mysqlData && genContext.source === 'clickhouse') {
+        mysqlData = {
+          media_generation_id: finalTicket.generation_id,
+          job_status: genContext.latestStatus?.toLowerCase(),
+          output_media_asset_key: null,
+          output_media_bucket: null,
+          media_type: null
+        };
+        
+        // Try getting accurate properties from resource_generations in ClickHouse
+        const clickHouseGen = await SupportModel.getResourceGenerationFromClickHouse(finalTicket.generation_id);
+        if (clickHouseGen && clickHouseGen.media_type) {
+           mysqlData.media_type = clickHouseGen.media_type;
+        }
+
+        // Try getting output from completed event
+        const completedEvent = genContext.events.find(e => e.event_type === 'COMPLETED');
+        if (completedEvent && completedEvent.additional_data) {
+          try {
+            const parsed = JSON.parse(completedEvent.additional_data);
+            if (parsed.output) {
+              mysqlData.output_media_asset_key = parsed.output.asset_key;
+              mysqlData.output_media_bucket = parsed.output.asset_bucket;
+            }
+          } catch(e) { console.error('Failed to parse clickhouse output', e) }
+        }
+      }
+
       if (mysqlData) {
         genContext.mysqlData = mysqlData;
-        genContext.source = 'mysql';
+        genContext.source = genContext.source === 'clickhouse' ? 'clickhouse' : 'mysql';
         genContext.latestStatus = mysqlData.job_status || genContext.latestStatus;
 
         // Generate a presigned URL for the output media file
         if (mysqlData.output_media_asset_key) {
           try {
             const storage = StorageFactory.getProvider();
-            // Just assume non-ephemeral if bucket not known, or check URL
-            const isEphemeral = mysqlData.output_media_asset_key.includes('ephemeral'); 
+            let isEphemeral = false;
+            
+            if (mysqlData.output_media_bucket && mysqlData.output_media_bucket.includes('ephemeral')) {
+              isEphemeral = true;
+            } else if (mysqlData.output_media_asset_key.includes('ephemeral')) {
+              isEphemeral = true;
+            }
+
             genContext.mysqlData.output_media_url = isEphemeral
               ? await storage.generateEphemeralPresignedDownloadUrl(mysqlData.output_media_asset_key, { expiresIn: 3600 })
               : await storage.generatePresignedDownloadUrl(mysqlData.output_media_asset_key, { expiresIn: 3600 });
@@ -143,6 +179,12 @@ exports.getTicketDetails = async function(ticketId) {
           }
         }
       }
+    }
+
+    if (finalTicket.generation_id) {
+      genContext.credits_deducted = await SupportModel.getDeductedCreditsForGeneration(finalTicket.generation_id);
+      genContext.credits_refunded = await SupportModel.getRefundedCreditsForGeneration(finalTicket.generation_id);
+      genContext.other_tickets_count = await SupportModel.countOtherTicketsForGeneration(finalTicket.generation_id, finalTicket.ticket_id);
     }
 
     finalTicket.generationContext = genContext;
@@ -167,6 +209,9 @@ exports.updateTicketStatus = async function(ticketId, status) {
 };
 
 exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+
   const updates = {
     status: 'resolved',
     resolution_notes: resolutionNotes
@@ -177,8 +222,37 @@ exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMon
   }
   
   if (isCreditsRefunded) {
+    if (ticket.is_credits_refunded) {
+      throw new Error('Credits have already been refunded for this ticket.');
+    }
+    
+    // We only refund if there is a generation_id and credits were actually deducted
+    if (!ticket.generation_id) {
+      throw new Error('Cannot refund credits: No generation attached to this ticket.');
+    }
+
+    const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
+    if (!deductedAmount || deductedAmount <= 0) {
+      throw new Error('Cannot refund credits: No credits were deducted for this generation.');
+    }
+
+    const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
+    if (previouslyRefundedAmount > 0) {
+      throw new Error('Credits have already been refunded for this generation.');
+    }
+
+    // Process the refund securely via CreditsModel
+    const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
+    await CreditsModel.refundCreditsTransaction(
+      ticket.user_id,
+      deductedAmount,
+      'adjustment',
+      ticket.generation_id,
+      description
+    );
+
     updates.is_credits_refunded = true;
-    updates.refunded_credits_type = refundedCreditsType;
+    updates.refunded_credits_type = 'new';
   }
 
   await SupportModel.updateTicket(ticketId, updates);

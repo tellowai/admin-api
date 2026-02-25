@@ -22,7 +22,7 @@ exports.listTickets = async function(page, limit, status, assignedTo, search) {
     params.push(searchParam, searchParam, searchParam);
   }
 
-  query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
   const offset = (page - 1) * limit;
   params.push(limit, offset);
 
@@ -93,6 +93,11 @@ exports.insertTicketMessage = async function(ticketId, senderType, senderId, mes
     VALUES (?, ?, ?, ?, ?)
   `;
   await mysqlQueryRunner.runQueryInMaster(query, [messageId, ticketId, senderType, senderId, message]);
+
+  // Bump the ticket's updated_at timestamp so it floats to the top of queues
+  const updateQuery = `UPDATE support_tickets SET updated_at = NOW() WHERE ticket_id = ?`;
+  await mysqlQueryRunner.runQueryInMaster(updateQuery, [ticketId]);
+
   return messageId;
 };
 
@@ -100,8 +105,8 @@ exports.insertTicketMessage = async function(ticketId, senderType, senderId, mes
 exports.getGenerationFromMySQL = async function(generationId) {
   const query = `
     SELECT 
-      media_generation_id, status as job_status,
-      output_media_asset_key, output_metadata, media_type,
+      media_generation_id, job_status,
+      output_media_asset_key, output_media_bucket, output_metadata, media_type,
       estimated_cost, cost_unit, error_message
     FROM media_generations 
     WHERE media_generation_id = ?
@@ -135,5 +140,71 @@ exports.getGenerationEventsFromClickHouse = async function(generationId) {
   } catch(err) {
     console.error('ClickHouse Support Query Error:', err);
     return [];
+  }
+};
+
+exports.getResourceGenerationFromClickHouse = async function(generationId) {
+  const query = `
+    SELECT 
+      resource_generation_id,
+      user_id,
+      template_id,
+      media_type,
+      created_at
+    FROM resource_generations
+    WHERE resource_generation_id = '${generationId}'
+  `;
+  try {
+    const res = await clickHouseQueryRunner.runQueryingInSlave(query, { dataObjects: true });
+    return Array.isArray(res) ? (res[0] || null) : (res.data?.[0] || null);
+  } catch(err) {
+    console.error('ClickHouse Resource Generation Query Error:', err);
+    return null;
+  }
+};
+
+
+exports.getDeductedCreditsForGeneration = async function(generationId) {
+  const query = `
+    SELECT SUM(amount) as total_deducted
+    FROM credits_transactions
+    WHERE reference_id = ? AND transaction_type = 'deduction' AND status = 'completed'
+  `;
+  try {
+    const res = await mysqlQueryRunner.runQueryInSlave(query, [generationId]);
+    return res[0]?.total_deducted || 0;
+  } catch(err) {
+    console.error('getDeductedCreditsForGeneration error:', err);
+    return 0;
+  }
+};
+
+exports.getRefundedCreditsForGeneration = async function(generationId) {
+  const query = `
+    SELECT SUM(amount) as total_refunded
+    FROM credits_transactions
+    WHERE reference_id = ? AND transaction_type = 'refund' AND status = 'completed'
+  `;
+  try {
+    const res = await mysqlQueryRunner.runQueryInSlave(query, [generationId]);
+    return res[0]?.total_refunded || 0;
+  } catch(err) {
+    console.error('getRefundedCreditsForGeneration error:', err);
+    return 0;
+  }
+};
+
+exports.countOtherTicketsForGeneration = async function(generationId, ticketId) {
+  const query = `
+    SELECT COUNT(*) as total
+    FROM support_tickets
+    WHERE generation_id = ? AND ticket_id != ?
+  `;
+  try {
+    const res = await mysqlQueryRunner.runQueryInSlave(query, [generationId, ticketId]);
+    return res[0]?.total || 0;
+  } catch(err) {
+    console.error('countOtherTicketsForGeneration error:', err);
+    return 0;
   }
 };
