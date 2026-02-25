@@ -128,6 +128,20 @@ exports.getTicketDetails = async function(ticketId) {
         genContext.mysqlData = mysqlData;
         genContext.source = 'mysql';
         genContext.latestStatus = mysqlData.job_status || genContext.latestStatus;
+
+        // Generate a presigned URL for the output media file
+        if (mysqlData.output_media_asset_key) {
+          try {
+            const storage = StorageFactory.getProvider();
+            // Just assume non-ephemeral if bucket not known, or check URL
+            const isEphemeral = mysqlData.output_media_asset_key.includes('ephemeral'); 
+            genContext.mysqlData.output_media_url = isEphemeral
+              ? await storage.generateEphemeralPresignedDownloadUrl(mysqlData.output_media_asset_key, { expiresIn: 3600 })
+              : await storage.generatePresignedDownloadUrl(mysqlData.output_media_asset_key, { expiresIn: 3600 });
+          } catch(e) {
+            console.error('Failed to generate presigned URL for output media', e);
+          }
+        }
       }
     }
 
@@ -187,4 +201,16 @@ exports.sendTicketMessage = async function(ticketId, adminId, message) {
   
   const enriched = await enrichMessagesWithUsers([newMessage]);
   return enriched[0];
+};
+
+exports.deleteMessage = async function(messageId, adminId) {
+  const msg = await SupportModel.getTicketMessageById(messageId);
+  if (!msg) throw new Error('Message not found');
+  if (msg.sender_type !== 'admin' || msg.sender_id !== adminId) throw new Error('FORBIDDEN');
+  if (msg.read_at) throw new Error('ALREADY_READ');
+
+  const ageMs = Date.now() - new Date(msg.created_at).getTime();
+  if (ageMs > 30 * 60 * 1000) throw new Error('TOO_OLD');
+
+  await SupportModel.deleteMessage(messageId);
 };
