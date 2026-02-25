@@ -2466,6 +2466,19 @@ async function enrichClipsWorkflowFromWorkflowNodes(clips, options = {}) {
 }
 
 /**
+ * Normalize ai_model_registry.pricing_config (MySQL JSON column may come back as string or object depending on driver/version).
+ * @param {*} raw - Value from DB (string or object)
+ * @returns {Object|null} Parsed pricing config object or null
+ */
+function parsePricingConfigFromRegistry(raw) {
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch (_) { return null; }
+  }
+  return null;
+}
+
+/**
  * Run cost calculation for a template with full step-by-step logging (visual only).
  * Does not persist; use when you want to see the cost_in_dollars breakdown anytime.
  * @param {string} templateId - Template UUID
@@ -2483,12 +2496,19 @@ async function logTemplateCostBreakdown(templateId) {
     if (amrIds.length === 0) return fromAi || [];
     const registryRows = await AiModelRegistryModel.getByAmrIdsWithParameterSchema(amrIds);
     const asModels = (registryRows || []).map(r => {
-      const cap = (r.pricing_config && r.pricing_config.capabilities) ? r.pricing_config.capabilities : {};
+      const pricing = parsePricingConfigFromRegistry(r.pricing_config);
+      const cap = (pricing && pricing.capabilities) ? pricing.capabilities : {};
+      let outputTypes = Array.isArray(cap.output_types) ? cap.output_types : [];
+      if (outputTypes.length === 0 && pricing && pricing.output && typeof pricing.output === 'object') {
+        const out = pricing.output;
+        if (out.video_with_audio || out.video_without_audio) outputTypes = ['video_with_audio', 'video_without_audio'];
+        else if (out.image) outputTypes = ['image'];
+      }
       return {
         model_id: String(r.amr_id),
-        costs: r.pricing_config || null,
+        costs: pricing || null,
         input_types: Array.isArray(cap.input_types) ? cap.input_types : ['image', 'text'],
-        output_types: Array.isArray(cap.output_types) ? cap.output_types : []
+        output_types: outputTypes
       };
     });
     return [...(fromAi || []), ...asModels];
@@ -3026,12 +3046,19 @@ exports.updateTemplate = async function (req, res) {
             if (amrIds.length === 0) return fromAi || [];
             const registryRows = await AiModelRegistryModel.getByAmrIdsWithParameterSchema(amrIds);
             const asModels = (registryRows || []).map(r => {
-              const cap = (r.pricing_config && r.pricing_config.capabilities) ? r.pricing_config.capabilities : {};
+              const pricing = parsePricingConfigFromRegistry(r.pricing_config);
+              const cap = (pricing && pricing.capabilities) ? pricing.capabilities : {};
+              let outputTypes = Array.isArray(cap.output_types) ? cap.output_types : [];
+              if (outputTypes.length === 0 && pricing && pricing.output && typeof pricing.output === 'object') {
+                const out = pricing.output;
+                if (out.video_with_audio || out.video_without_audio) outputTypes = ['video_with_audio', 'video_without_audio'];
+                else if (out.image) outputTypes = ['image'];
+              }
               return {
                 model_id: String(r.amr_id),
-                costs: r.pricing_config || null,
+                costs: pricing || null,
                 input_types: Array.isArray(cap.input_types) ? cap.input_types : ['image', 'text'],
-                output_types: Array.isArray(cap.output_types) ? cap.output_types : []
+                output_types: outputTypes
               };
             });
             return [...(fromAi || []), ...asModels];

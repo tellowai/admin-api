@@ -277,6 +277,21 @@ function inferOutputTypesFromWorkflowCode(workflowCode) {
 }
 
 /**
+ * Infer output types from pricing_config.output when capabilities.output_types is missing (e.g. unparsed registry JSON in prod).
+ */
+function inferOutputTypesFromPricing(pc) {
+  if (!pc || typeof pc !== 'object' || !pc.output || typeof pc.output !== 'object') return [];
+  const out = pc.output;
+  const types = [];
+  if (out.video_with_audio && typeof out.video_with_audio === 'object') types.push('video_with_audio');
+  if (out.video_without_audio && typeof out.video_without_audio === 'object') types.push('video_without_audio');
+  if (out.image && typeof out.image === 'object') types.push('image');
+  if (out.text && typeof out.text === 'object') types.push('text');
+  if (types.length === 0 && (out.video || out.video_seconds)) types.push('video');
+  return types;
+}
+
+/**
  * Build cost-calculation nodes from clips and a map of modelId -> model (with costs, input_types, output_types).
  * Models may come from AiModelModel.getAiModelsByIds; missing models use fallback (estimate).
  * @param {Array} clips - Template clips with workflow array
@@ -307,6 +322,10 @@ function buildNodesFromClips(clips, modelMap) {
       const model = modelMap ? modelMap.get(modelId) : null;
       const inputTypes = (model && model.input_types) ? (Array.isArray(model.input_types) ? model.input_types : []) : ['image', 'text'];
       let outputTypes = (model && model.output_types) ? (Array.isArray(model.output_types) ? model.output_types : []) : [];
+      if (outputTypes.length === 0 && model && model.costs) {
+        const rawCosts = typeof model.costs === 'string' ? (() => { try { return JSON.parse(model.costs); } catch (_) { return null; } })() : model.costs;
+        outputTypes = inferOutputTypesFromPricing(rawCosts);
+      }
       if (outputTypes.length === 0) {
         outputTypes = inferOutputTypesFromWorkflowCode(step.workflow_code);
       }
@@ -431,7 +450,7 @@ async function computeTemplateCostFromClips(clips, getModelsByIds, options = {})
       log(`${logPrefix} ${border('─')}`);
     }
 
-    log(`${logPrefix} ${row('TOTAL (all clips)', '', `$${rounded}`, '')}`);
+    log(`${logPrefix} ${row('TOTAL', '', `$${rounded}`, '')}`);
     log(`${logPrefix} ${border('═')}`);
   } else if (verbose) {
     log(`${logPrefix} Total cost_in_dollars = ${rounded} USD (no AI steps in clips)`);
