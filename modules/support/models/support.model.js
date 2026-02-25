@@ -110,9 +110,14 @@ exports.getGenerationFromMySQL = async function(generationId) {
     const res = await mysqlQueryRunner.runQueryInSlave(query, [generationId]);
     return res[0] || null;
   } catch(err) {
-    // If the schema differs slightly, just fail gracefully
+    console.error('getGenerationFromMySQL error:', err);
     return null;
   }
+};
+
+exports.deleteMessage = async function(messageId) {
+  const query = `DELETE FROM support_ticket_messages WHERE message_id = ?`;
+  await mysqlQueryRunner.runQueryInMaster(query, [messageId]);
 };
 
 const clickHouseQueryRunner = require('../../core/models/clickhouse.promise.model');

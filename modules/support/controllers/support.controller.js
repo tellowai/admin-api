@@ -98,3 +98,19 @@ exports.sendTicketMessage = async function(req, res) {
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };
+
+exports.deleteTicketMessage = async function(req, res) {
+  try {
+    const { messageId } = req.params;
+    const adminId = req.user.userId;
+    await SupportService.deleteMessage(messageId, adminId);
+    return res.status(200).send({ message: 'Message deleted successfully' });
+  } catch(err) {
+    if (err.message === 'Message not found') return res.status(404).send({ message: 'Message not found' });
+    if (err.message === 'FORBIDDEN') return res.status(403).send({ message: 'You can only delete your own messages' });
+    if (err.message === 'ALREADY_READ') return res.status(409).send({ message: 'Message has already been read by the user' });
+    if (err.message === 'TOO_OLD') return res.status(409).send({ message: 'Message is older than 30 minutes and cannot be deleted' });
+    console.error('Delete Ticket Message Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};

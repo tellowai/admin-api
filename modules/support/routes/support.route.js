@@ -24,4 +24,7 @@ module.exports = function (app) {
   app.route(prefix + "/:ticketId/messages")
     .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketMessages)
     .post(AuthMiddleware.isAdminUser, SupportCtrl.sendTicketMessage);
+
+  app.route(prefix + "/:ticketId/messages/:messageId")
+    .delete(AuthMiddleware.isAdminUser, SupportCtrl.deleteTicketMessage);
 };
