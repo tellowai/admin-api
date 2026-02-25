@@ -70,6 +70,30 @@ class AnalyticsService {
     return conditions;
   }
 
+  static buildPipelineAIConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ['template_id', 'provider_name', 'model_name'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
+  static buildPipelineAEConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ['template_id', 'ae_version'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -298,6 +322,319 @@ class AnalyticsService {
     if (filters.country != null && filters.country !== '') additionalFilters.country = filters.country;
     const whereConditions = this.buildMVCreditsConditions(start_date, end_date, additionalFilters);
     return AnalyticsModel.getCreditsSummary(whereConditions);
+  }
+
+  static async getAIExecutionSummary(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionSummary(whereConditions);
+    if (!rows || rows.length === 0) return null;
+    let total_runs = 0;
+    let successful_runs = 0;
+    let total_duration_ms = 0;
+    let total_queue_ms = 0;
+    let total_cost = 0;
+    for (const r of rows) {
+      const runs = Number(r.total_runs) || 0;
+      total_runs += runs;
+      if (r.status === 'success') {
+        successful_runs += runs;
+        total_duration_ms += Number(r.total_duration_ms) || 0;
+      }
+      total_queue_ms += Number(r.total_queue_ms) || 0;
+      total_cost += Number(r.total_cost) || 0;
+    }
+    return {
+      total_runs,
+      successful_runs,
+      failed_runs: total_runs - successful_runs,
+      success_rate_pct: total_runs ? Math.round((successful_runs / total_runs) * 10000) / 100 : 0,
+      avg_duration_ms: successful_runs ? Math.round(total_duration_ms / successful_runs) : 0,
+      total_queue_ms,
+      avg_queue_ms: total_runs ? Math.round(total_queue_ms / total_runs) : 0,
+      total_cost
+    };
+  }
+
+  static async getAIExecutionByModel(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionByModel(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byKey = {};
+    for (const r of rows) {
+      const key = `${r.model_name || ''}\t${r.provider_name || ''}`;
+      if (!byKey[key]) {
+        byKey[key] = { model_name: r.model_name, provider_name: r.provider_name, total_runs: 0, successful_runs: 0, total_duration_ms: 0, total_queue_ms: 0, total_cost: 0 };
+      }
+      const runs = Number(r.total_runs) || 0;
+      byKey[key].total_runs += runs;
+      if (r.status === 'success') {
+        byKey[key].successful_runs += runs;
+        byKey[key].total_duration_ms += Number(r.total_duration_ms) || 0;
+      }
+      byKey[key].total_queue_ms += Number(r.total_queue_ms) || 0;
+      byKey[key].total_cost += Number(r.total_cost) || 0;
+    }
+    return Object.values(byKey)
+      .map((x) => ({
+        model_name: x.model_name,
+        provider_name: x.provider_name,
+        total_runs: x.total_runs,
+        successful_runs: x.successful_runs,
+        success_rate_pct: x.total_runs ? Math.round((x.successful_runs / x.total_runs) * 10000) / 100 : 0,
+        avg_duration_ms: x.successful_runs ? Math.round(x.total_duration_ms / x.successful_runs) : 0,
+        avg_queue_ms: x.total_runs ? Math.round(x.total_queue_ms / x.total_runs) : 0,
+        total_cost: x.total_cost
+      }))
+      .sort((a, b) => (b.total_runs - a.total_runs) || String(a.model_name).localeCompare(b.model_name));
+  }
+
+  static async getAIExecutionByDay(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionByDay(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byKey = {};
+    for (const r of rows) {
+      const key = `${r.date}\t${r.model_name || ''}`;
+      if (!byKey[key]) {
+        byKey[key] = { date: r.date, model_name: r.model_name, total_runs: 0, successful_runs: 0, total_duration_ms: 0 };
+      }
+      const runs = Number(r.total_runs) || 0;
+      byKey[key].total_runs += runs;
+      if (r.status === 'success') {
+        byKey[key].successful_runs += runs;
+        byKey[key].total_duration_ms += Number(r.total_duration_ms) || 0;
+      }
+    }
+    return Object.values(byKey)
+      .map((x) => ({
+        date: x.date,
+        model_name: x.model_name,
+        total_runs: x.total_runs,
+        successful_runs: x.successful_runs,
+        avg_duration_ms: x.successful_runs ? Math.round(x.total_duration_ms / x.successful_runs) : 0
+      }))
+      .sort((a, b) => String(b.date).localeCompare(a.date) || String(a.model_name).localeCompare(b.model_name));
+  }
+
+  static async getAIExecutionCostByTemplate(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionCostByTemplate(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byTemplate = {};
+    for (const r of rows) {
+      const tid = r.template_id || '';
+      if (!byTemplate[tid]) byTemplate[tid] = { template_id: tid, total_calls: 0, total_cost_usd: 0 };
+      byTemplate[tid].total_calls += Number(r.total_calls) || 0;
+      byTemplate[tid].total_cost_usd += Number(r.total_cost_usd) || 0;
+    }
+    return Object.values(byTemplate)
+      .map((x) => ({
+        ...x,
+        avg_cost_per_call: x.total_calls > 0 ? Math.round((x.total_cost_usd / x.total_calls) * 10000) / 10000 : 0
+      }))
+      .sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  }
+
+  static async getAIExecutionCostByDay(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionCostByDay(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byKey = {};
+    for (const r of rows) {
+      const key = `${r.date}\t${r.provider_name || ''}`;
+      if (!byKey[key]) byKey[key] = { date: r.date, provider_name: r.provider_name, total_cost: 0 };
+      byKey[key].total_cost += Number(r.total_cost) || 0;
+    }
+    return Object.values(byKey).sort((a, b) => String(a.date).localeCompare(b.date) || String(a.provider_name).localeCompare(b.provider_name));
+  }
+
+  static async getAIExecutionByErrorCategory(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.provider_name) additionalFilters.provider_name = filters.provider_name;
+    if (filters.model_name) additionalFilters.model_name = filters.model_name;
+    const whereConditions = this.buildPipelineAIConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAIExecutionByErrorCategory(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byCat = {};
+    for (const r of rows) {
+      if (r.status !== 'failed') continue;
+      const cat = r.error_category && String(r.error_category).trim() ? String(r.error_category) : 'unknown';
+      if (!byCat[cat]) byCat[cat] = { error_category: cat, failed_runs: 0 };
+      byCat[cat].failed_runs += Number(r.total_runs) || 0;
+    }
+    return Object.values(byCat)
+      .filter((x) => x.failed_runs > 0)
+      .sort((a, b) => b.failed_runs - a.failed_runs);
+  }
+
+  static async getAERenderingSummary(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingSummary(whereConditions);
+    if (!rows || rows.length === 0) return null;
+    const row = { total_jobs: 0, total_job_time_ms: 0, total_validation_ms: 0, total_asset_download_ms: 0, total_template_download_ms: 0, total_user_assets_download_ms: 0, total_composition_ms: 0, total_bundling_ms: 0, total_rendering_ms: 0, total_upload_ms: 0 };
+    for (const r of rows) {
+      row.total_jobs += Number(r.total_jobs) || 0;
+      row.total_job_time_ms += Number(r.total_job_time_ms) || 0;
+      row.total_validation_ms += Number(r.total_validation_ms) || 0;
+      row.total_asset_download_ms += Number(r.total_asset_download_ms) || 0;
+      row.total_template_download_ms += Number(r.total_template_download_ms) || 0;
+      row.total_user_assets_download_ms += Number(r.total_user_assets_download_ms) || 0;
+      row.total_composition_ms += Number(r.total_composition_ms) || 0;
+      row.total_bundling_ms += Number(r.total_bundling_ms) || 0;
+      row.total_rendering_ms += Number(r.total_rendering_ms) || 0;
+      row.total_upload_ms += Number(r.total_upload_ms) || 0;
+    }
+    const successful_jobs = rows.filter((r) => r.status === 'success').reduce((s, r) => s + (Number(r.total_jobs) || 0), 0);
+    const failed_jobs = row.total_jobs - successful_jobs;
+    const total = Number(row.total_job_time_ms) || 1;
+    return {
+      ...row,
+      successful_jobs,
+      failed_jobs,
+      success_rate_pct: row.total_jobs ? Math.round((successful_jobs / row.total_jobs) * 10000) / 100 : 0,
+      avg_job_time_ms: row.total_jobs ? Math.round(row.total_job_time_ms / row.total_jobs) : 0,
+      pct_validation: total ? Math.round((row.total_validation_ms / total) * 1000) / 10 : 0,
+      pct_asset_download: total ? Math.round((row.total_asset_download_ms / total) * 1000) / 10 : 0,
+      pct_template_download: total ? Math.round((row.total_template_download_ms / total) * 1000) / 10 : 0,
+      pct_user_assets_download: total ? Math.round((row.total_user_assets_download_ms / total) * 1000) / 10 : 0,
+      pct_composition: total ? Math.round((row.total_composition_ms / total) * 1000) / 10 : 0,
+      pct_bundling: total ? Math.round((row.total_bundling_ms / total) * 1000) / 10 : 0,
+      pct_rendering: total ? Math.round((row.total_rendering_ms / total) * 1000) / 10 : 0,
+      pct_upload: total ? Math.round((row.total_upload_ms / total) * 1000) / 10 : 0
+    };
+  }
+
+  static async getAERenderingByVersion(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingByVersion(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byVersion = {};
+    for (const r of rows) {
+      const v = r.ae_version || '';
+      if (!byVersion[v]) {
+        byVersion[v] = { ae_version: v, total_jobs: 0, successful_jobs: 0, total_job_time_ms: 0, total_rendering_ms: 0, total_upload_ms: 0 };
+      }
+      const jobs = Number(r.total_jobs) || 0;
+      byVersion[v].total_jobs += jobs;
+      if (r.status === 'success') byVersion[v].successful_jobs += jobs;
+      byVersion[v].total_job_time_ms += Number(r.total_job_time_ms) || 0;
+      byVersion[v].total_rendering_ms += Number(r.total_rendering_ms) || 0;
+      byVersion[v].total_upload_ms += Number(r.total_upload_ms) || 0;
+    }
+    return Object.values(byVersion)
+      .map((x) => ({
+        ae_version: x.ae_version,
+        total_jobs: x.total_jobs,
+        successful_jobs: x.successful_jobs,
+        success_rate_pct: x.total_jobs ? Math.round((x.successful_jobs / x.total_jobs) * 10000) / 100 : 0,
+        avg_job_time_ms: x.total_jobs ? Math.round(x.total_job_time_ms / x.total_jobs) : 0,
+        total_rendering_ms: x.total_rendering_ms,
+        total_upload_ms: x.total_upload_ms,
+        total_job_time_ms: x.total_job_time_ms
+      }))
+      .sort((a, b) => b.total_jobs - a.total_jobs);
+  }
+
+  static async getAERenderingByDay(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingByDay(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byKey = {};
+    for (const r of rows) {
+      const key = `${r.date}\t${r.ae_version || ''}`;
+      if (!byKey[key]) byKey[key] = { date: r.date, ae_version: r.ae_version, total_jobs: 0, total_job_time_ms: 0 };
+      byKey[key].total_jobs += Number(r.total_jobs) || 0;
+      byKey[key].total_job_time_ms += Number(r.total_job_time_ms) || 0;
+    }
+    return Object.values(byKey)
+      .map((x) => ({
+        ...x,
+        avg_job_time_ms: x.total_jobs > 0 ? Math.round(x.total_job_time_ms / x.total_jobs) : 0
+      }))
+      .sort((a, b) => String(b.date).localeCompare(a.date) || String(a.ae_version).localeCompare(b.ae_version));
+  }
+
+  static async getAERenderingByDayWithStatus(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingByDayWithStatus(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byDate = {};
+    for (const r of rows) {
+      const d = r.date;
+      if (!byDate[d]) byDate[d] = { date: d, total_jobs: 0, successful_jobs: 0 };
+      const jobs = Number(r.total_jobs) || 0;
+      byDate[d].total_jobs += jobs;
+      if (r.status === 'success') byDate[d].successful_jobs += jobs;
+    }
+    return Object.values(byDate)
+      .map((x) => ({ ...x, success_rate_pct: x.total_jobs ? Math.round((x.successful_jobs / x.total_jobs) * 10000) / 100 : 0 }))
+      .sort((a, b) => String(a.date).localeCompare(b.date));
+  }
+
+  static async getAERenderingStepsByDay(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = {};
+    if (filters.template_id) additionalFilters.template_id = filters.template_id;
+    if (filters.ae_version) additionalFilters.ae_version = filters.ae_version;
+    const whereConditions = this.buildPipelineAEConditions(start_date, end_date, additionalFilters);
+    const rows = await AnalyticsModel.queryAERenderingStepsByDay(whereConditions);
+    if (!rows || rows.length === 0) return [];
+    const byDate = {};
+    for (const r of rows) {
+      const d = r.date;
+      if (!byDate[d]) {
+        byDate[d] = {
+          date: d,
+          network_ms: 0,
+          compute_ms: 0
+        };
+      }
+      byDate[d].network_ms += (Number(r.total_asset_download_ms) || 0) + (Number(r.total_template_download_ms) || 0) + (Number(r.total_upload_ms) || 0);
+      byDate[d].compute_ms += (Number(r.total_composition_ms) || 0) + (Number(r.total_bundling_ms) || 0) + (Number(r.total_rendering_ms) || 0);
+    }
+    return Object.values(byDate).sort((a, b) => String(a.date).localeCompare(b.date));
   }
 
   /** All-time credits totals: single simple query, no date filter, optional reason/country only. */

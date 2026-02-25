@@ -894,6 +894,281 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getAIExecutionSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionSummary(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || null });
+    } catch (error) {
+      logger.error('Error fetching AI execution summary:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAIExecutionByModel(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionByModel(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AI execution by model:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAIExecutionByDay(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionByDay(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AI execution by day:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAIExecutionCostByTemplate(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionCostByTemplate(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching AI execution cost by template:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAERenderingSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingSummary(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || null });
+    } catch (error) {
+      logger.error('Error fetching AE rendering summary:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAERenderingByVersion(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingByVersion(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching AE rendering by version:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAERenderingByDay(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingByDay(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AE rendering by day:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAIExecutionCostByDay(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionCostByDay(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AI execution cost by day:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAIExecutionByErrorCategory(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        provider_name: queryParams.provider_name,
+        model_name: queryParams.model_name
+      };
+      const data = await AnalyticsService.getAIExecutionByErrorCategory(filters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching AI execution by error category:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAERenderingByDayWithStatus(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingByDayWithStatus(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AE rendering by day with status:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getAERenderingStepsByDay(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const filters = {
+        ...utcFilters,
+        template_id: queryParams.template_id,
+        ae_version: queryParams.ae_version
+      };
+      const data = await AnalyticsService.getAERenderingStepsByDay(filters);
+      const convertedResults = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching AE rendering steps by day:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

@@ -93,6 +93,16 @@ const creditsAnalyticsSchema = Joi.object().keys({
   tz: Joi.string().optional()
 });
 
+const pipelineAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  template_id: Joi.string().optional(),
+  provider_name: Joi.string().optional(),
+  model_name: Joi.string().optional(),
+  ae_version: Joi.string().optional(),
+  tz: Joi.string().optional()
+});
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
@@ -101,3 +111,4 @@ exports.signupAnalyticsSchema = signupAnalyticsSchema;
 exports.loginAnalyticsSchema = loginAnalyticsSchema;
 exports.purchasesAnalyticsSchema = purchasesAnalyticsSchema;
 exports.creditsAnalyticsSchema = creditsAnalyticsSchema;
+exports.pipelineAnalyticsSchema = pipelineAnalyticsSchema;

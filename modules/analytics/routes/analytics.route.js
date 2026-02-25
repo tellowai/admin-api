@@ -163,4 +163,93 @@ module.exports = function(app) {
     AnalyticsCtrl.getCreditsStuckCounts
   );
 
+  // Pipeline analytics (AI execution + AE rendering)
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionSummary
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/by-model'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionByModel
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/by-day'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionByDay
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/cost-by-template'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionCostByTemplate
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/cost-by-day'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionCostByDay
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ai-execution/by-error-category'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAIExecutionByErrorCategory
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingSummary
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/by-version'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingByVersion
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/by-day'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingByDay
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/by-day-with-status'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingByDayWithStatus
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/pipeline/ae-rendering/steps-by-day'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePipelineAnalyticsQuery,
+    AnalyticsCtrl.getAERenderingStepsByDay
+  );
+
 };

@@ -384,6 +384,184 @@ class AnalyticsModel {
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  // --- AI execution daily stats (SimpleAggregateFunction: no sumMerge; select raw rows, aggregate in service) ---
+  static async queryAIExecutionSummary(whereConditions) {
+    const query = `
+      SELECT
+        status,
+        total_executions AS total_runs,
+        total_duration_ms,
+        total_queue_ms,
+        total_cost
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAIExecutionByModel(whereConditions) {
+    const query = `
+      SELECT
+        model_name,
+        provider_name,
+        status,
+        total_executions AS total_runs,
+        total_duration_ms,
+        total_queue_ms,
+        total_cost
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY model_name ASC, provider_name ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAIExecutionByDay(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        model_name,
+        status,
+        total_executions AS total_runs,
+        total_duration_ms
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY report_date DESC, model_name ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAIExecutionCostByTemplate(whereConditions) {
+    const query = `
+      SELECT
+        template_id,
+        total_executions AS total_calls,
+        total_cost AS total_cost_usd
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY template_id ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAIExecutionCostByDay(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        provider_name,
+        total_cost
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY report_date ASC, provider_name ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAIExecutionByErrorCategory(whereConditions) {
+    const query = `
+      SELECT
+        error_category,
+        status,
+        total_executions AS total_runs
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY error_category ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  // --- AE rendering daily stats (raw rows, aggregate in service) ---
+  static async queryAERenderingSummary(whereConditions) {
+    const query = `
+      SELECT
+        status,
+        total_jobs,
+        total_job_time_ms,
+        total_validation_ms,
+        total_asset_download_ms,
+        total_template_download_ms,
+        total_user_assets_download_ms,
+        total_composition_ms,
+        total_bundling_ms,
+        total_rendering_ms,
+        total_upload_ms
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAERenderingByVersion(whereConditions) {
+    const query = `
+      SELECT
+        ae_version,
+        status,
+        total_jobs,
+        total_job_time_ms,
+        total_rendering_ms,
+        total_upload_ms
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY ae_version ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAERenderingByDay(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        ae_version,
+        total_jobs,
+        total_job_time_ms
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY report_date DESC, ae_version ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAERenderingByDayWithStatus(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        status,
+        total_jobs
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY report_date ASC, status ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryAERenderingStepsByDay(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        total_asset_download_ms,
+        total_template_download_ms,
+        total_upload_ms,
+        total_composition_ms,
+        total_bundling_ms,
+        total_rendering_ms
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AE_RENDERING_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY report_date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;
