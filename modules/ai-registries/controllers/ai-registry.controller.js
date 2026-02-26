@@ -411,7 +411,11 @@ exports.update = async function (req, res) {
         status: 'active',
         amr_id: undefined,
         created_at: undefined,
-        updated_at: undefined
+        updated_at: undefined,
+        // Explicitly copy fallback/circuit columns from existing model so they are never lost (e.g. if updateData omits them)
+        circuit_state: updateData.circuit_state !== undefined ? updateData.circuit_state : existingModel.circuit_state,
+        fallback_amr_id: updateData.fallback_amr_id !== undefined ? updateData.fallback_amr_id : existingModel.fallback_amr_id,
+        fallback_mapping: updateData.fallback_mapping !== undefined ? updateData.fallback_mapping : existingModel.fallback_mapping
       };
 
       // Ensure JSON columns are proper objects before createAiModel (which calls JSON.stringify).
@@ -589,10 +593,11 @@ exports.updateProvider = async function (req, res) {
     const ampId = req.params.ampId;
     const updateData = req.body;
 
-    // Prevent updating ID
+    // Prevent updating ID and read-only/computed fields
     delete updateData.amp_id;
     delete updateData.created_at;
     delete updateData.updated_at;
+    delete updateData.provider_logo_url; // computed from provider_logo_key/bucket, not a DB column
 
     await aiRegistryModel.updateProvider(ampId, updateData);
     const updateKeys = Object.keys(updateData);
