@@ -440,7 +440,7 @@ exports.update = async function (req, res) {
 
       if (iosToCreate && iosToCreate.length > 0) {
         for (const io of iosToCreate) {
-          const { amiod_id, amr_id, socket_type, created_at, updated_at, ...ioData } = io;
+          const { amiod_id, amr_id, socket_type, created_at, updated_at, _tid, ...ioData } = io;
           ioData.amr_id = newAmrId;
           await aiRegistryModel.createIoDefinition(ioData);
         }

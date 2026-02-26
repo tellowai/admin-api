@@ -246,12 +246,23 @@ exports.getIoDefinitionsByModelId = async function (amrId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [amrId]);
 };
 
+const AI_MODEL_IO_DEFINITION_INSERT_COLUMNS = [
+  'amr_id', 'amst_id', 'direction', 'name', 'label', 'description',
+  'is_required', 'is_list', 'default_value', 'constraints', 'sort_order'
+];
+
 exports.createIoDefinition = async function (data) {
-  const processedData = {
+  const raw = {
     ...data,
-    default_value: data.default_value ? JSON.stringify(data.default_value) : null,
-    constraints: data.constraints ? JSON.stringify(data.constraints) : '{}'
+    default_value: data.default_value != null ? JSON.stringify(data.default_value) : null,
+    constraints: data.constraints != null ? JSON.stringify(data.constraints) : '{}'
   };
+  const processedData = {};
+  AI_MODEL_IO_DEFINITION_INSERT_COLUMNS.forEach(key => {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) {
+      processedData[key] = raw[key];
+    }
+  });
 
   const columns = Object.keys(processedData);
   const placeholders = columns.map(() => '?').join(', ');
