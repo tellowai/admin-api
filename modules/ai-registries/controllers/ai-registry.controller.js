@@ -71,10 +71,16 @@ exports.list = async function (req, res) {
         try { parsedParameterSchema = JSON.parse(parsedParameterSchema); } catch (e) { /* keep as-is */ }
       }
 
+      let parsedFallbackMapping = model.fallback_mapping;
+      if (typeof parsedFallbackMapping === 'string') {
+        try { parsedFallbackMapping = JSON.parse(parsedFallbackMapping); } catch (e) { parsedFallbackMapping = null; }
+      }
+
       return {
         ...model,
         pricing_config: parsedPricingConfig,
         parameter_schema: parsedParameterSchema,
+        fallback_mapping: parsedFallbackMapping,
         provider: providersMap[model.amp_id] || null
       };
     });
@@ -82,6 +88,81 @@ exports.list = async function (req, res) {
     return res.status(HTTP_STATUS_CODES.OK).json(result);
   } catch (err) {
     console.error('Error listing AI models:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+  }
+};
+
+/**
+ * List AI models for fallback selection (active only – enforced on backend)
+ */
+exports.listForFallback = async function (req, res) {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 500, 500);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const paginationParams = { limit, offset: (page - 1) * limit };
+    const searchParams = {
+      search: req.query.search,
+      amp_id: req.query.amp_id,
+      status: 'active'
+    };
+
+    const models = await aiRegistryModel.listAiModels(searchParams, paginationParams);
+
+    const ampIds = _.uniq(models.map(m => m.amp_id));
+    const providers = await aiRegistryModel.getProvidersByIds(ampIds);
+
+    const distinctLogos = _.uniqBy(
+      providers.filter(p => p.provider_logo_key && p.provider_logo_bucket),
+      p => `${p.provider_logo_bucket}/${p.provider_logo_key}`
+    );
+
+    const urlMap = {};
+    if (distinctLogos.length > 0) {
+      const storageProvider = StorageFactory.getProvider();
+      await Promise.all(distinctLogos.map(async (p) => {
+        try {
+          const url = await storageProvider.generatePresignedDownloadUrlFromBucket(p.provider_logo_bucket, p.provider_logo_key);
+          urlMap[`${p.provider_logo_bucket}/${p.provider_logo_key}`] = url;
+        } catch (e) {
+          console.error('Failed to sign url for fallback list:', e);
+        }
+      }));
+    }
+
+    const providersMap = _.keyBy(providers.map(p => {
+      let logoUrl = null;
+      if (p.provider_logo_key && p.provider_logo_bucket) {
+        logoUrl = urlMap[`${p.provider_logo_bucket}/${p.provider_logo_key}`] || null;
+      }
+      const { provider_logo_key, provider_logo_bucket, ...rest } = p;
+      return { ...rest, logo_url: logoUrl };
+    }), 'amp_id');
+
+    const result = models.map(model => {
+      let parsedPricingConfig = model.pricing_config;
+      if (typeof parsedPricingConfig === 'string') {
+        try { parsedPricingConfig = JSON.parse(parsedPricingConfig); } catch (e) { /* keep */ }
+      }
+      let parsedParameterSchema = model.parameter_schema;
+      if (typeof parsedParameterSchema === 'string') {
+        try { parsedParameterSchema = JSON.parse(parsedParameterSchema); } catch (e) { /* keep */ }
+      }
+      let parsedFallbackMapping = model.fallback_mapping;
+      if (typeof parsedFallbackMapping === 'string') {
+        try { parsedFallbackMapping = JSON.parse(parsedFallbackMapping); } catch (e) { parsedFallbackMapping = null; }
+      }
+      return {
+        ...model,
+        pricing_config: parsedPricingConfig,
+        parameter_schema: parsedParameterSchema,
+        fallback_mapping: parsedFallbackMapping,
+        provider: providersMap[model.amp_id] || null
+      };
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json(result);
+  } catch (err) {
+    console.error('Error listing AI models for fallback:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
@@ -103,6 +184,9 @@ exports.create = async function (req, res) {
       version: req.body.version || 'v1.0.0',
       description: req.body.description,
       status: req.body.status || 'active',
+      circuit_state: req.body.circuit_state || 'CLOSED',
+      fallback_amr_id: req.body.fallback_amr_id || null,
+      fallback_mapping: req.body.fallback_mapping || null,
       parameter_schema: req.body.parameter_schema || {},
       pricing_config: req.body.pricing_config || {},
       icon_url: req.body.icon_url,
@@ -181,6 +265,9 @@ exports.read = async function (req, res) {
     if (typeof model.parameter_schema === 'string') {
       try { model.parameter_schema = JSON.parse(model.parameter_schema); } catch (e) { /* keep as-is */ }
     }
+    if (typeof model.fallback_mapping === 'string') {
+      try { model.fallback_mapping = JSON.parse(model.fallback_mapping); } catch (e) { model.fallback_mapping = null; }
+    }
 
     return res.status(HTTP_STATUS_CODES.OK).json(model);
   } catch (err) {
@@ -216,7 +303,7 @@ exports.update = async function (req, res) {
     delete updateData.tags;
     delete updateData.status;
 
-    // Clean up readonly fields
+    // Clean up readonly fields (allow circuit_state, fallback_amr_id, fallback_mapping)
     delete updateData.amr_id;
     delete updateData.created_at;
     delete updateData.updated_at;
@@ -335,6 +422,9 @@ exports.update = async function (req, res) {
       }
       if (typeof newModelData.parameter_schema === 'string') {
         try { newModelData.parameter_schema = JSON.parse(newModelData.parameter_schema); } catch (e) { /* keep as-is */ }
+      }
+      if (typeof newModelData.fallback_mapping === 'string') {
+        try { newModelData.fallback_mapping = JSON.parse(newModelData.fallback_mapping); } catch (e) { newModelData.fallback_mapping = null; }
       }
 
       // 4. Create New Model
@@ -472,10 +562,11 @@ exports.listProviders = async function (req, res) {
  */
 exports.createProvider = async function (req, res) {
   try {
-    const data = req.body;
+    const data = { ...req.body };
     if (!data.name || !data.slug) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({ message: req.t('ai_model:PROVIDER_NAME_SLUG_REQUIRED') || 'Name and slug are required.' });
     }
+    if (data.circuit_state === undefined) data.circuit_state = 'CLOSED';
     const result = await aiRegistryModel.createProvider(data);
     await publishNewAdminActivityLog({
       adminUserId: req.user.userId,
@@ -505,7 +596,7 @@ exports.updateProvider = async function (req, res) {
 
     await aiRegistryModel.updateProvider(ampId, updateData);
     const updateKeys = Object.keys(updateData);
-    const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status'));
+    const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status') || Object.prototype.hasOwnProperty.call(updateData, 'circuit_state'));
     await publishNewAdminActivityLog({
       adminUserId: req.user.userId,
       entityType: 'AI_REGISTRY_PROVIDER',
@@ -516,6 +607,23 @@ exports.updateProvider = async function (req, res) {
   } catch (err) {
     console.error('Error updating provider:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || err.message });
+  }
+};
+
+/**
+ * Get mapping metadata for a model (inputs, parameters, outputs) for fallback mapping UI.
+ */
+exports.getMappingMetadata = async function (req, res) {
+  try {
+    const amrId = req.params.amrId;
+    const metadata = await aiRegistryModel.getMappingMetadataByAmrId(amrId);
+    if (!metadata) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
+    }
+    return res.status(HTTP_STATUS_CODES.OK).json(metadata);
+  } catch (err) {
+    console.error('Error fetching mapping metadata:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
   }
 };
 

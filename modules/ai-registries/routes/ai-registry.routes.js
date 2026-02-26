@@ -14,10 +14,18 @@ module.exports = function (app) {
     .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.list)
     .post(AuthMiddleware.isAdminUser, AiRegistryCtrl.create);
 
+  // List active models only (for fallback dropdown – backend enforces active only)
+  app.route(baseUrl + '/models/for-fallback')
+    .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.listForFallback);
+
   // Single AI model
   app.route(baseUrl + '/models/:amrId')
     .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.read)
     .patch(AuthMiddleware.isAdminUser, AiRegistryCtrl.update);
+
+  // Mapping metadata for fallback mapping UI (inputs, parameters, outputs)
+  app.route(baseUrl + '/models/:amrId/mapping-metadata')
+    .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.getMappingMetadata);
 
   // AI model status (active/inactive) – separate from general update
   app.route(baseUrl + '/models/:amrId/status')

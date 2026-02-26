@@ -15,6 +15,9 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
       version,
       description,
       status,
+      circuit_state,
+      fallback_amr_id,
+      fallback_mapping,
       parameter_schema,
       pricing_config,
       icon_url,
@@ -74,6 +77,7 @@ exports.createAiModel = async function (data) {
     ...data,
     parameter_schema: data.parameter_schema ? JSON.stringify(data.parameter_schema) : '{}',
     pricing_config: data.pricing_config ? JSON.stringify(data.pricing_config) : '{}',
+    fallback_mapping: data.fallback_mapping != null ? JSON.stringify(data.fallback_mapping) : null,
     created_at: new Date(),
     updated_at: new Date()
   };
@@ -108,8 +112,8 @@ exports.getAiModelById = async function (amrId) {
 exports.updateAiModel = async function (amrId, data) {
   const processedData = {};
   Object.keys(data).forEach(key => {
-    if (['parameter_schema', 'pricing_config'].includes(key)) {
-      processedData[key] = typeof data[key] === 'object' ? JSON.stringify(data[key]) : data[key];
+    if (['parameter_schema', 'pricing_config', 'fallback_mapping'].includes(key)) {
+      processedData[key] = data[key] != null && typeof data[key] === 'object' ? JSON.stringify(data[key]) : data[key];
     } else {
       processedData[key] = data[key];
     }
@@ -277,4 +281,37 @@ exports.updateIoDefinition = async function (amiodId, data) {
 exports.deleteIoDefinition = async function (amiodId) {
   const query = `DELETE FROM ai_model_io_definitions WHERE amiod_id = ?`;
   return await mysqlQueryRunner.runQueryInMaster(query, [amiodId]);
+};
+
+/**
+ * Get mapping metadata for a model (inputs, parameters, outputs) for fallback mapping UI.
+ * Returns only names/labels needed to build mapping dropdowns.
+ */
+exports.getMappingMetadataByAmrId = async function (amrId) {
+  const model = await mysqlQueryRunner.runQueryInSlave(
+    'SELECT parameter_schema FROM ai_model_registry WHERE amr_id = ? AND archived_at IS NULL',
+    [amrId]
+  );
+  if (!model || model.length === 0) return null;
+
+  const ioDefs = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT name, label, direction, sort_order FROM ai_model_io_definitions WHERE amr_id = ? ORDER BY sort_order ASC`,
+    [amrId]
+  );
+
+  const inputs = ioDefs
+    .filter(io => io.direction === 'INPUT')
+    .map(io => ({ name: io.name, label: io.label || io.name }));
+  const outputs = ioDefs
+    .filter(io => io.direction === 'OUTPUT')
+    .map(io => ({ name: io.name, label: io.label || io.name }));
+
+  let parameterSchema = model[0].parameter_schema;
+  if (typeof parameterSchema === 'string') {
+    try { parameterSchema = JSON.parse(parameterSchema); } catch (e) { parameterSchema = {}; }
+  }
+  const parameters = (parameterSchema.properties && Object.keys(parameterSchema.properties)) || [];
+  const parametersList = parameters.map(name => ({ name }));
+
+  return { inputs, parameters: parametersList, outputs };
 };
