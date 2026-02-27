@@ -5,10 +5,11 @@ const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const paginationController = require('../../core/controllers/pagination.controller');
 
 exports.listGenerations = async function (req, res) {
   try {
-    const { start_date, end_date, page = 1, limit = 20 } = req.query;
+    const { start_date, end_date } = req.query;
 
     let startDate, endDate;
 
@@ -21,23 +22,17 @@ exports.listGenerations = async function (req, res) {
       endDate = moment(end_date).endOf('day').toDate();
     }
 
-
-    
     // Fallback security on startDate being after endDate
     if (moment(startDate).isAfter(moment(endDate))) {
-       return res.status(400).send({
+      return res.status(400).send({
         message: 'Start date cannot be after end date.'
       });
     }
 
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
+    const { page, limit } = paginationController.getPaginationParams(req.query);
 
-    // Run count and data query in parallel
-    const [generations, totalCount] = await Promise.all([
-      generationsModel.getGenerationsByDateRange(startDate, endDate, pageNum, limitNum),
-      generationsModel.getGenerationsCountByDateRange(startDate, endDate)
-    ]);
+    // Page-based fetch only; no count. UI requests page=1,2,3... until empty data.
+    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, limit);
 
     const storage = StorageFactory.getProvider();
 
@@ -147,13 +142,7 @@ exports.listGenerations = async function (req, res) {
     }
 
     res.json({
-      data: generations,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        totalElements: totalCount,
-        totalPages: Math.ceil(totalCount / limitNum)
-      }
+      data: generations
     });
 
   } catch (err) {
