@@ -71,9 +71,10 @@ exports.updateTicket = async function(ticketId, updateData) {
 exports.getUsersByIds = async function(userIds) {
   if (!userIds || userIds.length === 0) return [];
   const placeholders = userIds.map(() => '?').join(',');
-  const query = `SELECT user_id, email, first_name, last_name, profile_pic, display_name FROM user WHERE user_id IN (${placeholders})`;
+  const query = `SELECT user_id, email, first_name, last_name, profile_pic, profile_pic_bucket, profile_pic_asset_key, display_name, mobile AS mobile_number FROM user WHERE user_id IN (${placeholders})`;
   return await mysqlQueryRunner.runQueryInSlave(query, userIds);
 };
+
 
 exports.getTicketMessages = async function(ticketId) {
   const query = `SELECT * FROM support_ticket_messages WHERE ticket_id = ? ORDER BY created_at ASC`;
@@ -150,6 +151,7 @@ exports.getResourceGenerationFromClickHouse = async function(generationId) {
       user_id,
       template_id,
       media_type,
+      additional_data,
       created_at
     FROM resource_generations
     WHERE resource_generation_id = '${generationId}'
