@@ -37,13 +37,13 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
   const query = `
     SELECT 
       resource_generation_id AS media_generation_id,
-      'completed' AS job_status,
+      if(event_type = 'COMPLETED', 'completed', 'failed') AS job_status,
       JSONExtractString(additional_data, 'output', 'asset_bucket') AS output_media_bucket,
       JSONExtractString(additional_data, 'output', 'asset_key') AS output_media_asset_key,
       created_at AS completed_at,
-      '' AS error_message
+      if(event_type = 'FAILED', JSONExtractString(additional_data, 'error', 'message'), '') AS error_message
     FROM resource_generation_events
-    WHERE event_type = 'COMPLETED'
+    WHERE event_type IN ('COMPLETED', 'FAILED')
       AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
     ORDER BY created_at DESC
     LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
@@ -71,7 +71,7 @@ exports.getGenerationsCountByDateRange = async function (startDate, endDate) {
   const query = `
     SELECT COUNT(*) as total
     FROM resource_generation_events
-    WHERE event_type = 'COMPLETED'
+    WHERE event_type IN ('COMPLETED', 'FAILED')
       AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
   `;
 
