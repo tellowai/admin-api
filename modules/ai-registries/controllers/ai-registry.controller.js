@@ -8,6 +8,88 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 /**
+ * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf structure).
+ * Changes only in title, description, widget config, or validation constraints do NOT trigger version bump.
+ */
+function parameterSchemaVersioningRelevant(schema) {
+  if (!schema || typeof schema !== 'object') return {};
+  const props = schema.properties || schema;
+  if (typeof props !== 'object') return {};
+  const result = { properties: {}, required: Array.isArray(schema.required) ? [...schema.required].sort() : [] };
+  for (const [key, def] of Object.entries(props)) {
+    if (!def || typeof def !== 'object') continue;
+    const entry = { type: def.type || 'string', required: Array.isArray(schema.required) && schema.required.includes(key) };
+    if (def.default !== undefined) entry.default = def.default;
+    if (Array.isArray(def.enum)) entry.enum = [...def.enum].sort();
+    if (def.type === 'object' && def.properties && typeof def.properties === 'object') {
+      const nested = parameterSchemaVersioningRelevant({ properties: def.properties, required: def.required });
+      entry.properties = nested.properties;
+      if (nested.required.length) entry.requiredKeys = nested.required;
+    }
+    if (Array.isArray(def.oneOf) && def.oneOf.length) {
+      entry.oneOf = def.oneOf.map(b => {
+        if (!b || typeof b !== 'object') return { type: 'string' };
+        const n = { type: b.type || 'string' };
+        if (b.default !== undefined) n.default = b.default;
+        if (Array.isArray(b.enum)) n.enum = [...b.enum].sort();
+        if (b.type === 'object' && b.properties) {
+          const nested = parameterSchemaVersioningRelevant({ properties: b.properties, required: b.required });
+          n.properties = nested.properties;
+          if (nested.required.length) n.requiredKeys = nested.required;
+        }
+        return n;
+      });
+    }
+    result.properties[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Compare two parameter schemas for versioning: true if they differ in structure (keys, types, required, default, enum, object/oneOf).
+ */
+function parameterSchemaVersioningDiff(newSchema, existingSchema) {
+  const a = JSON.stringify(parameterSchemaVersioningRelevant(newSchema));
+  const existing = typeof existingSchema === 'string' ? (() => { try { return JSON.parse(existingSchema); } catch (e) { return {}; } })() : (existingSchema || {});
+  const b = JSON.stringify(parameterSchemaVersioningRelevant(existing));
+  return a !== b;
+}
+
+/**
+ * Extract versioning-relevant part of an IO definition (name, direction, type, required, list, default).
+ * Changes only in label, description, constraints, sort_order do NOT trigger version bump.
+ */
+function ioDefVersioningRelevant(io) {
+  const { name, direction, amst_id, is_required, is_list, default_value } = io || {};
+  const normalized = {
+    name: name || '',
+    direction: direction || '',
+    amst_id: amst_id != null ? amst_id : null,
+    is_required: !!is_required,
+    is_list: !!is_list
+  };
+  if (default_value !== undefined && default_value !== null) {
+    normalized.default_value = typeof default_value === 'object' ? JSON.stringify(default_value) : String(default_value);
+  } else {
+    normalized.default_value = null;
+  }
+  return normalized;
+}
+
+/**
+ * Compare two IO definition lists for versioning: true if they differ in set of sockets (name, direction, amst_id, is_required, is_list, default_value).
+ */
+function ioDefinitionsVersioningDiff(incomingList, existingList) {
+  if (!Array.isArray(incomingList)) incomingList = [];
+  if (!Array.isArray(existingList)) existingList = [];
+  const scrub = (list) => {
+    const sorted = [...list].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return sorted.map(i => ioDefVersioningRelevant(i));
+  };
+  return JSON.stringify(scrub(incomingList)) !== JSON.stringify(scrub(existingList));
+}
+
+/**
  * List AI Models
  */
 exports.list = async function (req, res) {
@@ -322,65 +404,22 @@ exports.update = async function (req, res) {
     // Draft models can change params/IO without bumping version.
     if (existingModel.status === 'active') {
 
-      // 1. Check Parameter Schema Change
+      // 1. Check Parameter Schema change (versioning only for structural: keys, types, required, default, enum, object/oneOf)
+      // Title, description, UI widget config, validation constraints → direct update, no version bump
       if (updateData.parameter_schema) {
-        const newSchemaStr = JSON.stringify(updateData.parameter_schema);
-        const existingSchemaStr = typeof existingModel.parameter_schema === 'string'
-          ? existingModel.parameter_schema
-          : JSON.stringify(existingModel.parameter_schema || {});
-
-        // Compare non-empty schemas
-        if (newSchemaStr !== existingSchemaStr) {
-          // If both are empty objects {}, ignore
-          if (newSchemaStr !== '{}' || existingSchemaStr !== '{}') {
-            needsVersioning = true;
-          }
+        const existingParsed = typeof existingModel.parameter_schema === 'string'
+          ? (() => { try { return JSON.parse(existingModel.parameter_schema); } catch (e) { return {}; } })()
+          : (existingModel.parameter_schema || {});
+        if (parameterSchemaVersioningDiff(updateData.parameter_schema, existingParsed)) {
+          needsVersioning = true;
         }
       }
 
-      // 2. Check IO Definition Change - IF provided
+      // 2. Check IO Definition change (versioning only for name, direction, amst_id, is_required, is_list, default_value, add/remove)
+      // Label, description, constraints, sort_order → direct update, no version bump
       if (!needsVersioning && incomingIoDefinitions) {
         const existingIos = await aiRegistryModel.getIoDefinitionsByModelId(amrId);
-
-        const scrub = (list) => {
-          if (!Array.isArray(list)) return [];
-          // Sort by unique name to ensure order doesn't matter
-          const sorted = [...list].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-
-          return sorted.map(i => {
-            // Remove ID, timestamps, and transient fields for comparison
-            // Also remove _tid (frontend temp ID)
-            const { amiod_id, amr_id, updated_at, created_at, socket_type, _tid, ...rest } = i;
-
-            // Normalization: Ensure all comparable fields are strings or consistently typed
-            // Handle booleans (0/1 vs true/false) which might differ from DB vs JSON
-            if (rest.is_required !== undefined) rest.is_required = !!rest.is_required;
-            if (rest.is_list !== undefined) rest.is_list = !!rest.is_list;
-            if (rest.sort_order !== undefined) rest.sort_order = parseInt(rest.sort_order, 10) || 0;
-
-            // Stringify objects for deep comparison, cleaning keys to ensure order
-            if (rest.default_value !== undefined) {
-              rest.default_value = JSON.stringify(rest.default_value);
-            }
-            if (rest.constraints !== undefined) {
-              // Start empty if null/undefined
-              const c = rest.constraints || {};
-              // Sort keys of constraints object
-              const sortedConstraints = Object.keys(c).sort().reduce((acc, key) => {
-                acc[key] = c[key];
-                return acc;
-              }, {});
-              rest.constraints = JSON.stringify(sortedConstraints);
-            }
-
-            return rest;
-          });
-        };
-
-        const cur = JSON.stringify(scrub(existingIos));
-        const incoming = JSON.stringify(scrub(incomingIoDefinitions));
-
-        if (cur !== incoming) {
+        if (ioDefinitionsVersioningDiff(incomingIoDefinitions, existingIos)) {
           needsVersioning = true;
         }
       }
