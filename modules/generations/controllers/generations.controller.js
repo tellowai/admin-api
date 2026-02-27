@@ -5,11 +5,15 @@ const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
-const paginationController = require('../../core/controllers/pagination.controller');
+const TimezoneService = require('../../analytics/services/timezone.service');
+
+/** Fixed page size for list generations; UI sends only page=1,2,3... */
+const PER_PAGE = 10;
 
 exports.listGenerations = async function (req, res) {
   try {
-    const { start_date, end_date } = req.query;
+    const { start_date, end_date, tz } = req.query;
+    const timezone = tz || TimezoneService.getDefaultTimezone();
 
     let startDate, endDate;
 
@@ -18,8 +22,10 @@ exports.listGenerations = async function (req, res) {
       startDate = moment().startOf('day').toDate();
       endDate = moment().endOf('day').toDate();
     } else {
-      startDate = moment(start_date).startOf('day').toDate();
-      endDate = moment(end_date).endOf('day').toDate();
+      // Interpret start_date/end_date in client timezone and convert to UTC for query (same as analytics)
+      const utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
+      startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
+      endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
     }
 
     // Fallback security on startDate being after endDate
@@ -29,10 +35,10 @@ exports.listGenerations = async function (req, res) {
       });
     }
 
-    const { page, limit } = paginationController.getPaginationParams(req.query);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
 
-    // Page-based fetch only; no count. UI requests page=1,2,3... until empty data.
-    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, limit);
+    // Page-based fetch only; no count. UI sends page=1,2,3...; offset/limit handled here.
+    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE);
 
     const storage = StorageFactory.getProvider();
 

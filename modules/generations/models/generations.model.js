@@ -45,7 +45,7 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     FROM resource_generation_events
     WHERE event_type IN ('COMPLETED', 'FAILED')
       AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, resource_generation_id ASC
     LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
   `;
 
