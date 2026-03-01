@@ -30,6 +30,7 @@ const ANALYTICS_CONSTANTS = {
     ANALYTICS_EVENTS_RAW: "analytics_events_raw",
     AI_EXECUTION_DAILY_STATS: "ai_execution_daily_stats",
     AE_RENDERING_DAILY_STATS: "ae_rendering_daily_stats",
+    TECH_HEALTH_DAILY_STATS: "tech_health_daily_stats",
   },
   // Event names in auth_daily_stats
   AUTH_EVENT_NAMES: {

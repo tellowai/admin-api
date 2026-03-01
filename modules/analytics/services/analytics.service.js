@@ -94,6 +94,18 @@ class AnalyticsService {
     return conditions;
   }
 
+  static buildTechHealthConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ['app_version', 'os_name', 'network_type', 'country', 'device_brand'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -668,6 +680,78 @@ class AnalyticsService {
       }
     });
     return AnalyticsModel.getCreditsSummaryAllTime(conditions);
+  }
+
+  static async getTechHealthVersionAdoption(filters) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthVersionAdoption(whereConditions);
+  }
+
+  static async getTechHealthErrorRateByVersion(filters) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    const rows = await AnalyticsModel.queryTechHealthErrorRateByVersion(whereConditions);
+    return (rows || []).map((r) => ({
+      app_version: r.app_version,
+      total_users: Number(r.total_users) || 0,
+      total_actions: Number(r.total_actions) || 0,
+      failed_events: Number(r.failed_events) || 0,
+      error_rate_pct: r.total_actions
+        ? Math.round((Number(r.failed_events) || 0) / r.total_actions * 10000) / 100
+        : 0
+    }));
+  }
+
+  static async getTechHealthNetworkBottlenecks(filters) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    const rows = await AnalyticsModel.queryTechHealthNetworkBottlenecks(whereConditions);
+    return (rows || []).map((r) => ({
+      network_type: r.network_type || 'unknown',
+      unique_devices: Number(r.unique_devices) || 0,
+      total_events: Number(r.total_events) || 0,
+      failed_events: Number(r.failed_events) || 0,
+      error_rate_pct: r.total_events
+        ? Math.round((Number(r.failed_events) || 0) / r.total_events * 10000) / 100
+        : 0
+    }));
+  }
+
+  static async getTechHealthOsDistribution(filters) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthOsDistribution(whereConditions);
+  }
+
+  static async getTechHealthDevicePopularity(filters, limit = 20) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthDevicePopularity(whereConditions, limit);
+  }
+
+  static async getTechHealthScreenResolution(filters, limit = 30) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthScreenResolution(whereConditions, limit);
+  }
+
+  static async getTechHealthCountryDistribution(filters) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthCountryDistribution(whereConditions);
+  }
+
+  static async getTechHealthUsageByTimezone(filters, limit = 30) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthUsageByTimezone(whereConditions, limit);
+  }
+
+  static async getTechHealthStoreVsCountry(filters, limit = 50) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthStoreVsCountry(whereConditions, limit);
   }
 
   /**

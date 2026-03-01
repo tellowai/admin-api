@@ -260,4 +260,77 @@ module.exports = function(app) {
     AnalyticsCtrl.getAERenderingByErrorCategory
   );
 
+  // Tech & Device Health (tech_health_daily_stats)
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/version-adoption'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthVersionAdoption
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/error-rate-by-version'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthErrorRateByVersion
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/network-bottlenecks'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthNetworkBottlenecks
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/os-distribution'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthOsDistribution
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/device-popularity'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthDevicePopularity
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/screen-resolution'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthScreenResolution
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/country-distribution'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthCountryDistribution
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/usage-by-timezone'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthUsageByTimezone
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/store-vs-country'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthStoreVsCountry
+  );
+
 };

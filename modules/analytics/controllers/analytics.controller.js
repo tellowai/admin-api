@@ -1193,6 +1193,183 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  // --- Tech & Device Health (tech_health_daily_stats) ---
+  static async getTechHealthVersionAdoption(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const data = await AnalyticsService.getTechHealthVersionAdoption(utcFilters);
+      const converted = TimezoneService.convertFromUTC(data || [], timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: converted });
+    } catch (error) {
+      logger.error('Error fetching tech health version adoption:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthErrorRateByVersion(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const data = await AnalyticsService.getTechHealthErrorRateByVersion(utcFilters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health error rate by version:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthNetworkBottlenecks(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const data = await AnalyticsService.getTechHealthNetworkBottlenecks(utcFilters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health network bottlenecks:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthOsDistribution(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const data = await AnalyticsService.getTechHealthOsDistribution(utcFilters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health OS distribution:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthDevicePopularity(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const limit = queryParams.limit || 20;
+      const data = await AnalyticsService.getTechHealthDevicePopularity(utcFilters, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health device popularity:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthScreenResolution(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const limit = queryParams.limit || 30;
+      const data = await AnalyticsService.getTechHealthScreenResolution(utcFilters, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health screen resolution:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthCountryDistribution(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const data = await AnalyticsService.getTechHealthCountryDistribution(utcFilters);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health country distribution:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthUsageByTimezone(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const limit = queryParams.limit || 30;
+      const data = await AnalyticsService.getTechHealthUsageByTimezone(utcFilters, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health usage by timezone:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getTechHealthStoreVsCountry(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const limit = queryParams.limit || 50;
+      const data = await AnalyticsService.getTechHealthStoreVsCountry(utcFilters, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health store vs country:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

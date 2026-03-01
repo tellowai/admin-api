@@ -576,6 +576,156 @@ class AnalyticsModel {
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  // --- Tech health daily stats (SummingMergeTree: aggregate with sum + uniqMerge) ---
+  static async queryTechHealthVersionAdoption(whereConditions) {
+    const query = `
+      SELECT
+        report_date AS date,
+        app_version,
+        uniqMerge(active_devices) AS active_devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, app_version
+      ORDER BY report_date ASC, app_version ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthErrorRateByVersion(whereConditions) {
+    const query = `
+      SELECT
+        app_version,
+        uniqMerge(active_devices) AS total_users,
+        sum(total_events) AS total_actions,
+        sum(failed_events) AS failed_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY app_version
+      ORDER BY app_version DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthNetworkBottlenecks(whereConditions) {
+    const query = `
+      SELECT
+        network_type,
+        uniqMerge(active_devices) AS unique_devices,
+        sum(total_events) AS total_events,
+        sum(failed_events) AS failed_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY network_type
+      ORDER BY unique_devices DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthOsDistribution(whereConditions) {
+    const query = `
+      SELECT
+        os_name,
+        os_version,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY os_name, os_version
+      ORDER BY total_events DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthDevicePopularity(whereConditions, limit = 20) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 50);
+    const query = `
+      SELECT
+        device_brand,
+        device_model,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY device_brand, device_model
+      ORDER BY total_events DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthScreenResolution(whereConditions, limit = 30) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 50);
+    const query = `
+      SELECT
+        screen_resolution,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')} AND screen_resolution != ''
+      GROUP BY screen_resolution
+      ORDER BY total_events DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthCountryDistribution(whereConditions) {
+    const query = `
+      SELECT
+        country,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')} AND country != ''
+      GROUP BY country
+      ORDER BY total_events DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthUsageByTimezone(whereConditions, limit = 30) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 50);
+    const query = `
+      SELECT
+        timezone,
+        sum(total_events) AS total_events,
+        uniqMerge(active_devices) AS devices
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')} AND timezone != ''
+      GROUP BY timezone
+      ORDER BY total_events DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryTechHealthStoreVsCountry(whereConditions, limit = 50) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 100);
+    const query = `
+      SELECT
+        store_country,
+        country,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')} AND store_country != '' AND country != ''
+      GROUP BY store_country, country
+      ORDER BY total_events DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;
