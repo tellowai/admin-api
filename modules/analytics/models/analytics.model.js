@@ -660,6 +660,23 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  static async queryTechHealthDeviceBrandDistribution(whereConditions, limit = 20) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 50);
+    const query = `
+      SELECT
+        device_brand,
+        uniqMerge(active_devices) AS devices,
+        sum(total_events) AS total_events
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TECH_HEALTH_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')} AND device_brand != ''
+      GROUP BY device_brand
+      ORDER BY total_events DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryTechHealthScreenResolution(whereConditions, limit = 30) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 30), 50);
     const query = `

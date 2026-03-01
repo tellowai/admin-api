@@ -1292,6 +1292,26 @@ class AnalyticsController {
     }
   }
 
+  static async getTechHealthDeviceBrandDistribution(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        null,
+        null,
+        timezone
+      );
+      const limit = queryParams.limit || 20;
+      const data = await AnalyticsService.getTechHealthDeviceBrandDistribution(utcFilters, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching tech health device brand distribution:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
   static async getTechHealthScreenResolution(req, res) {
     try {
       const queryParams = req.validatedQuery;

@@ -302,6 +302,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/tech-health/device-brand-distribution'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTechHealthAnalyticsQuery,
+    AnalyticsCtrl.getTechHealthDeviceBrandDistribution
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/tech-health/screen-resolution'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

@@ -730,6 +730,12 @@ class AnalyticsService {
     return AnalyticsModel.queryTechHealthDevicePopularity(whereConditions, limit);
   }
 
+  static async getTechHealthDeviceBrandDistribution(filters, limit = 20) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    return AnalyticsModel.queryTechHealthDeviceBrandDistribution(whereConditions, limit);
+  }
+
   static async getTechHealthScreenResolution(filters, limit = 30) {
     const { start_date, end_date } = filters;
     const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
