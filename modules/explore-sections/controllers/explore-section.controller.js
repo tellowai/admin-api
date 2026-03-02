@@ -5,8 +5,24 @@ const ExploreSectionModel = require('../models/explore-section.model');
 const ExploreSectionErrorHandler = require('../middlewares/explore-section.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
+const config = require('../../../config/config');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+
+/**
+ * Build banner image URL from asset_bucket and asset_key for admin UI display.
+ * @param {string} bucket - e.g. 'public'
+ * @param {string} assetKey - object key
+ * @returns {string|null} - URL or null
+ */
+function getBannerImageUrl(bucket, assetKey) {
+  if (!bucket || !assetKey) return null;
+  const key = assetKey.startsWith('/') ? assetKey.slice(1) : assetKey;
+  if (bucket === 'public' && config.os2?.r2?.public?.bucketUrl) {
+    return `${config.os2.r2.public.bucketUrl}/${key}`;
+  }
+  return null;
+}
 
 /**
  * @api {get} /explore-sections List explore sections
@@ -22,6 +38,24 @@ exports.listExploreSections = async function(req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const sections = await ExploreSectionModel.listExploreSections(paginationParams);
+
+    sections.forEach((section) => {
+      if (section.additional_data && typeof section.additional_data === 'string') {
+        try {
+          section.additional_data = JSON.parse(section.additional_data);
+        } catch (e) {
+          section.additional_data = null;
+        }
+      }
+      if (section.section_type === 'banner' && section.additional_data) {
+        const ad = section.additional_data;
+        const bucket = ad.asset_bucket;
+        const key = ad.asset_key;
+        if (bucket && key) {
+          section.additional_data = { ...ad, banner_image_url: getBannerImageUrl(bucket, key) };
+        }
+      }
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: sections
