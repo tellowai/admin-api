@@ -1,7 +1,7 @@
 'use strict';
 
 const SupportModel = require('../models/support.model');
-const CreditsModel = require('../../../../api/modules/credits/models/credits.model');
+const CreditsModel = require('../../credits/models/credits.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 
 // A helper to enrich tickets without performing SQL JOINs
