@@ -40,4 +40,34 @@ exports.validateMergeVideos = async function(req, res, next) {
       message: req.t('video_editing:INVALID_REQUEST_DATA')
     });
   }
-}; 
+};
+
+exports.validateWebmConverter = async function(req, res, next) {
+  try {
+    const schema = Joi.object({
+      color_video: Joi.object({
+        asset_key: Joi.string().required(),
+        asset_bucket: Joi.string().required()
+      }).required(),
+      mask_video: Joi.object({
+        asset_key: Joi.string().required(),
+        asset_bucket: Joi.string().required()
+      }).required()
+    });
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message
+      });
+    }
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('video_editing:INVALID_REQUEST_DATA')
+    });
+  }
+};

@@ -24,4 +24,19 @@ module.exports = function(app) {
     VideoEditingController.mergeVideos
   );
 
-}; 
+  app.route(
+    versionConfig.routePrefix + '/video-editing/webm-converter'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    VideoEditingValidator.validateWebmConverter,
+    VideoEditingController.webmConverter
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/video-editing/webm-converter/:jobId/status'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    VideoEditingController.getWebmConverterStatus
+  );
+
+};

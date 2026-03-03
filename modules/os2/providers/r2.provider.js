@@ -589,6 +589,35 @@ class R2StorageProvider extends StorageProvider {
       throw error;
     }
   }
+
+  async uploadBufferToEphemeral(buffer, key, options = {}) {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.ephemeral.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: options.contentType,
+        ACL: 'private'
+      });
+
+      await this.client.send(command);
+
+      const url = await this.generateEphemeralPresignedDownloadUrl(key, { expiresIn: 3600 });
+
+      return {
+        key,
+        bucket: this.ephemeral.bucket,
+        url,
+        size: buffer.length
+      };
+    } catch (error) {
+      log.error('Error uploading buffer to ephemeral bucket', {
+        error: error.message,
+        key
+      });
+      throw error;
+    }
+  }
 }
 
 module.exports = R2StorageProvider;

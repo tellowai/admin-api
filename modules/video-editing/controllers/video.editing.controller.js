@@ -8,6 +8,65 @@ const { v4: uuidv4 } = require('uuid');
 const VideoEditingRateLimiter = require('../middlewares/video.editing.ratelimiter.middleware');
 const VideoGeneratorModel = require('../../generators/models/video.generator.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const { createId } = require('@paralleldrive/cuid2');
+const webmConverterService = require('../services/webm.converter.service');
+
+/**
+ * @api {post} /video-editing/webm-converter Perform WebM Conversion
+ * @apiVersion 1.0.0
+ * @apiName WebmConverter
+ * @apiGroup VideoEditing
+ * @apiPermission JWT
+ *
+ * @apiDescription Perform alpha merge of color and mask videos into WebM
+ *
+ * @apiHeader {String} Authorization JWT token
+ *
+ * @apiBody {Object} color_video Color video asset
+ * @apiBody {Object} mask_video Mask video asset
+ *
+ * @apiSuccess {String} jobId Job ID
+ * @apiSuccess {String} message Success message
+ */
+exports.webmConverter = async function(req, res) {
+  const { color_video, mask_video } = req.validatedBody;
+  const jobId = createId();
+
+  try {
+    // Start processing in background
+    webmConverterService.convertToWebm(color_video, mask_video, jobId);
+
+    return res.status(HTTP_STATUS_CODES.ACCEPTED).json({
+      jobId: jobId,
+      message: req.t('video_editing:WEBM_CONVERTER_STARTED')
+    });
+  } catch (error) {
+    logger.error('Error starting WebM Converter:', { error: error.message, stack: error.stack });
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+      message: req.t('video_editing:WEBM_CONVERTER_FAILED')
+    });
+  }
+};
+
+/**
+ * @api {get} /video-editing/webm-converter/:jobId/status Get WebM Converter job status
+ * @apiVersion 1.0.0
+ * @apiName GetWebmConverterStatus
+ * @apiGroup VideoEditing
+ * @apiPermission JWT
+ */
+exports.getWebmConverterStatus = async function(req, res) {
+  const { jobId } = req.params;
+  const status = webmConverterService.getJobStatus(jobId);
+
+  if (!status) {
+    return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+      message: req.t('video_editing:JOB_NOT_FOUND')
+    });
+  }
+
+  return res.status(HTTP_STATUS_CODES.OK).json(status);
+};
 
 /**
  * @api {post} /video-editing/merge Merge videos
