@@ -85,6 +85,10 @@ exports.listTickets = async function({ page, limit, status, assigned_to, search 
   };
 };
 
+exports.getTicketsCountByStatus = async function(status) {
+  return await SupportModel.countTickets(status);
+};
+
 exports.getTicketDetails = async function(ticketId) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) return null;

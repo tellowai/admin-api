@@ -20,6 +20,17 @@ exports.listTickets = async function(req, res) {
   }
 };
 
+exports.getTicketsCount = async function(req, res) {
+  try {
+    const status = req.query.status || 'submitted';
+    const count = await SupportService.getTicketsCountByStatus(status);
+    return res.status(200).send({ count });
+  } catch(err) {
+    console.error('Get Tickets Count Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.getTicketDetails = async function(req, res) {
   try {
     const ticketId = req.params.ticketId;

@@ -9,6 +9,9 @@ module.exports = function (app) {
   app.route(prefix)
     .get(AuthMiddleware.isAdminUser, SupportCtrl.listTickets);
 
+  app.route(prefix + "/count")
+    .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketsCount);
+
   app.route(prefix + "/:ticketId")
     .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketDetails);
 
