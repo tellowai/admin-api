@@ -15,7 +15,7 @@ class AnalyticsModel {
       GROUP BY toDate(generated_at)
       ORDER BY date ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -31,7 +31,7 @@ class AnalyticsModel {
       GROUP BY toDate(generated_at), ${groupByColumn}
       ORDER BY date ASC, group_key ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -46,7 +46,7 @@ class AnalyticsModel {
       GROUP BY day
       ORDER BY date ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -62,7 +62,7 @@ class AnalyticsModel {
       GROUP BY day, ${groupByColumn}
       ORDER BY date ASC, group_key ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -77,7 +77,7 @@ class AnalyticsModel {
       GROUP BY day
       ORDER BY date ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -93,7 +93,7 @@ class AnalyticsModel {
       GROUP BY day, ${groupByColumn}
       ORDER BY date ASC, group_key ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -108,7 +108,7 @@ class AnalyticsModel {
       GROUP BY month
       ORDER BY date ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -124,7 +124,7 @@ class AnalyticsModel {
       GROUP BY month, ${groupByColumn}
       ORDER BY date ASC, group_key ASC
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
@@ -135,7 +135,7 @@ class AnalyticsModel {
       FROM ${tableName}
       WHERE ${whereConditions.join(' AND ')}
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0]?.total_count || 0;
   }
@@ -146,7 +146,7 @@ class AnalyticsModel {
       FROM ${tableName}
       WHERE ${whereConditions.join(' AND ')}
     `;
-    
+
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0]?.total_count || 0;
   }
@@ -222,10 +222,59 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  static async queryRevenueTotalStats(whereConditions) {
+    const query = `
+      SELECT
+        report_date as date,
+        sum(total_revenue) as amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryRevenueTotalStatsGrouped(whereConditions, groupByColumn) {
+    const query = `
+      SELECT
+        report_date as date,
+        ${groupByColumn} as group_key,
+        sum(total_revenue) as amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async getCountRevenueDailyStats(whereConditions) {
     const query = `
       SELECT sum(total_purchases) as total_count
       FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0]?.total_count || 0;
+  }
+
+  static async getSumRevenueDailyStats(whereConditions) {
+    const query = `
+      SELECT sum(total_revenue) as total_amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.REVENUE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0]?.total_amount || 0;
+  }
+
+  static async getCountAuthDailyStats(whereConditions) {
+    const query = `
+      SELECT sum(total_events) as total_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.AUTH_DAILY_STATS}
       WHERE ${whereConditions.join(' AND ')}
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -326,7 +375,7 @@ class AnalyticsModel {
 
   /** All-time totals: single table sum, no date filter, no joins. Optional reason/country only. */
   static async getCreditsSummaryAllTime(whereConditions = []) {
-    const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')} ` : '';
     const query = `
       SELECT
         sum(issued) AS total_issued,
@@ -350,11 +399,11 @@ class AnalyticsModel {
         user_id,
         object_id,
         maxIf(timestamp, event_name = 'credit_reserved') AS reserved_ts,
-        if(countIf(event_name = 'credit_deducted') > 0, minIf(timestamp, event_name = 'credit_deducted'), NULL) AS deducted_ts,
-        if(countIf(event_name = 'credit_released') > 0, minIf(timestamp, event_name = 'credit_released'), NULL) AS released_ts
+        if (countIf(event_name = 'credit_deducted') > 0, minIf(timestamp, event_name = 'credit_deducted'), NULL) AS deducted_ts,
+        if (countIf(event_name = 'credit_released') > 0, minIf(timestamp, event_name = 'credit_released'), NULL) AS released_ts
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
       WHERE object_type = 'credit'
-        AND event_name IN ('credit_reserved', 'credit_deducted', 'credit_released')
+        AND event_name IN('credit_reserved', 'credit_deducted', 'credit_released')
         AND ${timestampConditions.join(' AND ')}
       GROUP BY user_id, object_id
       HAVING reserved_ts IS NOT NULL
@@ -437,42 +486,42 @@ class AnalyticsModel {
 
   static async queryAIExecutionCostByTemplate(whereConditions) {
     const query = `
-      SELECT
-        template_id,
-        total_executions AS total_calls,
-        total_cost AS total_cost_usd
+SELECT
+template_id,
+  total_executions AS total_calls,
+    total_cost AS total_cost_usd
       FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY template_id ASC
-    `;
+  `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
 
   static async queryAIExecutionCostByDay(whereConditions) {
     const query = `
-      SELECT
+SELECT
         report_date AS date,
-        provider_name,
-        total_cost
+  provider_name,
+  total_cost
       FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY report_date ASC, provider_name ASC
-    `;
+  `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
 
   static async queryAIExecutionByErrorCategory(whereConditions) {
     const query = `
-      SELECT
-        error_category,
-        status,
-        total_executions AS total_runs
+SELECT
+error_category,
+  status,
+  total_executions AS total_runs
       FROM ${ANALYTICS_CONSTANTS.TABLES.AI_EXECUTION_DAILY_STATS} FINAL
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY error_category ASC, status ASC
-    `;
+  `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }

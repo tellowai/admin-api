@@ -1217,6 +1217,37 @@ exports.ensureTemplateAiClipsWithWorkflows = async function (templateId, clips, 
 };
 
 /**
+ * Add a new clip to a template with an empty workflow
+ */
+exports.addTemplateClipWithWorkflow = async function (templateId, assetType = 'video', userId) {
+  const clips = await this.getTemplateAiClips(templateId);
+  let nextIndex = 0;
+  if (clips && clips.length > 0) {
+    nextIndex = Math.max(...clips.map(c => c.clip_index || 0));
+  }
+
+  // ensureTemplateAiClip adds 1 internally so passing max clip_index creates max + 1
+  const { tac_id } = await exports.ensureTemplateAiClip(templateId, nextIndex, assetType);
+  await WorkflowModel.ensureWorkflowForTacId(tac_id, userId);
+
+  const updatedClips = await exports.getTemplateAiClips(templateId);
+  return updatedClips.find(c => c.tac_id === tac_id);
+};
+
+/**
+ * Delete a template AI clip (soft delete)
+ */
+exports.deleteTemplateClip = async function (templateId, tacId) {
+  const query = `
+    UPDATE template_ai_clips 
+    SET deleted_at = NOW() 
+    WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
+  `;
+  await mysqlQueryRunner.runQueryInMaster(query, [templateId, tacId]);
+  return true;
+};
+
+/**
  * Get clip summaries for a template (tac_id, clip_index, wf_id only). No joins, no legacy workflow.
  * Used for cross-clip source picker.
  */

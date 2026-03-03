@@ -315,6 +315,35 @@ class AnalyticsService {
     return this.queryMixedDateRange('PURCHASES', filters, additionalFilters);
   }
 
+  static async getRevenue(filters) {
+    const additionalFilters = {};
+    if (filters.plan_id) additionalFilters.plan_id = filters.plan_id;
+    if (filters.plan_name) additionalFilters.plan_name = filters.plan_name;
+    if (filters.plan_type) additionalFilters.plan_type = filters.plan_type;
+    if (filters.payment_provider) additionalFilters.payment_provider = filters.payment_provider;
+    if (filters.currency) additionalFilters.currency = filters.currency;
+    if (filters.user_id) additionalFilters.user_id = filters.user_id;
+    const whereConditions = this.buildMVRevenueConditions(filters.start_date, filters.end_date, additionalFilters);
+    
+    if (filters.group_by && ANALYTICS_CONSTANTS.REVENUE_GROUP_BY_COLUMNS.includes(filters.group_by)) {
+        return await AnalyticsModel.queryRevenueTotalStatsGrouped(whereConditions, filters.group_by);
+    }
+    return await AnalyticsModel.queryRevenueTotalStats(whereConditions);
+  }
+  
+  static async getRevenueSummary(filters) {
+    const additionalFilters = {};
+    if (filters.plan_id) additionalFilters.plan_id = filters.plan_id;
+    if (filters.plan_name) additionalFilters.plan_name = filters.plan_name;
+    if (filters.plan_type) additionalFilters.plan_type = filters.plan_type;
+    if (filters.payment_provider) additionalFilters.payment_provider = filters.payment_provider;
+    if (filters.currency) additionalFilters.currency = filters.currency;
+    if (filters.user_id) additionalFilters.user_id = filters.user_id;
+    
+    const whereConditions = this.buildMVRevenueConditions(filters.start_date, filters.end_date, additionalFilters);
+    return await AnalyticsModel.getSumRevenueDailyStats(whereConditions);
+  }
+
   static async getCreditsDailyStats(filters) {
     const { start_date, end_date } = filters;
     const additionalFilters = {};

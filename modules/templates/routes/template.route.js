@@ -60,6 +60,21 @@ module.exports = function (app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/:templateId/clips'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateAddClipData,
+    TemplateCtrl.addTemplateClip
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/clips/:tacId'
+  ).delete(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.deleteTemplateClip
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId'
   ).patch(
     AuthMiddleware.isAuthorizedJWT,

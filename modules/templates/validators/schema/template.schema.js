@@ -360,6 +360,10 @@ const reorderClipsSchema = Joi.object().keys({
   ).min(1).required()
 });
 
+const addClipSchema = Joi.object({
+  asset_type: Joi.string().valid('image', 'video').default('video')
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.createDraftTemplateSchema = createDraftTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
@@ -371,3 +375,4 @@ exports.exportTemplatesSchema = exportTemplatesSchema;
 exports.importTemplatesSchema = importTemplatesSchema;
 exports.ensureAiClipsSchema = ensureAiClipsSchema;
 exports.reorderClipsSchema = reorderClipsSchema;
+exports.addClipSchema = addClipSchema;

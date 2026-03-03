@@ -854,7 +854,58 @@ exports.reorderTemplateClips = async function (req, res) {
       message: 'Clips reordered successfully'
     });
   } catch (error) {
-    logger.error('Error reordering template clips:', { error: error.message, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * Add a new AI clip to a template
+ */
+exports.addTemplateClip = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const { asset_type } = req.validatedBody;
+    const userId = req.user.userId;
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    const newClip = await TemplateModel.addTemplateClipWithWorkflow(templateId, asset_type, userId);
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      data: newClip
+    });
+  } catch (error) {
+    logger.error('Error adding template clip:', { error: error.message, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * Delete a template AI clip
+ */
+exports.deleteTemplateClip = async function (req, res) {
+  try {
+    const { templateId, tacId } = req.params;
+
+    const template = await TemplateModel.getTemplateById(templateId);
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    await TemplateModel.deleteTemplateClip(templateId, tacId);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Clip deleted successfully'
+    });
+  } catch (error) {
+    logger.error('Error deleting template clip:', { error: error.message, templateId: req.params.templateId, tacId: req.params.tacId });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 };

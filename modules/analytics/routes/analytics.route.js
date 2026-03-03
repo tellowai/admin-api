@@ -137,6 +137,23 @@ module.exports = function(app) {
     AnalyticsValidator.validatePurchasesAnalyticsQuery,
     AnalyticsCtrl.getPurchasesSummary
   );
+  
+  // Revenue Analytics Routes
+  app.route(
+    versionConfig.routePrefix + '/analytics/revenue'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePurchasesAnalyticsQuery,
+    AnalyticsCtrl.getRevenue
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/revenue/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePurchasesAnalyticsQuery,
+    AnalyticsCtrl.getRevenueSummary
+  );
 
   // Credits analytics (issued, deducted, users from credits_daily_stats)
   app.route(
@@ -233,7 +250,7 @@ module.exports = function(app) {
   ).get(
     AuthMiddleware.isAuthorizedJWT,
     AnalyticsValidator.validatePipelineAnalyticsQuery,
-    AnalyticsCtrl.getAERenderingByDay
+    AnalyticsCtrl.getAERenderingByDayWithStatus
   );
 
   app.route(

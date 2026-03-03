@@ -13,7 +13,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -42,10 +42,10 @@ class AnalyticsController {
         data: convertedResults
       });
     } catch (error) {
-      logger.error('Error fetching character creations analytics:', { 
-        error: error.message, 
+      logger.error('Error fetching character creations analytics:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -55,7 +55,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -84,10 +84,10 @@ class AnalyticsController {
         data: convertedResults
       });
     } catch (error) {
-      logger.error('Error fetching character trainings analytics:', { 
-        error: error.message, 
+      logger.error('Error fetching character trainings analytics:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -97,7 +97,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -129,10 +129,10 @@ class AnalyticsController {
         data: convertedResults
       });
     } catch (error) {
-      logger.error('Error fetching template views analytics:', { 
-        error: error.message, 
+      logger.error('Error fetching template views analytics:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -142,7 +142,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -174,10 +174,10 @@ class AnalyticsController {
         data: convertedResults
       });
     } catch (error) {
-      logger.error('Error fetching template tries analytics:', { 
-        error: error.message, 
+      logger.error('Error fetching template tries analytics:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -187,7 +187,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -219,10 +219,10 @@ class AnalyticsController {
         data: convertedResults
       });
     } catch (error) {
-      logger.error('Error fetching template downloads analytics:', { 
-        error: error.message, 
+      logger.error('Error fetching template downloads analytics:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -349,7 +349,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -388,10 +388,10 @@ class AnalyticsController {
         }
       });
     } catch (error) {
-      logger.error('Error fetching character analytics summary:', { 
-        error: error.message, 
+      logger.error('Error fetching character analytics summary:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -401,7 +401,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -443,10 +443,10 @@ class AnalyticsController {
         }
       });
     } catch (error) {
-      logger.error('Error fetching template analytics summary:', { 
-        error: error.message, 
+      logger.error('Error fetching template analytics summary:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -456,7 +456,7 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      
+
       // Convert client timezone dates to UTC for database queries
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
@@ -502,10 +502,10 @@ class AnalyticsController {
         }
       });
     } catch (error) {
-      logger.error('Error fetching template downloads summary:', { 
-        error: error.message, 
+      logger.error('Error fetching template downloads summary:', {
+        error: error.message,
         stack: error.stack,
-        query: req.validatedQuery 
+        query: req.validatedQuery
       });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
@@ -763,6 +763,100 @@ class AnalyticsController {
       });
     } catch (error) {
       logger.error('Error fetching purchases summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getRevenue(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const filters = {
+        ...utcFilters,
+        plan_id: queryParams.plan_id,
+        plan_name: queryParams.plan_name,
+        plan_type: queryParams.plan_type,
+        payment_provider: queryParams.payment_provider,
+        currency: queryParams.currency,
+        user_id: queryParams.user_id,
+        group_by: queryParams.group_by
+      };
+
+      const revenue = await AnalyticsService.getRevenue(filters);
+
+      // Convert UTC results back to client timezone
+      const convertedResults = TimezoneService.convertFromUTC(revenue, timezone);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: convertedResults
+      });
+    } catch (error) {
+      logger.error('Error fetching revenue analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getRevenueSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+
+      // Convert client timezone dates to UTC for database queries
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const filters = {
+        ...utcFilters,
+        plan_id: queryParams.plan_id,
+        plan_name: queryParams.plan_name,
+        plan_type: queryParams.plan_type,
+        payment_provider: queryParams.payment_provider,
+        currency: queryParams.currency,
+        user_id: queryParams.user_id
+      };
+
+      const totalRevenue = await AnalyticsService.getRevenueSummary(filters);
+
+      // Convert date range back to client timezone for response
+      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        timezone
+      );
+
+      return res.status(HTTP_STATUS_CODES.OK).json({
+        data: {
+          revenue: {
+            total_amount: totalRevenue
+          },
+          date_range: convertedDateRange
+        }
+      });
+    } catch (error) {
+      logger.error('Error fetching revenue summary:', {
         error: error.message,
         stack: error.stack,
         query: req.validatedQuery
