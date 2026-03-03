@@ -36,9 +36,10 @@ exports.listGenerations = async function (req, res) {
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const { template_id, job_status } = req.query;
 
     // Page-based fetch only; no count. UI sends page=1,2,3...; offset/limit handled here.
-    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE);
+    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, { template_id, job_status });
 
     const storage = StorageFactory.getProvider();
 

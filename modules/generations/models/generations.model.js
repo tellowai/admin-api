@@ -21,9 +21,10 @@ function formatDateForMySQL(date) {
  * @param {Date|string} endDate 
  * @param {number} page 
  * @param {number} limit 
+ * @param {object} filters { template_id, job_status }
  * @returns {Promise<Array>}
  */
-exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20) {
+exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20, filters = {}) {
   const offset = (page - 1) * limit;
 
   const startFormatted = formatDateForMySQL(startDate);
@@ -32,6 +33,30 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
   if(!endFormatted) {
     // defaults to end of today if not valid
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+
+  let conditions = [
+    `created_at >= '${startFormatted}'`,
+    `created_at <= '${endFormatted}'`
+  ];
+
+  if (filters.job_status) {
+    if (filters.job_status === 'completed') {
+      conditions.push(`event_type = 'COMPLETED'`);
+    } else if (filters.job_status === 'failed') {
+      conditions.push(`event_type = 'FAILED'`);
+    } else {
+      conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
+    }
+  } else {
+    conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
+  }
+
+  if (filters.template_id) {
+    // We need to filter by template_id which is in resource_generations table.
+    // ClickHouse JOINs can be heavy, but here we can use a subquery for IDs if it's small or IN clause.
+    // Given the zero-join policy (though ClickHouse is different), let's keep it efficient.
+    conditions.push(`resource_generation_id IN (SELECT resource_generation_id FROM resource_generations WHERE template_id = '${filters.template_id}')`);
   }
 
   const query = `
@@ -43,8 +68,7 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
       created_at AS completed_at,
       if(event_type = 'FAILED', JSONExtractString(additional_data, 'error', 'message'), '') AS error_message
     FROM resource_generation_events
-    WHERE event_type IN ('COMPLETED', 'FAILED')
-      AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'
+    WHERE ${conditions.join(' AND ')}
     ORDER BY created_at DESC, resource_generation_id ASC
     LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
   `;
