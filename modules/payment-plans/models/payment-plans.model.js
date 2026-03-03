@@ -321,18 +321,8 @@ exports.copyPlan = async function (sourcePlanId) {
     const planRes = await conn.query('INSERT INTO payment_plans SET ?', planData);
     const newPlanId = planRes.insertId;
 
-    if (gateways && gateways.length > 0) {
-      const gatewayValues = gateways.map(g => [
-        newPlanId,
-        g.payment_gateway,
-        g.pg_plan_id,
-        g.is_active !== undefined ? g.is_active : 1
-      ]);
-      await conn.query(
-        'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, is_active) VALUES ?',
-        [gatewayValues]
-      );
-    }
+    // Gateways are NOT copied intentionally — the new plan starts with no gateways.
+    // Admin must configure gateway IDs fresh before activating.
 
     if (uiConfig) {
       const uiFields = [
