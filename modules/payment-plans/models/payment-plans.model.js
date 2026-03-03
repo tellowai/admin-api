@@ -310,7 +310,8 @@ exports.copyPlan = async function (sourcePlanId) {
       credits: plan.credits,
       bonus_credits: plan.bonus_credits != null ? plan.bonus_credits : 0,
       validity_days: plan.validity_days,
-      is_active: 0
+      is_active: 0,
+      first_activated_at: null
     };
 
     if (planData.plan_benefits && typeof planData.plan_benefits !== 'string') {
