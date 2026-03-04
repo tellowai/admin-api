@@ -4,6 +4,7 @@ const SupportModel = require('../models/support.model');
 const TemplateModel = require('../../templates/models/template.model');
 const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const CreditsModel = require('../../credits/models/credits.model');
 
 // A helper to enrich tickets without performing SQL JOINs
 async function enrichTicketsWithUsers(tickets) {
