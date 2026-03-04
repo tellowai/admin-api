@@ -12,6 +12,7 @@ const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 const { ROLES } = require('../../auth/constants/permissions.constants');
 const RbacModel = require('../../auth/models/rbac.model');
+const CreditsModel = require('../../credits/models/credits.model');
 
 
 
@@ -418,5 +419,24 @@ exports.updateAdminUserRoles = async function (req, res, next) {
     };
 
     return AdminUserErrorHandler.handleNewAdminCreationErrors(err, res);
+  }
+};
+
+exports.getUserCreditTransactions = async function (req, res) {
+  try {
+    const userId = req.params.userId;
+    const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
+    const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
+
+    const creditData = await CreditsModel.getUserCreditsTransactions(userId, page, limit);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: creditData
+    });
+  } catch (err) {
+    console.error('getUserCreditTransactions error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: req.t('user:USER_CREDIT_TRANSACTIONS_FAILED') || 'Failed to retrieve user credit transactions'
+    });
   }
 };

@@ -70,6 +70,33 @@ async function refundCreditsTransaction(userId, amount, referenceType, reference
   }
 }
 
+async function getUserCreditsTransactions(userId, page, limit) {
+  const offset = (page - 1) * limit;
+  
+  const transactionsQuery = `
+    SELECT * FROM credits_transactions
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+  
+  const balanceQuery = `
+    SELECT balance, reserved_balance FROM user_credits WHERE user_id = ?
+  `;
+
+  const [transactions, balanceResult] = await Promise.all([
+    MysqlQueryRunner.runQueryInSlave(transactionsQuery, [userId, limit, offset]),
+    MysqlQueryRunner.runQueryInSlave(balanceQuery, [userId])
+  ]);
+
+  return {
+    transactions,
+    balance: balanceResult[0] ? balanceResult[0].balance : 0,
+    reserved_balance: balanceResult[0] ? balanceResult[0].reserved_balance : 0
+  };
+}
+
 module.exports = {
-  refundCreditsTransaction
+  refundCreditsTransaction,
+  getUserCreditsTransactions
 };

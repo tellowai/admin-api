@@ -196,6 +196,47 @@ exports.getRefundedCreditsForGeneration = async function(generationId) {
   }
 };
 
+exports.getReleasedCreditsForGeneration = async function(generationId) {
+  const query = `
+    SELECT SUM(amount) as total_released
+    FROM credits_transactions
+    WHERE reference_id = ? AND transaction_type = 'release' AND status = 'completed'
+  `;
+  try {
+    const res = await mysqlQueryRunner.runQueryInSlave(query, [generationId]);
+    return res[0]?.total_released || 0;
+  } catch(err) {
+    console.error('getReleasedCreditsForGeneration error:', err);
+    return 0;
+  }
+};
+
+exports.getTransactionsForGeneration = async function(generationId) {
+  const query = `
+    SELECT * 
+    FROM credits_transactions
+    WHERE reference_id = ?
+    ORDER BY created_at ASC
+  `;
+  try {
+    return await mysqlQueryRunner.runQueryInSlave(query, [generationId]);
+  } catch(err) {
+    console.error('getTransactionsForGeneration error:', err);
+    return [];
+  }
+};
+
+exports.getUserBalance = async function(userId) {
+  const query = `SELECT balance, reserved_balance FROM user_credits WHERE user_id = ?`;
+  try {
+    const res = await mysqlQueryRunner.runQueryInSlave(query, [userId]);
+    return res[0] || { balance: 0, reserved_balance: 0 };
+  } catch(err) {
+    console.error('getUserBalance error:', err);
+    return { balance: 0, reserved_balance: 0 };
+  }
+};
+
 exports.countOtherTicketsForGeneration = async function(generationId, ticketId) {
   const query = `
     SELECT COUNT(*) as total

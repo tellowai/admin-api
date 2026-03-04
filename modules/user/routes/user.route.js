@@ -72,4 +72,11 @@ module.exports = function (app) {
     AdminUserValidator.validateUpdateUserRolesData,
     AdminUserCtrl.updateAdminUserRoles
   );
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/users/:userId/credits/transactions"
+  ).get(  
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getUserCreditTransactions
+  );
 };

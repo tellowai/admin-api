@@ -1,7 +1,8 @@
 'use strict';
 
 const SupportModel = require('../models/support.model');
-const CreditsModel = require('../../credits/models/credits.model');
+const TemplateModel = require('../../templates/models/template.model');
+const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 
 // A helper to enrich tickets without performing SQL JOINs
@@ -249,12 +250,29 @@ exports.getTicketDetails = async function(ticketId) {
 
     genContext.credits_deducted = await SupportModel.getDeductedCreditsForGeneration(finalTicket.generation_id);
     genContext.credits_refunded = await SupportModel.getRefundedCreditsForGeneration(finalTicket.generation_id);
+    genContext.credits_auto_refunded = await SupportModel.getReleasedCreditsForGeneration(finalTicket.generation_id);
     genContext.other_tickets_count = await SupportModel.countOtherTicketsForGeneration(finalTicket.generation_id, finalTicket.ticket_id);
+    genContext.transactions = await SupportModel.getTransactionsForGeneration(finalTicket.generation_id);
 
     finalTicket.generationContext = genContext;
   }
 
+  if (finalTicket.template_id) {
+    try {
+      const template = await TemplateModel.getTemplateById(finalTicket.template_id);
+      if (template) {
+        finalTicket.template_name = template.template_name || 'Unknown Template';
+        finalTicket.template = template;
+      }
+    } catch(e) {
+      console.error('Failed to fetch template details for ticket', e);
+    }
+  }
 
+  if (finalTicket.user_id) {
+    const balanceData = await SupportModel.getUserBalance(finalTicket.user_id);
+    finalTicket.user_credits = balanceData;
+  }
 
   return finalTicket;
 };
