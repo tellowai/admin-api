@@ -8,7 +8,7 @@ const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 const TemplateScenesModel = require('./template.scenes.model');
 const TemplateLayersModel = require('./template.layers.model');
 
-const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'suspended', 'archived'];
+const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
 
 exports.listTemplates = async function (pagination) {
   const conditions = ['archived_at IS NULL'];
@@ -48,6 +48,7 @@ exports.listTemplates = async function (pagination) {
       video_uploads_json,
       image_input_fields_json,
       niche_id,
+      template_workflow_type,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -267,6 +268,7 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
       template_clips_assets_type,
       language_code,
       template_type,
+      template_workflow_type,
       description,
       faces_needed,
       image_uploads_required,
@@ -560,6 +562,7 @@ exports.getTemplateById = async function (templateId) {
       video_uploads_json,
       image_input_fields_json,
       niche_id,
+      template_workflow_type,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -912,6 +915,11 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
     } else {
       insertValues.push(value);
     }
+  }
+  // Ensure template_workflow_type is copied (in case source row lacked it e.g. pre-migration)
+  if (!insertFields.includes('template_workflow_type')) {
+    insertFields.push('template_workflow_type');
+    insertValues.push(sourceTemplate.template_workflow_type || 'AI_PLUS_AE');
   }
   insertFields.push('template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at');
   insertValues.push(newTemplateId, newTemplateName, newTemplateCode, 'draft', now, now, null);

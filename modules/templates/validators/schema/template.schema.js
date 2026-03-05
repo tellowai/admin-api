@@ -96,6 +96,7 @@ const createTemplateSchema = Joi.object().keys({
   template_output_type: Joi.string().valid('image', 'video', 'audio').required(),
   language_code: Joi.string().max(10).allow(null).optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').required(),
+  template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
   template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation),
@@ -177,7 +178,8 @@ const createDraftTemplateSchema = Joi.object().keys({
   cf_r2_url: Joi.string().max(1000).required(),
   cf_r2_key: Joi.string().max(512).required(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').default('video'),
-  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'suspended', 'archived').default('draft'),
+  template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
+  status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived').default('draft'),
   thumb_frame_asset_key: Joi.string().max(512).allow(null).optional(),
   thumb_frame_bucket: Joi.string().max(255).allow(null).optional()
 });
@@ -188,6 +190,7 @@ const updateTemplateSchema = Joi.object().keys({
   template_output_type: Joi.string().valid('image', 'video', 'audio').optional(),
   language_code: Joi.string().max(10).allow(null).optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
+  template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
   template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation).optional(),
@@ -285,12 +288,12 @@ const bulkUnarchiveTemplatesSchema = Joi.object().keys({
 });
 
 const updateTemplateStatusSchema = Joi.object().keys({
-  status: Joi.string().valid('active', 'inactive').required()
+  status: Joi.string().valid('active', 'inactive', 'unlisted').required()
 });
 
 const bulkUpdateTemplatesStatusSchema = Joi.object().keys({
   template_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required(),
-  status: Joi.string().valid('active', 'inactive').required()
+  status: Joi.string().valid('active', 'inactive', 'unlisted').required()
 });
 
 const exportTemplatesSchema = Joi.object().keys({

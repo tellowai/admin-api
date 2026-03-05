@@ -1725,7 +1725,8 @@ exports.createDraftTemplate = async function (req, res) {
 
     // Set defaults
     templateData.template_output_type = templateData.template_output_type || 'video';
-    templateData.template_clips_assets_type = 'non-ai';
+    templateData.template_workflow_type = templateData.template_workflow_type || 'AI_PLUS_AE';
+    templateData.template_clips_assets_type = (templateData.template_workflow_type === 'AI_ONLY' || templateData.template_workflow_type === 'AI_PLUS_AE') ? 'ai' : 'non-ai';
     templateData.status = templateData.status || 'draft';
     templateData.template_type = templateData.template_type || 'premium';
     if (templateData.template_type === 'free') {
@@ -3078,14 +3079,12 @@ exports.updateTemplate = async function (req, res) {
     }
 
     // Cost in dollars: same algorithm as admin-ui WorkflowCostBreakdown / workflowCost.js.
-    // Uses all template AI clips at once (no page-wise): when payload has clips, use those (full set);
-    // when not, use all clips from DB. Each clip's AI steps are costed by model (image vs video_with_audio / video_without_audio from pricing_config + capabilities).
+    // For AI / AI-only templates always use all clips from DB (with wf_id) so we get every clip and its workflow, then enrich with workflow nodes and sum cost. Payload clips are often minimal (tac_id + asset_type) and lack wf_id, so cost is always computed from the full saved clip set.
     if (isNonAi) {
       templateData.cost_in_dollars = 0;
     } else {
-      let clipsToUse = hasClips ? templateData.clips : (await TemplateModel.getTemplateAiClips(templateId)) || [];
-      // Set logVerbose: true when debugging cost/enrichClips
-      clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(clipsToUse, { logVerbose: true });
+      const allClipsFromDb = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      let clipsToUse = await enrichClipsWorkflowFromWorkflowNodes(allClipsFromDb, { logVerbose: true });
       try {
         if (clipsToUse.length > 0) {
           const getModelsByIds = async (modelIds) => {
@@ -3493,9 +3492,9 @@ exports.updateTemplateStatus = async function (req, res) {
     const { templateId } = req.params;
     const { status } = req.body;
 
-    if (!['active', 'inactive'].includes(status)) {
+    if (!['active', 'inactive', 'unlisted'].includes(status)) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
-        message: 'Status must be either active or inactive'
+        message: 'Status must be active, inactive, or unlisted'
       });
     }
 
