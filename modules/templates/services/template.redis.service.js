@@ -40,8 +40,8 @@ exports.getTemplateGenerationMeta = async function(templateId) {
 exports.updateTemplateGenerationMeta = async function(templateId) {
   const cacheKey = buildTemplateMetaCacheKey(templateId);
 
-  // Get fresh data from database
-  const template = await TemplateModel.getTemplateGenerationMeta(templateId);
+  // Read from master so we get just-committed data (avoid replication lag writing stale/incomplete template to Redis)
+  const template = await TemplateModel.getTemplateGenerationMeta(templateId, { useMaster: true });
   if (!template) {
     // If template doesn't exist, remove from cache
     await RedisService.deleteData(cacheKey);

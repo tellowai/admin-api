@@ -47,8 +47,10 @@ exports.createTemplateLayersInTransaction = async function (connection, createdS
 
 /**
  * Get layers by multiple scene IDs
+ * @param {string[]} sceneIds
+ * @param {{ useMaster?: boolean }} options - useMaster: read from master (e.g. after update to avoid replication lag)
  */
-exports.getLayersBySceneIds = async function (sceneIds) {
+exports.getLayersBySceneIds = async function (sceneIds, options = {}) {
   if (!sceneIds || sceneIds.length === 0) return [];
 
   const placeholders = sceneIds.map(() => '?').join(',');
@@ -68,6 +70,6 @@ exports.getLayersBySceneIds = async function (sceneIds) {
     WHERE scene_id IN (${placeholders})
     ORDER BY z_index ASC
   `;
-
-  return await mysqlQueryRunner.runQueryInSlave(query, sceneIds);
+  const run = options.useMaster ? mysqlQueryRunner.runQueryInMaster : mysqlQueryRunner.runQueryInSlave;
+  return await run(query, sceneIds);
 };

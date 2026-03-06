@@ -82,7 +82,11 @@ exports.listTemplates = async function (pagination) {
   return await mysqlQueryRunner.runQueryInSlave(query, params);
 };
 
-exports.getTemplateGenerationMeta = async function (templateId) {
+/**
+ * @param {string} templateId
+ * @param {{ useMaster?: boolean }} options - useMaster: read from master (e.g. when refreshing Redis after update to avoid replication lag and stale scenes/AE data)
+ */
+exports.getTemplateGenerationMeta = async function (templateId, options = {}) {
   const query = `
     SELECT 
       *
@@ -90,8 +94,9 @@ exports.getTemplateGenerationMeta = async function (templateId) {
     WHERE template_id = ?
     AND archived_at IS NULL
   `;
-
-  const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  const run = options.useMaster ? mysqlQueryRunner.runQueryInMaster : mysqlQueryRunner.runQueryInSlave;
+  const rows = await run(query, [templateId]);
+  const [template] = rows || [];
 
   if (!template) return template;
 
@@ -100,11 +105,11 @@ exports.getTemplateGenerationMeta = async function (templateId) {
     try { template.additional_data = JSON.parse(template.additional_data); } catch (e) { }
   }
 
-  const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+  const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId, options);
   const sceneIds = scenes.map(s => s.scene_id);
 
   if (sceneIds.length > 0) {
-    const layers = await TemplateLayersModel.getLayersBySceneIds(sceneIds);
+    const layers = await TemplateLayersModel.getLayersBySceneIds(sceneIds, options);
     const layersByScene = {};
 
     layers.forEach(layer => {

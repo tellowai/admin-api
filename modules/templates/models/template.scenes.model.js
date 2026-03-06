@@ -38,8 +38,10 @@ exports.createTemplateScenesInTransaction = async function (connection, template
 
 /**
  * Get scenes by template ID
+ * @param {string} templateId
+ * @param {{ useMaster?: boolean }} options - useMaster: read from master (e.g. after update to avoid replication lag)
  */
-exports.getScenesByTemplateId = async function (templateId) {
+exports.getScenesByTemplateId = async function (templateId, options = {}) {
   const query = `
     SELECT 
       scene_id,
@@ -52,8 +54,8 @@ exports.getScenesByTemplateId = async function (templateId) {
     WHERE template_id = ?
     ORDER BY scene_order ASC
   `;
-
-  return await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  const run = options.useMaster ? mysqlQueryRunner.runQueryInMaster : mysqlQueryRunner.runQueryInSlave;
+  return await run(query, [templateId]);
 };
 
 /**
