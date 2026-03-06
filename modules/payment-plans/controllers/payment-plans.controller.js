@@ -218,35 +218,37 @@ exports.updatePlan = async function (req, res) {
         }
       }
 
-      // Gateways: allow setting plan ID only when not yet set; reject changing already-set plan IDs (per-gateway)
+      // Gateways: allow setting plan ID only when not yet set; reject changing already-set plan IDs (per-gateway+platform)
       if (req.validatedBody.gateways !== undefined) {
         const currentGateways = await PaymentPlansModel.getPlanGateways(planId);
-        const currentByGateway = new Map(currentGateways.map(g => [g.payment_gateway, g]));
+        // Group by combination of gateway and platform to allow both Android and iOS for same provider
+        const currentByGatewayAndPlatform = new Map(currentGateways.map(g => [`${g.payment_gateway}_${g.platform}`, g]));
         const gatewayErrors = {};
 
         for (const incoming of req.validatedBody.gateways) {
-          const key = incoming.payment_gateway;
-          const current = currentByGateway.get(key);
+          const key = `${incoming.payment_gateway}_${incoming.platform || 'all'}`;
+          const current = currentByGatewayAndPlatform.get(key);
           const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
           const incomingId = incoming.pg_plan_id != null ? String(incoming.pg_plan_id).trim() : '';
 
           if (currentId !== '' && incomingId !== currentId) {
-            const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-            const template = req.t('payment_plans:GATEWAY_PLAN_ID_CANNOT_CHANGE');
+            const label = incoming.payment_gateway.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ` (${incoming.platform || 'all'})`;
+            const template = req.t('payment_plans:GATEWAY_PLAN_ID_CANNOT_CHANGE') || 'Gateway Plan ID cannot change';
             gatewayErrors[key] = String(template).replace(/\{\{gateway\}\}/g, label);
           }
         }
 
         if (Object.keys(gatewayErrors).length > 0) {
           return res.status(CODES.BAD_REQUEST).json({
-            message: req.t('payment_plans:GATEWAY_PLAN_IDS_LOCKED_MESSAGE'),
+            message: req.t('payment_plans:GATEWAY_PLAN_IDS_LOCKED_MESSAGE') || 'Gateway Plan IDs locked',
             gateway_errors: gatewayErrors
           });
         }
 
-        // Sanitize: keep existing pg_plan_id for gateways that already have one set
+        // Sanitize: keep existing pg_plan_id for gateway+platform combinations that already have one set
         const sanitizedGateways = req.validatedBody.gateways.map(g => {
-          const current = currentByGateway.get(g.payment_gateway);
+          const key = `${g.payment_gateway}_${g.platform || 'all'}`;
+          const current = currentByGatewayAndPlatform.get(key);
           const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
           if (currentId !== '') {
             return { ...g, pg_plan_id: current.pg_plan_id };
