@@ -27,6 +27,22 @@ exports.listTemplates = async function (pagination) {
     }
   }
 
+  if (pagination.template_output_type) {
+    conditions.push('template_output_type = ?');
+    params.push(pagination.template_output_type);
+  }
+
+  if (pagination.platform) {
+    if (pagination.platform === 'android') {
+      conditions.push("android_status = 'active'");
+    } else if (pagination.platform === 'ios') {
+      conditions.push("ios_status = 'active'");
+    } else if (pagination.platform === 'both') {
+      conditions.push("android_status = 'active'");
+      conditions.push("ios_status = 'active'");
+    }
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `
@@ -241,7 +257,7 @@ exports.getTemplatePrompt = async function (templateId) {
   return template;
 };
 
-exports.searchTemplates = async function (searchQuery, page, limit, status = null, language_code = null) {
+exports.searchTemplates = async function (searchQuery, page, limit, status = null, language_code = null, template_output_type = null, platform = null) {
   const offset = (page - 1) * limit;
   const conditions = [
     '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))',
@@ -259,6 +275,22 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
     if (codes.length > 0) {
       conditions.push(`language_code IN (${codes.map(() => '?').join(',')})`);
       params.push(...codes);
+    }
+  }
+
+  if (template_output_type) {
+    conditions.push('template_output_type = ?');
+    params.push(template_output_type);
+  }
+
+  if (platform) {
+    if (platform === 'android') {
+      conditions.push("android_status = 'active'");
+    } else if (platform === 'ios') {
+      conditions.push("ios_status = 'active'");
+    } else if (platform === 'both') {
+      conditions.push("android_status = 'active'");
+      conditions.push("ios_status = 'active'");
     }
   }
 
@@ -590,6 +622,8 @@ exports.getTemplateById = async function (templateId) {
       orientation,
       additional_data,
       status,
+      android_status,
+      ios_status,
       workflow_builder_version,
       created_at
     FROM templates
@@ -675,6 +709,8 @@ exports.getTemplateByCode = async function (templateCode) {
       orientation,
       additional_data,
       status,
+      android_status,
+      ios_status,
       created_at
     FROM templates
     WHERE template_code = ?

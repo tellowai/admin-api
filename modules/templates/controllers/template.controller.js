@@ -271,7 +271,9 @@ exports.listTemplates = async function (req, res) {
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
       status: req.query.status || undefined,
-      language_code: req.query.language_code || undefined
+      language_code: req.query.language_code || undefined,
+      template_output_type: req.query.template_output_type || undefined,
+      platform: req.query.platform || undefined
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
@@ -1134,7 +1136,17 @@ exports.searchTemplates = async function (req, res) {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const status = req.query.status || null;
     const language_code = req.query.language_code || null;
-    const templates = await TemplateModel.searchTemplates(q, paginationParams.page, paginationParams.limit, status, language_code);
+    const template_output_type = req.query.template_output_type || null;
+    const platform = req.query.platform || null;
+    const templates = await TemplateModel.searchTemplates(
+      q,
+      paginationParams.page,
+      paginationParams.limit,
+      status,
+      language_code,
+      template_output_type,
+      platform
+    );
 
     // Batch fetch related data (no queries in loop); stitch in controller
     if (templates.length) {
@@ -3515,7 +3527,16 @@ exports.updateTemplateStatus = async function (req, res) {
       }
     }
 
-    const updated = await TemplateModel.updateTemplate(templateId, { status });
+    const patchData = { status };
+    if (status === 'active') {
+      patchData.android_status = 'active';
+      patchData.ios_status = 'active';
+    } else {
+      patchData.android_status = 'inactive';
+      patchData.ios_status = 'inactive';
+    }
+
+    const updated = await TemplateModel.updateTemplate(templateId, patchData);
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
@@ -3555,7 +3576,16 @@ exports.bulkUpdateTemplatesStatus = async function (req, res) {
           }
         }
 
-        const updated = await TemplateModel.updateTemplate(templateId, { status });
+        const patchData = { status };
+        if (status === 'active') {
+          patchData.android_status = 'active';
+          patchData.ios_status = 'active';
+        } else {
+          patchData.android_status = 'inactive';
+          patchData.ios_status = 'inactive';
+        }
+
+        const updated = await TemplateModel.updateTemplate(templateId, patchData);
         if (updated) {
           await TemplateRedisService.updateTemplateGenerationMeta(templateId);
         }

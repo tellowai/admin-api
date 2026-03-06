@@ -224,6 +224,8 @@ const updateTemplateSchema = Joi.object().keys({
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   additional_data: Joi.object().allow(null).optional(),
+  android_status: Joi.string().valid('active', 'inactive').optional(),
+  ios_status: Joi.string().valid('active', 'inactive').optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_required: Joi.number().integer().min(0).optional(),
   video_uploads_required: Joi.number().integer().min(0).optional(),
