@@ -130,12 +130,13 @@ exports.createPlan = async function (data) {
         planId,
         g.payment_gateway,
         g.pg_plan_id,
+        g.platform || 'all',
         g.is_active !== undefined ? g.is_active : 1
       ]);
 
       if (gatewayValues.length > 0) {
         await conn.query(
-          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, is_active) VALUES ?',
+          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, platform, is_active) VALUES ?',
           [gatewayValues]
         );
       }
@@ -223,11 +224,12 @@ exports.updatePlan = async function (planId, data) {
           planId,
           g.payment_gateway,
           g.pg_plan_id,
+          g.platform || 'all',
           g.is_active !== undefined ? g.is_active : 1
         ]);
 
         await conn.query(
-          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, is_active) VALUES ?',
+          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, platform, is_active) VALUES ?',
           [gatewayValues]
         );
       }

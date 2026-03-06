@@ -6,6 +6,7 @@ const PermissionMiddleware = require('../../auth/middlewares/permission.middlewa
 const { PERMISSIONS } = require('../../auth/constants/permissions.constants');
 const PaymentPlansCtrl = require('../controllers/payment-plans.controller');
 const PaymentPlansValidator = require('../validators/payment-plans.validator');
+const PaymentSettingsCtrl = require('../controllers/payment-settings.controller');
 
 module.exports = function (app) {
   // List payment plans - requires view_pricing or manage_pricing
@@ -58,5 +59,23 @@ module.exports = function (app) {
       PermissionMiddleware.hasPermission(PERMISSIONS.MANAGE_PRICING),
       PaymentPlansValidator.validatePlanIdParam,
       PaymentPlansCtrl.copyPlan
+    );
+
+  // --- Payment Settings ---
+
+  // Get all payment settings - requires view_pricing or manage_pricing
+  app.route(versionConfig.routePrefix + '/payment-settings')
+    .get(
+      AuthMiddleware.isAdminUser,
+      PermissionMiddleware.hasAnyPermission([PERMISSIONS.MANAGE_PRICING, PERMISSIONS.VIEW_PRICING]),
+      PaymentSettingsCtrl.getAllSettings
+    );
+
+  // Update a specific payment setting - requires manage_pricing
+  app.route(versionConfig.routePrefix + '/payment-settings/:key')
+    .put(
+      AuthMiddleware.isAdminUser,
+      PermissionMiddleware.hasPermission(PERMISSIONS.MANAGE_PRICING),
+      PaymentSettingsCtrl.updateSetting
     );
 };

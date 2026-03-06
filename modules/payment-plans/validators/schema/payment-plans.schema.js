@@ -3,8 +3,9 @@
 const Joi = require('@hapi/joi');
 
 const gatewaySchema = Joi.object().keys({
-  payment_gateway: Joi.string().required(),
+  payment_gateway: Joi.string().valid('razorpay', 'stripe', 'dodopayments', 'revenuecat', 'apple_iap', 'google_play').required(),
   pg_plan_id: Joi.string().required(),
+  platform: Joi.string().valid('android', 'ios', 'web', 'all').default('all').optional(),
   is_active: Joi.number().integer().valid(0, 1).optional()
 });
 
