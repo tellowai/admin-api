@@ -1750,6 +1750,8 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.user_assets_layer = 'bottom'; // Default layer
     templateData.ae_rendering_engine = 'transparent_webm';
     templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
+    templateData.android_status = templateData.android_status ?? 'inactive';
+    templateData.ios_status = templateData.ios_status ?? 'inactive';
 
     // Initialize with a default scene and layers for the new architecture
     templateData.scenes = [
