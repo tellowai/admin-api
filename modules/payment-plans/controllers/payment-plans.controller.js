@@ -139,6 +139,10 @@ exports.copyPlan = async function (req, res) {
 
 exports.createPlan = async function (req, res) {
   try {
+    // À la carte plans (plan_type=single) must always have billing_interval=alacarte
+    if (req.validatedBody.plan_type === 'single') {
+      req.validatedBody.billing_interval = 'alacarte';
+    }
     // req.validatedBody is populated by validor middleware
     const planId = await PaymentPlansModel.createPlan(req.validatedBody);
 
