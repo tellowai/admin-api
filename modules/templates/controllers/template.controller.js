@@ -31,6 +31,33 @@ const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-reg
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
 
+/** Alacarte INR bucket options (49, 99, 149, ..., 499). */
+const ALACARTE_BUCKETS = [49, 99, 149, 199, 249, 299, 349, 399, 449, 499];
+
+/**
+ * Compute default alacarte_price (INR bucket) from credits.
+ * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
+ */
+function computeAlacartePriceFromCredits(credits) {
+  if (!credits || credits < 1) return null;
+  const rawInr = Math.floor((credits / 50) * 83.33);
+  const tier = rawInr <= 49 ? 49 : Math.min((Math.floor(rawInr / 50) * 50) + 49, 499);
+  return ALACARTE_BUCKETS.includes(tier) ? tier : ALACARTE_BUCKETS[ALACARTE_BUCKETS.length - 1];
+}
+
+/**
+ * Compute à la carte INR bucket price from credits.
+ * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
+ * @param {number} credits
+ * @returns {number} Bucket price (49, 99, 149, ..., 499)
+ */
+function computeAlacartePriceFromCredits(credits) {
+  if (!credits || credits < 1) return null;
+  const rawInr = Math.floor((credits / 50) * 83.33);
+  const tier = rawInr <= 49 ? 49 : (Math.floor(rawInr / 50) * 50) + 49;
+  return Math.min(tier, 499);
+}
+
 /**
  * Read Bodymovin (Lottie) JSON from storage or from URL.
  * Uses StorageFactory when key is a storage key; uses axios when key is a full http(s) URL.
@@ -1605,6 +1632,11 @@ exports.createTemplate = async function (req, res) {
       }
     }
 
+    // Auto-compute alacarte_price from credits when not provided
+    if (templateData.alacarte_price === undefined && templateData.alacarte_price === null && templateData.credits > 0) {
+      templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
+    }
+
     // Default cf_r2_bucket to 'public' if key is provided but bucket is not
     if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
       templateData.cf_r2_bucket = 'public';
@@ -2920,6 +2952,11 @@ exports.updateTemplate = async function (req, res) {
           message: req.t('template:TEMPLATE_CODE_EXISTS')
         });
       }
+    }
+
+    // Auto-compute alacarte_price from credits when credits is updated but alacarte_price is not provided
+    if (templateData.credits !== undefined && templateData.credits > 0 && templateData.alacarte_price === undefined) {
+      templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
     }
 
     // Auto-switch to new scene architecture if template has no scenes and is being updated

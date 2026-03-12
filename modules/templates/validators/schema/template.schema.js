@@ -126,6 +126,7 @@ const createTemplateSchema = Joi.object().keys({
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null),
   user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
   credits: Joi.number().integer().min(1).default(1),
+  alacarte_price: Joi.number().integer().valid(49, 99, 149, 199, 249, 299, 349, 399, 449, 499).optional().allow(null),
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
@@ -220,6 +221,7 @@ const updateTemplateSchema = Joi.object().keys({
   custom_text_input_fields: Joi.array().items(customTextInputFieldSchema).allow(null).optional(),
   user_assets_layer: Joi.string().valid('top', 'bottom').optional(),
   credits: Joi.number().integer().min(1).optional(),
+  alacarte_price: Joi.number().integer().valid(49, 99, 149, 199, 249, 299, 349, 399, 449, 499).optional().allow(null),
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
