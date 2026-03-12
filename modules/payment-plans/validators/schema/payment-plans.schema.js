@@ -32,7 +32,7 @@ const uiConfigSchema = Joi.object().keys({
 const createPaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().required(),
   tier: Joi.string().valid('premium', 'ai', 'unified').required(),
-  plan_type: Joi.string().valid('single', 'bundle', 'credits').required(),
+  plan_type: Joi.string().valid('single', 'bundle', 'credits', 'addon').required(),
   plan_heading: Joi.string().allow('', null).optional(),
   plan_subheading: Joi.string().allow('', null).optional(),
   plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),
@@ -53,7 +53,7 @@ const createPaymentPlanSchema = Joi.object().keys({
 const updatePaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().optional(),
   tier: Joi.string().valid('premium', 'ai', 'unified').optional(),
-  plan_type: Joi.string().valid('single', 'bundle', 'credits').optional(),
+  plan_type: Joi.string().valid('single', 'bundle', 'credits', 'addon').optional(),
   plan_heading: Joi.string().allow('', null).optional(),
   plan_subheading: Joi.string().allow('', null).optional(),
   plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),

@@ -143,6 +143,10 @@ exports.createPlan = async function (req, res) {
     if (req.validatedBody.plan_type === 'single') {
       req.validatedBody.billing_interval = 'alacarte';
     }
+    // Add-on plans (plan_type=addon) must always have billing_interval=onetime
+    if (req.validatedBody.plan_type === 'addon') {
+      req.validatedBody.billing_interval = 'onetime';
+    }
     // req.validatedBody is populated by validor middleware
     const planId = await PaymentPlansModel.createPlan(req.validatedBody);
 
@@ -350,8 +354,8 @@ exports.togglePlanStatus = async function (req, res) {
       }
 
       // Validate plan_type
-      if (!plan.plan_type || !['single', 'bundle', 'credits'].includes(plan.plan_type)) {
-        errors.push({ field: 'plan_type', message: 'Plan type must be one of: single, bundle, credits' });
+      if (!plan.plan_type || !['single', 'bundle', 'credits', 'addon'].includes(plan.plan_type)) {
+        errors.push({ field: 'plan_type', message: 'Plan type must be one of: single, bundle, credits, addon' });
       }
 
       // Validate current_price
