@@ -1,6 +1,6 @@
 'use strict';
 
-const PaymentModeConfigService = require('../../../../api/modules/payment/services/payment-mode.config.service');
+const PaymentModeConfigService = require('../services/payment-mode.config.service');
 const ActivityLogController = require('../../core/controllers/activitylog.controller');
 const { CODES } = require('../../core/controllers/httpcodes.server.controller');
 const logger = require('../../../config/lib/logger');
