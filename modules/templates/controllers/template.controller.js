@@ -31,25 +31,11 @@ const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-reg
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
 
-/** Alacarte INR bucket options (49, 99, 149, ..., 499). */
-const ALACARTE_BUCKETS = [49, 99, 149, 199, 249, 299, 349, 399, 449, 499];
-
 /**
- * Compute default alacarte_price (INR bucket) from credits.
- * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
- */
-function computeAlacartePriceFromCredits(credits) {
-  if (!credits || credits < 1) return null;
-  const rawInr = Math.floor((credits / 50) * 83.33);
-  const tier = rawInr <= 49 ? 49 : Math.min((Math.floor(rawInr / 50) * 50) + 49, 499);
-  return ALACARTE_BUCKETS.includes(tier) ? tier : ALACARTE_BUCKETS[ALACARTE_BUCKETS.length - 1];
-}
-
-/**
- * Compute à la carte INR bucket price from credits.
+ * Compute default alacarte_price (INR) from credits when not explicitly provided.
  * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
  * @param {number} credits
- * @returns {number} Bucket price (49, 99, 149, ..., 499)
+ * @returns {number|null} Computed price in INR, or null if credits invalid
  */
 function computeAlacartePriceFromCredits(credits) {
   if (!credits || credits < 1) return null;
@@ -1617,23 +1603,19 @@ exports.createTemplate = async function (req, res) {
       }
     }
 
-    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1
+    // Credits by template_type: free = 0; paid types = payload if > 0 else 1
     const templateType = templateData.template_type || 'premium';
     if (templateType === 'free') {
       templateData.credits = 0;
-    } else if (templateType === 'premium' || templateType === 'ai') {
+    } else {
       const payloadCredits = templateData.credits;
       templateData.credits = (payloadCredits !== undefined && payloadCredits !== null && payloadCredits > 0)
         ? payloadCredits
         : 1;
-    } else {
-      if (templateData.credits === undefined || templateData.credits === null || templateData.credits < 1) {
-        templateData.credits = 1;
-      }
     }
 
     // Auto-compute alacarte_price from credits when not provided
-    if (templateData.alacarte_price === undefined && templateData.alacarte_price === null && templateData.credits > 0) {
+    if ((templateData.alacarte_price === undefined || templateData.alacarte_price === null) && templateData.credits > 0) {
       templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
     }
 
@@ -2955,7 +2937,7 @@ exports.updateTemplate = async function (req, res) {
     }
 
     // Auto-compute alacarte_price from credits when credits is updated but alacarte_price is not provided
-    if (templateData.credits !== undefined && templateData.credits > 0 && templateData.alacarte_price === undefined) {
+    if (templateData.credits !== undefined && templateData.credits > 0 && (templateData.alacarte_price === undefined || templateData.alacarte_price === null)) {
       templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
     }
 
@@ -3182,11 +3164,11 @@ exports.updateTemplate = async function (req, res) {
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
-    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1 (else keep existing)
+    // Credits by template_type: free = 0; paid types = payload if > 0 else 1 (else keep existing)
     const effectiveTemplateType = templateData.template_type ?? existingTemplate.template_type ?? 'premium';
     if (effectiveTemplateType === 'free') {
       templateData.credits = 0;
-    } else if (effectiveTemplateType === 'premium' || effectiveTemplateType === 'ai') {
+    } else {
       if (templateData.credits !== undefined) {
         templateData.credits = (templateData.credits !== null && templateData.credits > 0)
           ? templateData.credits

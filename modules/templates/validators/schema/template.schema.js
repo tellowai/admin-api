@@ -97,7 +97,7 @@ const createTemplateSchema = Joi.object().keys({
   language_code: Joi.string().max(10).allow(null).optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').required(),
   template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
-  template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
+  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation),
   prompt: Joi.string().allow('').when('template_output_type', {
@@ -192,7 +192,7 @@ const updateTemplateSchema = Joi.object().keys({
   language_code: Joi.string().max(10).allow(null).optional(),
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
   template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
-  template_type: Joi.string().valid('free', 'premium', 'ai').optional(),
+  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation).optional(),
   prompt: Joi.string().allow('').optional(),
