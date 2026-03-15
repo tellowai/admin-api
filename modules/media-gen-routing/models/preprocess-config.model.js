@@ -2,28 +2,28 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
-exports.listByModel = async function (amrId) {
+exports.listByModel = async function (platformModelId) {
   const query = `
     SELECT pc.*, m.name as model_name
     FROM ai_model_preprocess_configs pc
-    LEFT JOIN ai_model_registry m ON pc.amr_id = m.amr_id
-    WHERE pc.amr_id = ?
+    LEFT JOIN ai_model_registry m ON pc.platform_model_id = m.platform_model_id AND m.status = 'active'
+    WHERE pc.platform_model_id = ?
     ORDER BY pc.priority DESC, pc.config_type ASC
   `;
-  return mysqlQueryRunner.runQueryInSlave(query, [amrId]);
+  return mysqlQueryRunner.runQueryInSlave(query, [platformModelId]);
 };
 
 exports.listAll = async function (filters = {}) {
   let query = `
     SELECT pc.*, m.name as model_name
     FROM ai_model_preprocess_configs pc
-    LEFT JOIN ai_model_registry m ON pc.amr_id = m.amr_id
+    LEFT JOIN ai_model_registry m ON pc.platform_model_id = m.platform_model_id AND m.status = 'active'
     WHERE 1=1
   `;
   const params = [];
-  if (filters.amr_id) {
-    query += ' AND pc.amr_id = ?';
-    params.push(filters.amr_id);
+  if (filters.platform_model_id) {
+    query += ' AND pc.platform_model_id = ?';
+    params.push(filters.platform_model_id);
   }
   if (filters.config_type) {
     query += ' AND pc.config_type = ?';
@@ -33,7 +33,7 @@ exports.listAll = async function (filters = {}) {
     query += ' AND pc.is_active = ?';
     params.push(filters.is_active ? 1 : 0);
   }
-  query += ' ORDER BY pc.amr_id, pc.priority DESC, pc.config_type ASC';
+  query += ' ORDER BY pc.platform_model_id, pc.priority DESC, pc.config_type ASC';
   return mysqlQueryRunner.runQueryInSlave(query, params);
 };
 
@@ -41,7 +41,7 @@ exports.getById = async function (id) {
   const rows = await mysqlQueryRunner.runQueryInSlave(
     `SELECT pc.*, m.name as model_name
      FROM ai_model_preprocess_configs pc
-     LEFT JOIN ai_model_registry m ON pc.amr_id = m.amr_id
+     LEFT JOIN ai_model_registry m ON pc.platform_model_id = m.platform_model_id AND m.status = 'active'
      WHERE pc.id = ?`,
     [id]
   );
@@ -51,11 +51,11 @@ exports.getById = async function (id) {
 exports.create = async function (data) {
   const query = `
     INSERT INTO ai_model_preprocess_configs
-    (amr_id, config_type, title, content_text, content_json, is_active, priority)
+    (platform_model_id, config_type, title, content_text, content_json, is_active, priority)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
   const params = [
-    data.amr_id,
+    data.platform_model_id,
     data.config_type,
     data.title || null,
     data.content_text || null,

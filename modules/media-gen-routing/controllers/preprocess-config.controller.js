@@ -9,7 +9,7 @@ function getAdminId(req) {
 exports.list = async function (req, res) {
   try {
     const filters = {
-      amr_id: req.query.amr_id ? parseInt(req.query.amr_id, 10) : null,
+      platform_model_id: req.query.platform_model_id || null,
       config_type: req.query.config_type || null,
       is_active: req.query.is_active !== undefined ? req.query.is_active === 'true' : null,
     };
@@ -35,12 +35,12 @@ exports.getById = async function (req, res) {
 
 exports.create = async function (req, res) {
   try {
-    const { amr_id, config_type, title, content_text, content_json, is_active, priority } = req.body;
-    if (!amr_id || !config_type) {
-      return res.status(400).json({ message: 'amr_id and config_type are required' });
+    const { platform_model_id, config_type, title, content_text, content_json, is_active, priority } = req.body;
+    if (!platform_model_id || !config_type) {
+      return res.status(400).json({ message: 'platform_model_id and config_type are required' });
     }
     const id = await PreprocessConfigModel.create({
-      amr_id,
+      platform_model_id,
       config_type,
       title,
       content_text,
