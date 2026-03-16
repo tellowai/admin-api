@@ -19,23 +19,23 @@ class PaymentModeConfigService {
       const query = `SELECT config_key, config_value FROM payment_mode_config WHERE is_active = 1`;
       const rows = await runQueryInSlave(query, []);
 
-      const configMap = {};
+      const defaults = {
+        active_mode: 'both',
+        allow_subscriptions: true,
+        allow_one_time_purchases: true,
+        allow_alacarte: true,
+        subscription_providers: ['revenuecat'],
+        alacarte_providers: ['revenuecat'],
+        one_time_providers: ['revenuecat','razorpay', 'dodopayments', 'google_play', 'apple_iap']
+      };
+
+      const configMap = { ...defaults };
       for (const row of rows) {
         try {
           configMap[row.config_key] = typeof row.config_value === 'string' ? JSON.parse(row.config_value) : row.config_value;
         } catch (e) {
           logger.error(`Error parsing config_value for key ${row.config_key}:`, e);
         }
-      }
-
-      if (Object.keys(configMap).length === 0) {
-        configMap['active_mode'] = 'both';
-        configMap['allow_subscriptions'] = true;
-        configMap['allow_one_time_purchases'] = true;
-        configMap['allow_alacarte'] = true;
-        configMap['subscription_providers'] = ['revenuecat'];
-        configMap['alacarte_providers'] = ['revenuecat'];
-        configMap['one_time_providers'] = ['razorpay', 'dodopayments', 'google_play', 'apple_iap'];
       }
 
       this.cache = configMap;
