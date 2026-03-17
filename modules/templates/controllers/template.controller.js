@@ -3401,6 +3401,11 @@ exports.updateTemplate = async function (req, res) {
     // Update Redis cache with fresh template data
     await TemplateRedisService.updateTemplateGenerationMeta(templateId);
 
+    // Sync free max generations Redis when admin changes it
+    if (templateData.max_free_generations !== undefined) {
+      await TemplateRedisService.syncFreeMaxGenerationsRedis(templateId, templateData.max_free_generations);
+    }
+
     // Manual template tags are already stored above
 
     // Publish activity log command

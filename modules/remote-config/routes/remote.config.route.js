@@ -9,9 +9,14 @@ module.exports = function (app) {
   app.route(
     versionConfig.routePrefix +
     "/remote-config/system"
-  ).get(
-    AuthMiddleware.isAuthorizedJWT,
-    RemoteConfigCtrl.getAllRemoteConfigKeysAndValues
-  );
+  )
+    .get(
+      AuthMiddleware.isAuthorizedJWT,
+      RemoteConfigCtrl.getAllRemoteConfigKeysAndValues
+    )
+    .patch(
+      AuthMiddleware.isAuthorizedJWT,
+      RemoteConfigCtrl.updateRemoteConfigValueByKey
+    );
 
 };
