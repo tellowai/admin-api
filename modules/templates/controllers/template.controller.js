@@ -2983,21 +2983,10 @@ exports.updateTemplate = async function (req, res) {
     // Set the resolved type
     templateData.template_clips_assets_type = resolvedClipsAssetsType;
 
-    // If template is non-ai, always overwrite clips to empty and cleanup any existing AI clips
+    // If template is non-ai, set clips to empty for payload (don't delete template_ai_clips - keep for Workflow tab)
     if (isNonAi) {
       templateData.clips = [];
       templateData.faces_needed = [];
-      // Calculate credits for non-AI templates based on output type and clips (Disabled for now)
-      /*
-      templateData.credits = calculateNonAiTemplateCredits(templateData.template_output_type || existingTemplate.template_output_type, templateData.clips);
-      */
-
-      // Ensure any previously saved AI clips are deleted
-      try {
-        await TemplateModel.deleteTemplateAiClips(templateId);
-      } catch (cleanupError) {
-        logger.warn('Failed to cleanup AI clips for non-ai template update', { templateId, error: cleanupError.message });
-      }
 
       // When no bodymovin, set upload fields to zero/empty; when bodymovin present they are set from JSON in common block below
       const key = templateData.bodymovin_json_key || existingTemplate.bodymovin_json_key;
