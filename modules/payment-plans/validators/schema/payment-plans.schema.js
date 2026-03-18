@@ -3,8 +3,9 @@
 const Joi = require('@hapi/joi');
 
 const gatewaySchema = Joi.object().keys({
-  payment_gateway: Joi.string().required(),
+  payment_gateway: Joi.string().valid('razorpay', 'stripe', 'dodopayments', 'revenuecat', 'apple_iap', 'google_play').required(),
   pg_plan_id: Joi.string().required(),
+  platform: Joi.string().valid('android', 'ios', 'web', 'all').default('all').optional(),
   is_active: Joi.number().integer().valid(0, 1).optional()
 });
 
@@ -31,7 +32,7 @@ const uiConfigSchema = Joi.object().keys({
 const createPaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().required(),
   tier: Joi.string().valid('premium', 'ai', 'unified').required(),
-  plan_type: Joi.string().valid('single', 'bundle', 'credits').required(),
+  plan_type: Joi.string().valid('single', 'bundle', 'credits', 'addon').required(),
   plan_heading: Joi.string().allow('', null).optional(),
   plan_subheading: Joi.string().allow('', null).optional(),
   plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),
@@ -52,7 +53,7 @@ const createPaymentPlanSchema = Joi.object().keys({
 const updatePaymentPlanSchema = Joi.object().keys({
   plan_name: Joi.string().optional(),
   tier: Joi.string().valid('premium', 'ai', 'unified').optional(),
-  plan_type: Joi.string().valid('single', 'bundle', 'credits').optional(),
+  plan_type: Joi.string().valid('single', 'bundle', 'credits', 'addon').optional(),
   plan_heading: Joi.string().allow('', null).optional(),
   plan_subheading: Joi.string().allow('', null).optional(),
   plan_benefits: Joi.array().items(Joi.alternatives().try(Joi.string(), benefitSchema)).optional(),

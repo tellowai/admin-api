@@ -66,3 +66,28 @@ exports.removeMultipleTemplateGenerationMeta = async function(templateIds) {
   logger.info('Multiple template generation meta cache removed successfully', { templateIds });
 };
 
+// TTL for free max generations cache (4 hours, must match api FreeGenerationLimitService)
+const FREE_MAX_TTL_SECONDS = 14400;
+
+/**
+ * Sync max_free_generations to Redis when admin updates it
+ * Key format: {template_id}:free:max (same as api FreeGenerationLimitService)
+ * @param {string} templateId
+ * @param {number|null} value - null = use global default, delete Redis key
+ */
+exports.syncFreeMaxGenerationsRedis = async function(templateId, value) {
+  const redisKey = `${templateId}:free:max`;
+  try {
+    if (value == null) {
+      await RedisService.deleteData(redisKey);
+      logger.info('[FreeLimit] Redis key deleted on admin update', { templateId, redisKey });
+    } else {
+      await RedisService.setData(redisKey, value, FREE_MAX_TTL_SECONDS);
+      logger.info('[FreeLimit] Redis key updated on admin update', { templateId, value, redisKey });
+    }
+  } catch (err) {
+    logger.error('[FreeLimit] Failed to sync Redis on admin update', { templateId, error: err.message });
+    throw err;
+  }
+};
+

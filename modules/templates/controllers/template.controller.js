@@ -32,6 +32,19 @@ const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-reg
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
 
 /**
+ * Compute default alacarte_price (INR) from credits when not explicitly provided.
+ * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
+ * @param {number} credits
+ * @returns {number|null} Computed price in INR, or null if credits invalid
+ */
+function computeAlacartePriceFromCredits(credits) {
+  if (!credits || credits < 1) return null;
+  const rawInr = Math.floor((credits / 50) * 83.33);
+  const tier = rawInr <= 49 ? 49 : (Math.floor(rawInr / 50) * 50) + 49;
+  return Math.min(tier, 499);
+}
+
+/**
  * Read Bodymovin (Lottie) JSON from storage or from URL.
  * Uses StorageFactory when key is a storage key; uses axios when key is a full http(s) URL.
  * @param {Object} storage - Storage provider from StorageFactory.getProvider()
@@ -1590,19 +1603,20 @@ exports.createTemplate = async function (req, res) {
       }
     }
 
-    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1
+    // Credits by template_type: free = 0; paid types = payload if > 0 else 1
     const templateType = templateData.template_type || 'premium';
     if (templateType === 'free') {
       templateData.credits = 0;
-    } else if (templateType === 'premium' || templateType === 'ai') {
+    } else {
       const payloadCredits = templateData.credits;
       templateData.credits = (payloadCredits !== undefined && payloadCredits !== null && payloadCredits > 0)
         ? payloadCredits
         : 1;
-    } else {
-      if (templateData.credits === undefined || templateData.credits === null || templateData.credits < 1) {
-        templateData.credits = 1;
-      }
+    }
+
+    // Auto-compute alacarte_price from credits when not provided
+    if ((templateData.alacarte_price === undefined || templateData.alacarte_price === null) && templateData.credits > 0) {
+      templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
     }
 
     // Default cf_r2_bucket to 'public' if key is provided but bucket is not
@@ -2925,6 +2939,11 @@ exports.updateTemplate = async function (req, res) {
       }
     }
 
+    // Auto-compute alacarte_price from credits when credits is updated but alacarte_price is not provided
+    if (templateData.credits !== undefined && templateData.credits > 0 && (templateData.alacarte_price === undefined || templateData.alacarte_price === null)) {
+      templateData.alacarte_price = computeAlacartePriceFromCredits(templateData.credits);
+    }
+
     // Auto-switch to new scene architecture if template has no scenes and is being updated
     const existingScenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
     if ((!existingScenes || existingScenes.length === 0) && (!templateData.scenes || templateData.scenes.length === 0)) {
@@ -3137,11 +3156,11 @@ exports.updateTemplate = async function (req, res) {
     }
     // If clips is undefined, don't modify faces_needed (partial update)
 
-    // Credits by template_type: free = 0; premium/ai = payload if > 0 else 1 (else keep existing)
+    // Credits by template_type: free = 0; paid types = payload if > 0 else 1 (else keep existing)
     const effectiveTemplateType = templateData.template_type ?? existingTemplate.template_type ?? 'premium';
     if (effectiveTemplateType === 'free') {
       templateData.credits = 0;
-    } else if (effectiveTemplateType === 'premium' || effectiveTemplateType === 'ai') {
+    } else {
       if (templateData.credits !== undefined) {
         templateData.credits = (templateData.credits !== null && templateData.credits > 0)
           ? templateData.credits
@@ -3373,6 +3392,11 @@ exports.updateTemplate = async function (req, res) {
 
     // Update Redis cache with fresh template data
     await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+
+    // Sync free max generations Redis when admin changes it
+    if (templateData.max_free_generations !== undefined) {
+      await TemplateRedisService.syncFreeMaxGenerationsRedis(templateId, templateData.max_free_generations);
+    }
 
     // Manual template tags are already stored above
 

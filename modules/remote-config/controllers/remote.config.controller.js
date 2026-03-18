@@ -76,3 +76,36 @@ exports.getAllRemoteConfigKeysAndValues = async function (req, res, next) {
     return RemoteConfigErrorHandler.handleRemoteConfigValuesFetchErrors(err, res);
   }
 };
+
+/**
+ * Update a single remote config key by name (e.g. for Constants / max_free_generations_per_template).
+ * Body: { rc_key_name, value }. Value is stored as string for both rc_value and rc_default_value.
+ */
+exports.updateRemoteConfigValueByKey = async function (req, res, next) {
+  try {
+    const { rc_key_name, value } = req.body || {};
+    if (!rc_key_name) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'rc_key_name is required'
+      });
+    }
+    const strValue = value != null ? String(value) : '';
+    const payload = {
+      rc_key_name: rc_key_name.toLowerCase(),
+      data_type: 'number',
+      rc_default_value: strValue,
+      rc_value: strValue
+    };
+    await RemoteConfigDbo.createOrUpdateRemoteConfig(payload);
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Updated',
+      data: { rc_key_name: payload.rc_key_name, value: strValue }
+    });
+  } catch (err) {
+    err.custom = {
+      httpStatusCode: HTTP_STATUS_CODES.BAD_REQUEST,
+      message: req.t('remote-config:REMOTE_CONFIG_CREATION_FAILED')
+    };
+    return RemoteConfigErrorHandler.handleRemoteConfigValuesFetchErrors(err, res);
+  }
+};
