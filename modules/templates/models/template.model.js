@@ -972,7 +972,7 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
   );
 
   const clips = await connection.query(
-    'SELECT tac_id, template_id, clip_index, wf_id, asset_type FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL ORDER BY clip_index',
+    'SELECT tac_id, template_id, clip_index, wf_id, asset_type, audio_behavior FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL ORDER BY clip_index',
     [sourceTemplateId]
   );
 
@@ -1014,13 +1014,14 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
         clip.clip_index,
         clip.wf_id != null ? wfIdMap.get(clip.wf_id) : null,
         clip.asset_type || 'video',
+        clip.audio_behavior || 'muted',
         now,
         now
       ];
     });
 
     await connection.query(
-      `INSERT INTO template_ai_clips (tac_id, template_id, clip_index, wf_id, asset_type, created_at, updated_at) VALUES ?`,
+      `INSERT INTO template_ai_clips (tac_id, template_id, clip_index, wf_id, asset_type, audio_behavior, created_at, updated_at) VALUES ?`,
       [clipValues]
     );
   }
@@ -1157,7 +1158,8 @@ exports.createTemplateAiClipsInTransaction = async function (connection, templat
       tac_id: tacId,
       template_id: templateId,
       clip_index: clip.clip_index,
-      asset_type: clip.asset_type || 'video', // Default to video if not specified
+      asset_type: clip.asset_type || 'video',
+      audio_behavior: clip.audio_behavior || 'muted',
       created_at: moment().format('YYYY-MM-DD HH:mm:ss'),
       updated_at: moment().format('YYYY-MM-DD HH:mm:ss')
     };
@@ -1321,6 +1323,7 @@ exports.getTemplateAiClips = async function (templateId) {
       clip_index,
       wf_id,
       asset_type,
+      audio_behavior,
       created_at,
       updated_at
     FROM template_ai_clips
@@ -1563,6 +1566,7 @@ exports.getTemplateAiClipsForMultipleTemplates = async function (templateIds) {
       clip_index,
       wf_id,
       asset_type,
+      audio_behavior,
       created_at,
       updated_at
     FROM template_ai_clips
@@ -1911,5 +1915,32 @@ exports.updateTemplateClipAssetTypes = async function (templateId, clips) {
       WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
     `;
     await mysqlQueryRunner.runQueryInMaster(query, [clip.asset_type, templateId, clip.tac_id]);
+  }
+};
+
+/**
+ * Update clip metadata (asset_type, audio_behavior) for existing template AI clips.
+ * @param {string} templateId
+ * @param {Array<{tac_id: string, asset_type: string, audio_behavior?: string}>} clips
+ */
+exports.updateTemplateClipMetadata = async function (templateId, clips) {
+  if (!clips || clips.length === 0) return;
+
+  for (const clip of clips) {
+    const sets = ['asset_type = ?'];
+    const params = [clip.asset_type];
+
+    if (clip.audio_behavior === 'muted' || clip.audio_behavior === 'unmuted') {
+      sets.push('audio_behavior = ?');
+      params.push(clip.audio_behavior);
+    }
+
+    params.push(templateId, clip.tac_id);
+    const query = `
+      UPDATE template_ai_clips
+      SET ${sets.join(', ')}
+      WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
+    `;
+    await mysqlQueryRunner.runQueryInMaster(query, params);
   }
 };

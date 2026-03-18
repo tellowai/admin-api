@@ -36,6 +36,7 @@ const workflowStepSchema = Joi.object({
 const clipSchema = Joi.object({
   clip_index: Joi.number().integer().min(1).required(),
   asset_type: Joi.string().valid('image', 'video').default('video'),
+  audio_behavior: Joi.string().valid('muted', 'unmuted').default('muted'),
   workflow: Joi.array().items(workflowStepSchema).required().min(1)
 });
 
@@ -84,10 +85,11 @@ const templateTagSchema = Joi.object({
   ttd_id: Joi.number().integer().positive().required()
 });
 
-// PATCH clips: only tac_id + asset_type per item; no extra keys
+// PATCH clips: tac_id + asset_type + optional audio_behavior per item; no extra keys
 const updateTemplateClipsItemSchema = Joi.object({
   tac_id: Joi.string().required(),
-  asset_type: Joi.string().valid('image', 'video').required()
+  asset_type: Joi.string().valid('image', 'video').required(),
+  audio_behavior: Joi.string().valid('muted', 'unmuted').optional()
 }).unknown(false);
 
 const createTemplateSchema = Joi.object().keys({

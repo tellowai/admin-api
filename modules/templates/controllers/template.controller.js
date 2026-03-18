@@ -2887,10 +2887,14 @@ function ensureCreditsSatisfyMinimum(clientProvidedCredits, minimumCredits, tran
  * @apiBody {Object} [additional_data] Additional template data
  * @apiBody {Array} [clips] Template clips array with workflows
  */
-function isAssetTypeOnlyClips(clips) {
-  return Array.isArray(clips) && clips.length > 0 && clips.every(
-    c => typeof c.tac_id === 'string' && (c.asset_type === 'image' || c.asset_type === 'video') && Object.keys(c).length === 2
-  );
+function isClipMetadataOnlyClips(clips) {
+  if (!Array.isArray(clips) || clips.length === 0) return false;
+  const ALLOWED_KEYS = new Set(['tac_id', 'asset_type', 'audio_behavior']);
+  return clips.every(c => {
+    if (typeof c.tac_id !== 'string') return false;
+    if (c.asset_type !== 'image' && c.asset_type !== 'video') return false;
+    return Object.keys(c).every(k => ALLOWED_KEYS.has(k));
+  });
 }
 
 exports.updateTemplate = async function (req, res) {
@@ -2898,9 +2902,8 @@ exports.updateTemplate = async function (req, res) {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
 
-    // If clips is asset-type-only [{ tac_id, asset_type }, ...], update DB and remove from payload
-    if (isAssetTypeOnlyClips(templateData.clips)) {
-      await TemplateModel.updateTemplateClipAssetTypes(templateId, templateData.clips);
+    if (isClipMetadataOnlyClips(templateData.clips)) {
+      await TemplateModel.updateTemplateClipMetadata(templateId, templateData.clips);
       delete templateData.clips;
     }
 
