@@ -293,7 +293,7 @@ exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
 
-exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType) {
+exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType, refundCreditsAmount) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) throw new Error('Ticket not found');
 
@@ -311,14 +311,19 @@ exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMon
       throw new Error('Credits have already been refunded for this ticket.');
     }
     
-    // We only refund if there is a generation_id and credits were actually deducted
     if (!ticket.generation_id) {
       throw new Error('Cannot refund credits: No generation attached to this ticket.');
     }
 
     const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
-    if (!deductedAmount || deductedAmount <= 0) {
-      throw new Error('Cannot refund credits: No credits were deducted for this generation.');
+    const amountToRefund = (refundCreditsAmount != null && Number(refundCreditsAmount) > 0)
+      ? Number(refundCreditsAmount)
+      : deductedAmount;
+
+    if (!amountToRefund || amountToRefund <= 0) {
+      throw new Error(refundCreditsAmount != null
+        ? 'Credits to refund must be a positive number.'
+        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.');
     }
 
     const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
@@ -326,11 +331,10 @@ exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMon
       throw new Error('Credits have already been refunded for this generation.');
     }
 
-    // Process the refund securely via CreditsModel
     const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
     await CreditsModel.refundCreditsTransaction(
       ticket.user_id,
-      deductedAmount,
+      amountToRefund,
       'adjustment',
       ticket.generation_id,
       description

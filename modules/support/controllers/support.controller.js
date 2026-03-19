@@ -103,11 +103,11 @@ exports.resolveTicket = async function(req, res) {
   try {
     const ticketId = req.params.ticketId;
     const adminId = req.user.userId;
-    const { resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type } = req.body;
+    const { resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type, refund_credits_amount } = req.body;
     if (!resolution_notes) {
       return res.status(400).send({ message: 'Resolution notes required' });
     }
-    await SupportService.resolveTicket(ticketId, adminId, resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type);
+    await SupportService.resolveTicket(ticketId, adminId, resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type, refund_credits_amount);
 
     const eventsToLog = [{
       value: { 
@@ -126,7 +126,7 @@ exports.resolveTicket = async function(req, res) {
           entity_type: 'SUPPORT_TICKETS',
           action_name: 'TICKET_REFUND_CREDITS',
           entity_id: ticketId,
-          additional_data: JSON.stringify({ refunded_credits_type })
+          additional_data: JSON.stringify({ refunded_credits_type, refund_credits_amount })
         }
       });
     }

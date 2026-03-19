@@ -79,4 +79,12 @@ module.exports = function (app) {
     AuthMiddleware.isAdminUser,
     AdminUserCtrl.getUserCreditTransactions
   );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/users/:userId/orders"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getUserOrders
+  );
 };

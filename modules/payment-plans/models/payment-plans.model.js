@@ -59,6 +59,17 @@ exports.getPlanById = async function (planId) {
   return rows[0];
 }
 
+/**
+ * Batch fetch payment plans by ids. No joins; for stitching in services.
+ * @param {number[]} planIds
+ * @returns {Promise<Array>} rows with pp_id, plan_name, plan_heading, etc.
+ */
+exports.getPlansByIds = async function (planIds) {
+  if (!planIds || planIds.length === 0) return [];
+  const query = `SELECT pp_id, plan_name, plan_heading, plan_type, tier FROM payment_plans WHERE pp_id IN (?)`;
+  return await mysqlQueryRunner.runQueryInSlave(query, [planIds]);
+}
+
 exports.getPlanGateways = async function (planId) {
   const query = `SELECT * FROM payment_gateway_plans WHERE payment_plan_id = ?`;
   return await mysqlQueryRunner.runQueryInSlave(query, [planId]);

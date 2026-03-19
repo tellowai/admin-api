@@ -13,6 +13,8 @@ const { publishNewAdminActivityLog } = require('../../core/controllers/activityl
 const { ROLES } = require('../../auth/constants/permissions.constants');
 const RbacModel = require('../../auth/models/rbac.model');
 const CreditsModel = require('../../credits/models/credits.model');
+const OrdersModel = require('../../orders/models/orders.model');
+const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 
 
 
@@ -437,6 +439,38 @@ exports.getUserCreditTransactions = async function (req, res) {
     console.error('getUserCreditTransactions error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
       message: req.t('user:USER_CREDIT_TRANSACTIONS_FAILED') || 'Failed to retrieve user credit transactions'
+    });
+  }
+};
+
+exports.getUserOrders = async function (req, res) {
+  try {
+    const userId = req.params.userId;
+    const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
+    const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
+    const offset = (page - 1) * limit;
+
+    const orders = await OrdersModel.getByUserId(userId, limit, offset);
+    const planIds = [...new Set(orders.map(o => o.payment_plan_id).filter(Boolean))];
+    const plans = planIds.length ? await PaymentPlansModel.getPlansByIds(planIds) : [];
+    const planMap = {};
+    for (const p of plans) planMap[p.pp_id] = p;
+
+    const data = orders.map(order => {
+      const plan = order.payment_plan_id ? planMap[order.payment_plan_id] : null;
+      return {
+        ...order,
+        plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null
+      };
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: { orders: data }
+    });
+  } catch (err) {
+    console.error('getUserOrders error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: req.t('user:USER_ORDERS_FAILED') || 'Failed to retrieve user orders'
     });
   }
 };
