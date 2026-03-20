@@ -107,6 +107,33 @@ exports.queryAttributionEventsForObjectIds = async function (objectIds, startDat
 };
 
 /**
+ * Attribution events (add to cart, purchase) broken down by plan for link stats.
+ * Uses plan_id, plan_name from properties Map; events without plan show as empty string.
+ */
+exports.queryAttributionEventsByPlanForObjectIds = async function (objectIds, startDate, endDate) {
+  if (!objectIds || !objectIds.length) return [];
+  const ids = objectIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT
+      event_name,
+      ifNull(properties['plan_id'], '') AS plan_id,
+      ifNull(properties['plan_name'], '') AS plan_name,
+      count() AS cnt,
+      sum(revenue) AS revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND event_name IN ('attributed_add_to_cart', 'attributed_purchase')
+      AND toDate(timestamp) >= toDate('${esc(startDate)}')
+      AND toDate(timestamp) <= toDate('${esc(endDate)}')
+      AND object_id IN (${ids})
+    GROUP BY event_name, plan_id, plan_name
+    ORDER BY event_name ASC, cnt DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Daily installs for chart (object_id = tracking link id).
  */
 exports.queryInstallsByDayForObjectIds = async function (objectIds, startDate, endDate) {

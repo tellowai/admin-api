@@ -144,20 +144,23 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate) {
       clicks_total: 0,
       attribution_events: [],
       installs_by_day: [],
-      purchases_by_day: []
+      purchases_by_day: [],
+      events_by_plan: []
     };
   }
-  const [clicks, events, installsByDay, purchasesByDay] = await Promise.all([
+  const [clicks, events, installsByDay, purchasesByDay, eventsByPlan] = await Promise.all([
     AttributionChModel.queryClickCountForLinkIds(linkIds, startTs, endTs),
     AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate),
     AttributionChModel.queryInstallsByDayForObjectIds(linkIds, startDate, endDate),
-    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate)
+    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate),
+    AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, startDate, endDate)
   ]);
   return {
     clicks_total: clicks.total,
     attribution_events: events,
     installs_by_day: installsByDay,
-    purchases_by_day: purchasesByDay
+    purchases_by_day: purchasesByDay,
+    events_by_plan: eventsByPlan
   };
 }
 
