@@ -98,3 +98,20 @@ exports.getInfluencerStats = async function (req, res) {
     return res.status(code).json({ message: err.message });
   }
 };
+
+exports.getEventsTimeline = async function (req, res) {
+  try {
+    let objectIds = req.query.object_ids || req.query.objectIds;
+    if (typeof objectIds === 'string') {
+      objectIds = objectIds.split(',').map((id) => id.trim()).filter(Boolean);
+    }
+    if (!Array.isArray(objectIds) || !objectIds.length) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'object_ids (comma-separated) is required' });
+    }
+    const out = await AttributionAdminService.getAttributionEventsTimeline(objectIds, req.query);
+    return res.status(HTTP_STATUS_CODES.OK).json(out);
+  } catch (err) {
+    const code = err.statusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: err.message });
+  }
+};

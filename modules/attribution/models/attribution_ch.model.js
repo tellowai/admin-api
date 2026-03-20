@@ -45,6 +45,24 @@ exports.queryClicksByShortCode = async function (startTs, endTs) {
 };
 
 /**
+ * Clicks per channel in time range (from link_clicks.channel). Used for Performance by channel.
+ */
+exports.queryClicksByChannel = async function (startTs, endTs) {
+  const q = `
+    SELECT
+      ifNull(channel, '') AS channel,
+      count() AS clicks
+    FROM link_clicks
+    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    GROUP BY channel
+    ORDER BY clicks DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Daily install events for chart (from raw for flexibility if MV lags).
  */
 exports.queryInstallsByDay = async function (startDate, endDate) {
@@ -179,4 +197,146 @@ exports.queryPurchasesByDayForObjectIds = async function (objectIds, startDate, 
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   return result.data || [];
+};
+
+/**
+ * Individual click events for timeline (from link_clicks).
+ */
+exports.queryClickEventsForLinkIds = async function (linkIds, startTs, endTs, limit = 50, offset = 0) {
+  if (!linkIds || !linkIds.length) return [];
+  const ids = linkIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const limitNum = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const offsetNum = Math.max(0, Number(offset) || 0);
+  const q = `
+    SELECT
+      timestamp,
+      click_id,
+      link_id,
+      short_code,
+      channel,
+      source_name,
+      campaign,
+      ip_address,
+      user_agent,
+      country
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    ORDER BY timestamp DESC
+    LIMIT ${limitNum} OFFSET ${offsetNum}
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Count total clicks for pagination.
+ */
+exports.queryClickEventsCountForLinkIds = async function (linkIds, startTs, endTs) {
+  if (!linkIds || !linkIds.length) return 0;
+  const ids = linkIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT count() AS total
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  const row = result.data && result.data[0];
+  return row ? Number(row.total) : 0;
+};
+
+/**
+ * Simple query: attribution events only (no clicks). Used by service layer for stitching.
+ */
+exports.queryAttributionEventsForTimeline = async function (objectIds, startDate, endDate) {
+  if (!objectIds || !objectIds.length) return [];
+  const ids = objectIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT
+      timestamp,
+      event_name,
+      revenue,
+      ifNull(properties['plan_id'], '') AS plan_id,
+      ifNull(properties['plan_name'], '') AS plan_name,
+      ifNull(properties['channel'], '') AS channel,
+      ifNull(properties['source_name'], '') AS source_name,
+      device_id,
+      user_id
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND toDate(timestamp) >= toDate('${esc(startDate)}')
+      AND toDate(timestamp) <= toDate('${esc(endDate)}')
+      AND object_id IN (${ids})
+    ORDER BY timestamp DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Simple query: count attribution events only.
+ */
+exports.queryAttributionEventsCountForTimeline = async function (objectIds, startDate, endDate) {
+  if (!objectIds || !objectIds.length) return 0;
+  const ids = objectIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT count() AS total
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND toDate(timestamp) >= toDate('${esc(startDate)}')
+      AND toDate(timestamp) <= toDate('${esc(endDate)}')
+      AND object_id IN (${ids})
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  const row = result.data && result.data[0];
+  return row ? Number(row.total) : 0;
+};
+
+/**
+ * Simple query: click events only. Used by service layer for stitching.
+ */
+exports.queryClickEventsForTimeline = async function (linkIds, startTs, endTs) {
+  if (!linkIds || !linkIds.length) return [];
+  const ids = linkIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT
+      timestamp,
+      click_id,
+      link_id,
+      short_code,
+      channel,
+      source_name,
+      campaign,
+      ip_address,
+      user_agent,
+      country
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    ORDER BY timestamp DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Simple query: count click events only.
+ */
+exports.queryClickEventsCountForTimeline = async function (linkIds, startTs, endTs) {
+  if (!linkIds || !linkIds.length) return 0;
+  const ids = linkIds.map((id) => `'${esc(String(id))}'`).join(',');
+  const q = `
+    SELECT count() AS total
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  const row = result.data && result.data[0];
+  return row ? Number(row.total) : 0;
 };

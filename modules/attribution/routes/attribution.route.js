@@ -34,4 +34,8 @@ module.exports = function (app) {
   app
     .route(versionConfig.routePrefix + '/attribution/links/:id/stats')
     .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getLinkStats);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/events/timeline')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getEventsTimeline);
 };

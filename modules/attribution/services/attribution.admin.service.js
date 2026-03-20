@@ -164,6 +164,67 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate) {
   };
 }
 
+/**
+ * Get paginated timeline of individual attribution events for link(s) or profile.
+ * Stitches clicks and attribution events in service layer (no joins/subqueries in model).
+ */
+exports.getAttributionEventsTimeline = async function (objectIds, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!objectIds || !Array.isArray(objectIds) || !objectIds.length) {
+    return { events: [], total: 0, limit: 50, offset: 0 };
+  }
+  const limit = Math.max(1, Math.min(Number(query.limit) || 50, 200));
+  const offset = Math.max(0, Number(query.offset) || 0);
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  
+  // Simple queries (no joins/subqueries)
+  const [attributionEvents, clicks, attributionCount, clicksCount] = await Promise.all([
+    AttributionChModel.queryAttributionEventsForTimeline(objectIds, startDate, endDate),
+    AttributionChModel.queryClickEventsForTimeline(objectIds, startTs, endTs),
+    AttributionChModel.queryAttributionEventsCountForTimeline(objectIds, startDate, endDate),
+    AttributionChModel.queryClickEventsCountForTimeline(objectIds, startTs, endTs)
+  ]);
+  
+  // Normalize clicks to same shape as attribution events
+  const normalizedClicks = (clicks || []).map((click) => ({
+    timestamp: click.timestamp,
+    event_name: 'attributed_click',
+    revenue: 0,
+    plan_id: '',
+    plan_name: '',
+    channel: click.channel || '',
+    source_name: click.source_name || '',
+    device_id: '',
+    user_id: ''
+  }));
+  
+  // Merge and sort by timestamp (descending, recent first)
+  const allEvents = [...(attributionEvents || []), ...normalizedClicks].sort((a, b) => {
+    const tsA = new Date(a.timestamp).getTime();
+    const tsB = new Date(b.timestamp).getTime();
+    return tsB - tsA;
+  });
+  
+  const total = (attributionCount || 0) + (clicksCount || 0);
+  
+  // Paginate
+  const paginated = allEvents.slice(offset, offset + limit);
+  
+  return {
+    events: paginated,
+    total,
+    limit,
+    offset
+  };
+};
+
 exports.listTrackingLinks = async function (pagination) {
   const limit = Math.min(Number(pagination.limit) || 50, 200);
   const offset = Number(pagination.offset) || 0;
@@ -336,14 +397,16 @@ exports.getOverview = async function (query) {
   }
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
-  const [byChannel, clicksByCode, installsByDay] = await Promise.all([
+  const [byChannel, clicksByCode, clicksByChannel, installsByDay] = await Promise.all([
     AttributionChModel.queryAttributionByChannel(startDate, endDate),
     AttributionChModel.queryClicksByShortCode(startTs, endTs),
+    AttributionChModel.queryClicksByChannel(startTs, endTs),
     AttributionChModel.queryInstallsByDay(startDate, endDate)
   ]);
   return {
     attribution_by_channel: byChannel,
     clicks_by_short_code: clicksByCode,
+    clicks_by_channel: clicksByChannel,
     installs_by_day: installsByDay
   };
 };
