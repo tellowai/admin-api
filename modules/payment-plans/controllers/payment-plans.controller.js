@@ -22,6 +22,11 @@ exports.listPlans = async function (req, res) {
     const options = {};
     if (isActiveParam === '1') options.isActive = true;
     else if (isActiveParam === '0') options.isActive = false;
+    const validPlanTypes = ['single', 'bundle', 'credits', 'addon'];
+    const planTypeParam = req.query.plan_type;
+    if (planTypeParam && validPlanTypes.includes(planTypeParam)) {
+      options.planType = planTypeParam;
+    }
     const plans = await PaymentPlansModel.listPlans(paginationParams, options);
 
     if (plans.length > 0) {
