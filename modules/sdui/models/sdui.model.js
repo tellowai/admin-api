@@ -49,6 +49,7 @@ exports.createScreen = async function(data) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const bodyJson = typeof data.body_json === 'string' ? data.body_json : JSON.stringify(data.body_json);
+  const ver = Number.isFinite(Number(data.version)) ? parseInt(data.version, 10) : 1;
   await mysqlQueryRunner.runQueryInMaster(query, [
     id,
     data.screen_key,
@@ -56,7 +57,7 @@ exports.createScreen = async function(data) {
     data.description || null,
     data.status || 'draft',
     bodyJson,
-    data.version || '1.0.0',
+    ver,
     data.created_by || null,
     data.updated_by || null
   ]);
@@ -93,8 +94,8 @@ exports.publishScreen = async function(id, publishedBy) {
     [versionId, id, versionNumber, bodyJson, publishedBy || null]
   );
   await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_screens SET status = 'published', published_at = NOW(), updated_at = NOW() WHERE id = ?`,
-    [id]
+    `UPDATE sdui_screens SET status = 'published', published_at = NOW(), version = ?, updated_at = NOW() WHERE id = ?`,
+    [versionNumber, id]
   );
   return versionId;
 };
@@ -141,13 +142,14 @@ exports.duplicateScreen = async function(id, newScreenKey, createdBy) {
   if (!screen) return null;
   const existing = await exports.getScreenByKey(newScreenKey);
   if (existing) return null;
+  const v = parseInt(screen.version, 10);
   const newId = await exports.createScreen({
     screen_key: newScreenKey,
     name: `${screen.name} (Copy)`,
     description: screen.description,
     status: 'draft',
     body_json: screen.body_json,
-    version: screen.version,
+    version: Number.isFinite(v) ? v : 1,
     created_by: createdBy,
     updated_by: createdBy
   });
@@ -236,30 +238,110 @@ exports.getComponentByKey = async function(componentKey) {
   return result[0] || null;
 };
 
+exports.getNextComponentVersionNumber = async function(componentId) {
+  const result = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT COALESCE(MAX(version_number), 0) + 1 as next FROM sdui_component_versions WHERE component_id = ?`,
+    [componentId]
+  );
+  return result[0]?.next || 1;
+};
+
+exports.insertComponentVersionSnapshot = async function(componentId, versionNumber, nodeJson, savedBy) {
+  const vid = crypto.randomUUID();
+  const nj = typeof nodeJson === 'string' ? nodeJson : JSON.stringify(nodeJson);
+  await mysqlQueryRunner.runQueryInMaster(
+    `INSERT INTO sdui_component_versions (id, component_id, version_number, node_json, saved_at, saved_by)
+     VALUES (?, ?, ?, ?, NOW(), ?)`,
+    [vid, componentId, versionNumber, nj, savedBy || null]
+  );
+  return vid;
+};
+
 exports.createComponent = async function(data) {
   const id = crypto.randomUUID();
   const nodeJson = typeof data.node_json === 'string' ? data.node_json : JSON.stringify(data.node_json);
+  const startVer = 1;
   await mysqlQueryRunner.runQueryInMaster(
     `INSERT INTO sdui_components (id, component_key, name, description, version, node_json)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, data.component_key, data.name, data.description || null, data.version || '1.0.0', nodeJson]
+    [id, data.component_key, data.name, data.description || null, startVer, nodeJson]
   );
+  await exports.insertComponentVersionSnapshot(id, startVer, nodeJson, data.created_by || null);
   return id;
 };
 
+/**
+ * Saves component; when node_json changes, auto-increments integer version + appends history row.
+ */
 exports.updateComponent = async function(id, updateData) {
-  const allowedKeys = ['name', 'description', 'version', 'node_json'];
-  const filtered = {};
-  for (const k of allowedKeys) {
-    if (updateData[k] !== undefined) filtered[k] = updateData[k];
+  const comp = await exports.getComponentById(id);
+  if (!comp) return null;
+
+  const hasNode = updateData.node_json !== undefined;
+  let nodeJsonStr = null;
+  if (hasNode) {
+    nodeJsonStr = typeof updateData.node_json === 'string'
+      ? updateData.node_json
+      : JSON.stringify(updateData.node_json);
   }
-  if (filtered.node_json && typeof filtered.node_json !== 'string') filtered.node_json = JSON.stringify(filtered.node_json);
-  const keys = Object.keys(filtered);
-  if (keys.length === 0) return;
-  const setString = keys.map(k => `${k} = ?`).join(', ');
-  const params = keys.map(k => filtered[k]);
+
+  if (!hasNode) {
+    const sets = [];
+    const params = [];
+    if (updateData.name !== undefined) {
+      sets.push('name = ?');
+      params.push(updateData.name);
+    }
+    if (updateData.description !== undefined) {
+      sets.push('description = ?');
+      params.push(updateData.description);
+    }
+    if (sets.length === 0) return comp;
+    params.push(id);
+    await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_components SET ${sets.join(', ')} WHERE id = ?`, params);
+    return await exports.getComponentById(id);
+  }
+
+  const nextVer = await exports.getNextComponentVersionNumber(id);
+  const sets = ['node_json = ?', 'version = ?'];
+  const params = [nodeJsonStr, nextVer];
+  if (updateData.name !== undefined) {
+    sets.push('name = ?');
+    params.push(updateData.name);
+  }
+  if (updateData.description !== undefined) {
+    sets.push('description = ?');
+    params.push(updateData.description);
+  }
   params.push(id);
-  await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_components SET ${setString} WHERE id = ?`, params);
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_components SET ${sets.join(', ')} WHERE id = ?`,
+    params
+  );
+  await exports.insertComponentVersionSnapshot(id, nextVer, nodeJsonStr, updateData.updated_by || null);
+  return await exports.getComponentById(id);
+};
+
+exports.listComponentVersions = async function(componentId) {
+  const q = `SELECT id, component_id, version_number, saved_at, saved_by FROM sdui_component_versions WHERE component_id = ? ORDER BY version_number DESC`;
+  return await mysqlQueryRunner.runQueryInSlave(q, [componentId]);
+};
+
+exports.getComponentVersionById = async function(versionId) {
+  const q = `SELECT * FROM sdui_component_versions WHERE id = ?`;
+  const result = await mysqlQueryRunner.runQueryInSlave(q, [versionId]);
+  return result[0] || null;
+};
+
+exports.rollbackComponentToVersion = async function(componentId, versionId) {
+  const row = await exports.getComponentVersionById(versionId);
+  if (!row || row.component_id !== componentId) return false;
+  const nj = typeof row.node_json === 'string' ? row.node_json : JSON.stringify(row.node_json);
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_components SET node_json = ?, updated_at = NOW() WHERE id = ?`,
+    [nj, componentId]
+  );
+  return true;
 };
 
 exports.deleteComponent = async function(id) {

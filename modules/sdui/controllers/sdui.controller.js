@@ -79,8 +79,8 @@ exports.archiveScreen = async function(req, res) {
 
 exports.publishScreen = async function(req, res) {
   try {
-    await SduiService.publishScreen(req.params.id, req.user?.userId);
-    return res.status(200).send({ message: 'Screen published successfully' });
+    const screen = await SduiService.publishScreen(req.params.id, req.user?.userId);
+    return res.status(200).send({ data: screen, message: 'Screen published successfully' });
   } catch (err) {
     if (err.message === 'Screen not found') return res.status(404).send({ message: err.message });
     console.error('SDUI publishScreen Error:', err);
@@ -220,15 +220,14 @@ exports.getComponent = async function(req, res) {
 
 exports.createComponent = async function(req, res) {
   try {
-    const { component_key, name, description, version, node_json } = req.body;
+    const { component_key, name, description, node_json } = req.body;
     if (!component_key || !name || !node_json) return res.status(400).send({ message: 'component_key, name, and node_json are required' });
     const component = await SduiService.createComponent({
       component_key,
       name,
       description,
-      version,
       node_json,
-      created_by: req.user?.userId
+      created_by: req.user?.email || req.user?.userId
     });
     return res.status(201).send({ data: component });
   } catch (err) {
@@ -240,12 +239,40 @@ exports.createComponent = async function(req, res) {
 
 exports.updateComponent = async function(req, res) {
   try {
-    const { name, description, version, node_json } = req.body;
-    const component = await SduiService.updateComponent(req.params.id, { name, description, version, node_json });
+    const { name, description, node_json } = req.body;
+    const component = await SduiService.updateComponent(req.params.id, {
+      name,
+      description,
+      node_json,
+      updated_by: req.user?.email || req.user?.userId
+    });
     return res.status(200).send({ data: component });
   } catch (err) {
     if (err.message === 'Component not found') return res.status(404).send({ message: err.message });
     console.error('SDUI updateComponent Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.listComponentVersions = async function(req, res) {
+  try {
+    const versions = await SduiService.listComponentVersions(req.params.id);
+    return res.status(200).send({ data: versions });
+  } catch (err) {
+    if (err.message === 'Component not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI listComponentVersions Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.rollbackComponentToVersion = async function(req, res) {
+  try {
+    const component = await SduiService.rollbackComponentToVersion(req.params.id, req.params.versionId);
+    return res.status(200).send({ data: component, message: 'Restored successfully' });
+  } catch (err) {
+    if (err.message === 'Component not found') return res.status(404).send({ message: err.message });
+    if (err.message === 'Version not found or does not belong to this component') return res.status(404).send({ message: err.message });
+    console.error('SDUI rollbackComponentToVersion Error:', err);
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };

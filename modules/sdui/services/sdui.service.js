@@ -75,16 +75,11 @@ exports.archiveScreen = async function(id) {
 exports.publishScreen = async function(id, publishedBy) {
   const screen = await SduiModel.getScreenById(id);
   if (!screen) throw new Error('Screen not found');
-  const result = await SduiModel.publishScreen(id, publishedBy);
-  let version = screen.version;
-  if (!version && screen.body_json) {
-    try {
-      const body = typeof screen.body_json === 'string' ? JSON.parse(screen.body_json) : screen.body_json;
-      version = body?.version;
-    } catch {}
-  }
-  await exports.invalidateScreenCache(screen.screen_key, version || '1.0.0');
-  return result;
+  await SduiModel.publishScreen(id, publishedBy);
+  const after = await SduiModel.getScreenById(id);
+  const version = after?.version ?? screen.version ?? 1;
+  await exports.invalidateScreenCache(screen.screen_key, String(version));
+  return after;
 };
 
 exports.listVersions = async function(screenId) {
@@ -164,15 +159,32 @@ exports.createComponent = async function(data) {
 exports.updateComponent = async function(id, data) {
   const component = await SduiModel.getComponentById(id);
   if (!component) throw new Error('Component not found');
-  const updateData = {};
+  const updateData = {
+    updated_by: data.updated_by,
+  };
   if (data.name !== undefined) updateData.name = data.name;
   if (data.description !== undefined) updateData.description = data.description;
-  if (data.version !== undefined) updateData.version = data.version;
   if (data.node_json !== undefined) updateData.node_json = data.node_json;
-  await SduiModel.updateComponent(id, updateData);
-  const version = data.version ?? component.version ?? '1.0.0';
-  await exports.invalidateComponentCache(component.component_key, version);
-  return await SduiModel.getComponentById(id);
+  const updated = await SduiModel.updateComponent(id, updateData);
+  if (!updated) throw new Error('Component not found');
+  await exports.invalidateComponentCache(component.component_key, String(updated.version));
+  return updated;
+};
+
+exports.listComponentVersions = async function(componentId) {
+  const component = await SduiModel.getComponentById(componentId);
+  if (!component) throw new Error('Component not found');
+  return await SduiModel.listComponentVersions(componentId);
+};
+
+exports.rollbackComponentToVersion = async function(componentId, versionId) {
+  const component = await SduiModel.getComponentById(componentId);
+  if (!component) throw new Error('Component not found');
+  const ok = await SduiModel.rollbackComponentToVersion(componentId, versionId);
+  if (!ok) throw new Error('Version not found or does not belong to this component');
+  const after = await SduiModel.getComponentById(componentId);
+  await exports.invalidateComponentCache(component.component_key, String(after.version));
+  return after;
 };
 
 exports.deleteComponent = async function(id) {

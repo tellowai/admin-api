@@ -45,4 +45,10 @@ module.exports = function(app) {
     .get(AuthMiddleware.isAdminUser, SduiCtrl.getComponent)
     .put(AuthMiddleware.isAdminUser, SduiCtrl.updateComponent)
     .delete(AuthMiddleware.isAdminUser, SduiCtrl.deleteComponent);
+
+  app.route(prefix + '/components/:id/versions')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.listComponentVersions);
+
+  app.route(prefix + '/components/:id/rollback/:versionId')
+    .post(AuthMiddleware.isAdminUser, SduiCtrl.rollbackComponentToVersion);
 };
