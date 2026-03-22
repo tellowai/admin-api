@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const TrackingLinkModel = require('../models/tracking_link.model');
+const { invalidateDeferredLinkCache } = require('./attribution.deferred.redis.service');
 const InfluencerModel = require('../models/influencer_profile.model');
 const AttributionChModel = require('../models/attribution_ch.model');
 
@@ -369,6 +370,7 @@ exports.updateTrackingLink = async function (id, patch) {
     next.attribution_provider = normalizeProvider(next.attribution_provider || '', 'internal');
   }
   await TrackingLinkModel.update(id, next);
+  await invalidateDeferredLinkCache(id);
   return TrackingLinkModel.getById(id);
 };
 
