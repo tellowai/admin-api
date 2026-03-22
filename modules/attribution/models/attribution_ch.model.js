@@ -469,6 +469,78 @@ exports.queryPurchasesByDayForObjectIds = async function (objectIds, startDate, 
 };
 
 /**
+ * Repeat-purchase metrics (optional link scope via objectIds).
+ * - repeat_buyers_distinct_users: distinct users with 2+ attributed_purchase rows in range.
+ * - purchase_events_tagged_*: uses properties.purchase_ordinal (API v2); legacy rows have ordinal 0 in counts.
+ */
+async function queryPurchaseRepeatSummaryInner(objectIds, startDate, endDate, osFilter) {
+  const os = osFilterClause(osFilter);
+  const idClause =
+    objectIds && objectIds.length
+      ? `AND object_id IN (${objectIds.map((id) => `'${esc(String(id))}'`).join(',')})`
+      : '';
+
+  const qRepeat = `
+    SELECT uniqExact(user_id) AS repeat_buyers_distinct_users
+    FROM (
+      SELECT user_id
+      FROM analytics_events_raw
+      WHERE object_type = 'attribution'
+        AND event_name = 'attributed_purchase'
+        AND toDate(timestamp) >= toDate('${esc(startDate)}')
+        AND toDate(timestamp) <= toDate('${esc(endDate)}')
+        AND ifNull(user_id, '') != ''
+        ${idClause}
+        ${os}
+      GROUP BY user_id
+      HAVING count() >= 2
+    )
+  `;
+  const qTotals = `
+    SELECT
+      count() AS purchase_events_total,
+      countIf(toUInt32OrZero(ifNull(properties['purchase_ordinal'], '0')) = 1) AS purchase_events_tagged_first,
+      countIf(toUInt32OrZero(ifNull(properties['purchase_ordinal'], '0')) >= 2) AS purchase_events_tagged_repeat
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND event_name = 'attributed_purchase'
+      AND toDate(timestamp) >= toDate('${esc(startDate)}')
+      AND toDate(timestamp) <= toDate('${esc(endDate)}')
+      ${idClause}
+      ${os}
+  `;
+  const [repeatRes, totalsRes] = await Promise.all([
+    slaveClickhouse.querying(qRepeat, { dataObjects: true }),
+    slaveClickhouse.querying(qTotals, { dataObjects: true })
+  ]);
+  const r0 = repeatRes.data && repeatRes.data[0];
+  const t0 = totalsRes.data && totalsRes.data[0];
+  return {
+    repeat_buyers_distinct_users: Number(r0 && r0.repeat_buyers_distinct_users) || 0,
+    purchase_events_total: Number(t0 && t0.purchase_events_total) || 0,
+    purchase_events_tagged_first: Number(t0 && t0.purchase_events_tagged_first) || 0,
+    purchase_events_tagged_repeat: Number(t0 && t0.purchase_events_tagged_repeat) || 0
+  };
+}
+
+exports.queryPurchaseRepeatSummaryForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+  if (!objectIds || !objectIds.length) {
+    return {
+      repeat_buyers_distinct_users: 0,
+      purchase_events_total: 0,
+      purchase_events_tagged_first: 0,
+      purchase_events_tagged_repeat: 0
+    };
+  }
+  return queryPurchaseRepeatSummaryInner(objectIds, startDate, endDate, osFilter);
+};
+
+/** Platform-wide repeat purchase metrics (all tracking links). */
+exports.queryPurchaseRepeatSummaryGlobal = async function (startDate, endDate, osFilter) {
+  return queryPurchaseRepeatSummaryInner(null, startDate, endDate, osFilter);
+};
+
+/**
  * Individual click events for timeline (from link_clicks).
  */
 exports.queryClickEventsForLinkIds = async function (linkIds, startTs, endTs, limit = 50, offset = 0) {
@@ -533,6 +605,9 @@ exports.queryAttributionEventsForTimeline = async function (objectIds, startDate
       ifNull(properties['channel'], '') AS channel,
       ifNull(properties['source_name'], '') AS source_name,
       ifNull(properties['auth_attribution_occasion'], '') AS auth_attribution_occasion,
+      ifNull(properties['purchase_ordinal'], '') AS purchase_ordinal,
+      ifNull(properties['is_first_attributed_purchase'], '') AS is_first_attributed_purchase,
+      ifNull(properties['app_user_id'], '') AS app_user_id_prop,
       ifNull(os_name, '') AS os_name,
       ifNull(properties['install_os'], '') AS install_os,
       device_id,

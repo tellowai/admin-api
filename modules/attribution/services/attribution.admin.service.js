@@ -162,7 +162,13 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
       funnel_by_os: [],
       installs_by_os: [],
       attribution_by_channel: [],
-      clicks_by_channel: []
+      clicks_by_channel: [],
+      purchase_repeat_summary: {
+        repeat_buyers_distinct_users: 0,
+        purchase_events_total: 0,
+        purchase_events_tagged_first: 0,
+        purchase_events_tagged_repeat: 0
+      }
     };
   }
   const [
@@ -175,7 +181,8 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     funnelByOs,
     installsByOs,
     attributionByChannel,
-    clicksByChannel
+    clicksByChannel,
+    purchaseRepeatSummary
   ] = await Promise.all([
     AttributionChModel.queryClickCountForLinkIds(linkIds, startTs, endTs),
     AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate, os),
@@ -186,7 +193,8 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     AttributionChModel.queryFunnelMetricsByOsForObjectIds(linkIds, startDate, endDate),
     AttributionChModel.queryInstallsByOsForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryAttributionByChannelFromRawForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryClicksByChannelForLinkIds(linkIds, startTs, endTs)
+    AttributionChModel.queryClicksByChannelForLinkIds(linkIds, startTs, endTs),
+    AttributionChModel.queryPurchaseRepeatSummaryForObjectIds(linkIds, startDate, endDate, os)
   ]);
   return {
     clicks_total: clicks.total,
@@ -199,7 +207,8 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     funnel_by_os: funnelByOs,
     installs_by_os: installsByOs,
     attribution_by_channel: attributionByChannel,
-    clicks_by_channel: clicksByChannel
+    clicks_by_channel: clicksByChannel,
+    purchase_repeat_summary: purchaseRepeatSummary
   };
 }
 
@@ -439,7 +448,7 @@ exports.getOverview = async function (query) {
   const osParam = useOsFilter ? deviceOs : null;
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
-  const [byChannel, clicksByCode, clicksByChannel, installsByDay, installsByOs, signupsByAuthOccasion, funnelByOs] =
+  const [byChannel, clicksByCode, clicksByChannel, installsByDay, installsByOs, signupsByAuthOccasion, funnelByOs, purchaseRepeatSummary] =
     await Promise.all([
       useOsFilter
         ? AttributionChModel.queryAttributionByChannelFromRaw(startDate, endDate, deviceOs)
@@ -449,7 +458,8 @@ exports.getOverview = async function (query) {
       AttributionChModel.queryInstallsByDay(startDate, endDate, osParam),
       AttributionChModel.queryInstallsByOs(startDate, endDate, osParam),
       AttributionChModel.querySignupsByAuthOccasion(startDate, endDate, osParam),
-      AttributionChModel.queryFunnelMetricsByOs(startDate, endDate)
+      AttributionChModel.queryFunnelMetricsByOs(startDate, endDate),
+      AttributionChModel.queryPurchaseRepeatSummaryGlobal(startDate, endDate, osParam)
     ]);
   return {
     attribution_by_channel: byChannel,
@@ -459,7 +469,8 @@ exports.getOverview = async function (query) {
     installs_by_os: installsByOs,
     signups_by_auth_occasion: signupsByAuthOccasion,
     funnel_by_os: funnelByOs,
-    device_os: deviceOs
+    device_os: deviceOs,
+    purchase_repeat_summary: purchaseRepeatSummary
   };
 };
 
