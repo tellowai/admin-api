@@ -131,36 +131,75 @@ function serializeInfluencer(row) {
   };
 }
 
+/** all | ios | android — filters attribution event counts (not link clicks). */
+function normalizeDeviceOs(query) {
+  if (!query || query == null) return 'all';
+  const raw = query.device_os != null ? query.device_os : query.app_os;
+  if (raw == null || raw === '') return 'all';
+  const v = String(raw).toLowerCase().trim();
+  if (v === 'ios' || v === 'android') return v;
+  return 'all';
+}
+
 /**
  * ClickHouse analytics for one or more tracking link ids (object_id in raw events).
  * Installs chart is install-only; attribution_events includes all types (e.g. attributed_purchase + revenue);
  * purchases_by_day is ready when the app sends authenticated attributed_purchase events.
  */
-async function buildAnalyticsForLinks(linkIds, startDate, endDate) {
+async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
+  const os = osFilter === 'ios' || osFilter === 'android' ? osFilter : null;
   if (!linkIds || !linkIds.length) {
     return {
       clicks_total: 0,
       attribution_events: [],
       installs_by_day: [],
       purchases_by_day: [],
-      events_by_plan: []
+      events_by_plan: [],
+      signups_by_auth_occasion: [],
+      device_os: os || 'all',
+      funnel_by_os: [],
+      installs_by_os: [],
+      attribution_by_channel: [],
+      clicks_by_channel: []
     };
   }
-  const [clicks, events, installsByDay, purchasesByDay, eventsByPlan] = await Promise.all([
+  const [
+    clicks,
+    events,
+    installsByDay,
+    purchasesByDay,
+    eventsByPlan,
+    signupsByAuthOccasion,
+    funnelByOs,
+    installsByOs,
+    attributionByChannel,
+    clicksByChannel
+  ] = await Promise.all([
     AttributionChModel.queryClickCountForLinkIds(linkIds, startTs, endTs),
-    AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate),
-    AttributionChModel.queryInstallsByDayForObjectIds(linkIds, startDate, endDate),
-    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate),
-    AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, startDate, endDate)
+    AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryInstallsByDayForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.querySignupsByAuthOccasionForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryFunnelMetricsByOsForObjectIds(linkIds, startDate, endDate),
+    AttributionChModel.queryInstallsByOsForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryAttributionByChannelFromRawForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryClicksByChannelForLinkIds(linkIds, startTs, endTs)
   ]);
   return {
     clicks_total: clicks.total,
     attribution_events: events,
     installs_by_day: installsByDay,
     purchases_by_day: purchasesByDay,
-    events_by_plan: eventsByPlan
+    events_by_plan: eventsByPlan,
+    signups_by_auth_occasion: signupsByAuthOccasion,
+    device_os: os || 'all',
+    funnel_by_os: funnelByOs,
+    installs_by_os: installsByOs,
+    attribution_by_channel: attributionByChannel,
+    clicks_by_channel: clicksByChannel
   };
 }
 
@@ -395,19 +434,32 @@ exports.getOverview = async function (query) {
     err.statusCode = 400;
     throw err;
   }
+  const deviceOs = normalizeDeviceOs(query);
+  const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
+  const osParam = useOsFilter ? deviceOs : null;
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
-  const [byChannel, clicksByCode, clicksByChannel, installsByDay] = await Promise.all([
-    AttributionChModel.queryAttributionByChannel(startDate, endDate),
-    AttributionChModel.queryClicksByShortCode(startTs, endTs),
-    AttributionChModel.queryClicksByChannel(startTs, endTs),
-    AttributionChModel.queryInstallsByDay(startDate, endDate)
-  ]);
+  const [byChannel, clicksByCode, clicksByChannel, installsByDay, installsByOs, signupsByAuthOccasion, funnelByOs] =
+    await Promise.all([
+      useOsFilter
+        ? AttributionChModel.queryAttributionByChannelFromRaw(startDate, endDate, deviceOs)
+        : AttributionChModel.queryAttributionByChannel(startDate, endDate),
+      AttributionChModel.queryClicksByShortCode(startTs, endTs),
+      AttributionChModel.queryClicksByChannel(startTs, endTs),
+      AttributionChModel.queryInstallsByDay(startDate, endDate, osParam),
+      AttributionChModel.queryInstallsByOs(startDate, endDate, osParam),
+      AttributionChModel.querySignupsByAuthOccasion(startDate, endDate, osParam),
+      AttributionChModel.queryFunnelMetricsByOs(startDate, endDate)
+    ]);
   return {
     attribution_by_channel: byChannel,
     clicks_by_short_code: clicksByCode,
     clicks_by_channel: clicksByChannel,
-    installs_by_day: installsByDay
+    installs_by_day: installsByDay,
+    installs_by_os: installsByOs,
+    signups_by_auth_occasion: signupsByAuthOccasion,
+    funnel_by_os: funnelByOs,
+    device_os: deviceOs
   };
 };
 
@@ -425,7 +477,8 @@ exports.getLinkStats = async function (linkId, query) {
     err.statusCode = 404;
     throw err;
   }
-  const analytics = await buildAnalyticsForLinks([link.id], startDate, endDate);
+  const deviceOs = normalizeDeviceOs(query);
+  const analytics = await buildAnalyticsForLinks([link.id], startDate, endDate, deviceOs);
   return { link, analytics };
 };
 
@@ -448,6 +501,7 @@ exports.getProfileStats = async function (profileId, query) {
   }
   const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
   const linkIds = links.map((l) => l.id);
-  const analytics = await buildAnalyticsForLinks(linkIds, startDate, endDate);
+  const deviceOs = normalizeDeviceOs(query);
+  const analytics = await buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs);
   return { profile: serializeInfluencer(profile), links, analytics };
 };
