@@ -315,6 +315,9 @@ exports.updateFont = async function(id, body) {
 exports.deleteFont = async function(id) {
   const row = await SduiModel.getFontById(id);
   if (!row) throw new Error('Font not found');
+  if (row.source_type !== 'remote_url') {
+    throw new Error('Bundled fonts cannot be deleted');
+  }
   await SduiModel.deleteFont(id);
   await invalidateFontManifestCache();
 };

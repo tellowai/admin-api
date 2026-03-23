@@ -425,6 +425,9 @@ exports.deleteFont = async function(req, res) {
     return res.status(200).send({ message: 'Font deleted' });
   } catch (err) {
     if (err.message === 'Font not found') return res.status(404).send({ message: err.message });
+    if (err.message === 'Bundled fonts cannot be deleted') {
+      return res.status(400).send({ message: err.message });
+    }
     console.error('SDUI deleteFont Error:', err);
     return res.status(500).send({ message: 'Internal Server Error' });
   }
