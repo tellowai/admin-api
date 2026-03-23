@@ -476,3 +476,69 @@ exports.rollbackBlockToVersion = async function(blockId, versionId) {
 exports.deleteBlock = async function(id) {
   await mysqlQueryRunner.runQueryInMaster(`DELETE FROM sdui_blocks WHERE id = ?`, [id]);
 };
+
+exports.listFonts = async function() {
+  const q = `SELECT * FROM sdui_fonts ORDER BY sort_order ASC, display_name ASC`;
+  return await mysqlQueryRunner.runQueryInSlave(q, []);
+};
+
+exports.getFontById = async function(id) {
+  const q = `SELECT * FROM sdui_fonts WHERE id = ?`;
+  const r = await mysqlQueryRunner.runQueryInSlave(q, [id]);
+  return r[0] || null;
+};
+
+exports.getFontByKey = async function(fontKey) {
+  const q = `SELECT * FROM sdui_fonts WHERE font_key = ?`;
+  const r = await mysqlQueryRunner.runQueryInSlave(q, [fontKey]);
+  return r[0] || null;
+};
+
+exports.createFont = async function(data) {
+  const id = crypto.randomUUID();
+  const q = `
+    INSERT INTO sdui_fonts (id, font_key, display_name, source_type, bundled_family_name, url, sort_order, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  await mysqlQueryRunner.runQueryInMaster(q, [
+    id,
+    data.font_key,
+    data.display_name,
+    data.source_type === 'remote_url' ? 'remote_url' : 'bundled',
+    data.bundled_family_name || null,
+    data.url || null,
+    Number.isFinite(Number(data.sort_order)) ? parseInt(data.sort_order, 10) : 0,
+    data.is_active === false || data.is_active === 0 ? 0 : 1,
+  ]);
+  return id;
+};
+
+exports.updateFont = async function(id, data) {
+  const allowed = ['font_key', 'display_name', 'source_type', 'bundled_family_name', 'url', 'sort_order', 'is_active'];
+  const sets = [];
+  const params = [];
+  for (const k of allowed) {
+    if (data[k] === undefined) continue;
+    if (k === 'source_type') {
+      sets.push('source_type = ?');
+      params.push(data[k] === 'remote_url' ? 'remote_url' : 'bundled');
+    } else if (k === 'is_active') {
+      sets.push('is_active = ?');
+      params.push(data[k] === false || data[k] === 0 ? 0 : 1);
+    } else if (k === 'sort_order') {
+      sets.push('sort_order = ?');
+      params.push(Number.isFinite(Number(data[k])) ? parseInt(data[k], 10) : 0);
+    } else {
+      sets.push(`${k} = ?`);
+      params.push(data[k]);
+    }
+  }
+  if (sets.length === 0) return exports.getFontById(id);
+  params.push(id);
+  await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_fonts SET ${sets.join(', ')} WHERE id = ?`, params);
+  return exports.getFontById(id);
+};
+
+exports.deleteFont = async function(id) {
+  await mysqlQueryRunner.runQueryInMaster(`DELETE FROM sdui_fonts WHERE id = ?`, [id]);
+};

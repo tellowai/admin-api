@@ -66,4 +66,12 @@ module.exports = function(app) {
 
   app.route(prefix + '/blocks/:id/rollback/:versionId')
     .post(AuthMiddleware.isAdminUser, SduiCtrl.rollbackBlockToVersion);
+
+  app.route(prefix + '/fonts')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.listFonts)
+    .post(AuthMiddleware.isAdminUser, SduiCtrl.createFont);
+
+  app.route(prefix + '/fonts/:id')
+    .put(AuthMiddleware.isAdminUser, SduiCtrl.updateFont)
+    .delete(AuthMiddleware.isAdminUser, SduiCtrl.deleteFont);
 };

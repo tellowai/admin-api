@@ -383,3 +383,49 @@ exports.deleteBlock = async function(req, res) {
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };
+
+exports.listFonts = async function(req, res) {
+  try {
+    const rows = await SduiService.listFonts();
+    return res.status(200).send({ data: rows });
+  } catch (err) {
+    console.error('SDUI listFonts Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.createFont = async function(req, res) {
+  try {
+    const row = await SduiService.createFont(req.body || {});
+    return res.status(201).send({ data: row });
+  } catch (err) {
+    if (err.message && /required|already exists/i.test(err.message)) {
+      return res.status(400).send({ message: err.message });
+    }
+    console.error('SDUI createFont Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.updateFont = async function(req, res) {
+  try {
+    const row = await SduiService.updateFont(req.params.id, req.body || {});
+    return res.status(200).send({ data: row });
+  } catch (err) {
+    if (err.message === 'Font not found') return res.status(404).send({ message: err.message });
+    if (err.message && /already exists/i.test(err.message)) return res.status(400).send({ message: err.message });
+    console.error('SDUI updateFont Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.deleteFont = async function(req, res) {
+  try {
+    await SduiService.deleteFont(req.params.id);
+    return res.status(200).send({ message: 'Font deleted' });
+  } catch (err) {
+    if (err.message === 'Font not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI deleteFont Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};

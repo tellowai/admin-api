@@ -8,6 +8,7 @@ const COMPONENT_CACHE_PREFIX = 'sdui:component:';
 const MANIFEST_CACHE_KEY = 'sdui:component:manifest';
 const BLOCK_CACHE_PREFIX = 'sdui:block:';
 const BLOCK_MANIFEST_CACHE_KEY = 'sdui:block:manifest';
+const FONT_MANIFEST_CACHE_KEY = 'sdui:fonts:manifest:v1';
 
 function buildScreenCacheKey(screenKey, version) {
   return SDUI_CACHE_PREFIX + screenKey + ':' + (version || '');
@@ -261,4 +262,59 @@ exports.deleteBlock = async function(id) {
   if (!block) throw new Error('Block not found');
   await SduiModel.deleteBlock(id);
   try { await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY); } catch {}
+};
+
+async function invalidateFontManifestCache() {
+  try {
+    await RedisService.deleteData(FONT_MANIFEST_CACHE_KEY);
+  } catch (_) {}
+}
+
+exports.listFonts = async function() {
+  return await SduiModel.listFonts();
+};
+
+exports.createFont = async function(body) {
+  const { font_key, display_name, source_type, bundled_family_name, url, sort_order, is_active } = body;
+  if (!font_key || !display_name) {
+    throw new Error('font_key and display_name are required');
+  }
+  const st = source_type === 'remote_url' ? 'remote_url' : 'bundled';
+  if (st === 'remote_url' && !url) throw new Error('url is required for remote_url fonts');
+  if (st === 'bundled' && !bundled_family_name) {
+    throw new Error('bundled_family_name is required for bundled fonts (must match app useFonts key)');
+  }
+  const existing = await SduiModel.getFontByKey(font_key);
+  if (existing) throw new Error('font_key already exists');
+  const id = await SduiModel.createFont({
+    font_key,
+    display_name,
+    source_type: st,
+    bundled_family_name,
+    url,
+    sort_order,
+    is_active,
+  });
+  await invalidateFontManifestCache();
+  return await SduiModel.getFontById(id);
+};
+
+exports.updateFont = async function(id, body) {
+  const row = await SduiModel.getFontById(id);
+  if (!row) throw new Error('Font not found');
+  const nextKey = body.font_key !== undefined ? body.font_key : row.font_key;
+  if (body.font_key !== undefined && body.font_key !== row.font_key) {
+    const clash = await SduiModel.getFontByKey(nextKey);
+    if (clash && clash.id !== id) throw new Error('font_key already exists');
+  }
+  const updated = await SduiModel.updateFont(id, body);
+  await invalidateFontManifestCache();
+  return updated;
+};
+
+exports.deleteFont = async function(id) {
+  const row = await SduiModel.getFontById(id);
+  if (!row) throw new Error('Font not found');
+  await SduiModel.deleteFont(id);
+  await invalidateFontManifestCache();
 };
