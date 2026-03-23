@@ -51,4 +51,19 @@ module.exports = function(app) {
 
   app.route(prefix + '/components/:id/rollback/:versionId')
     .post(AuthMiddleware.isAdminUser, SduiCtrl.rollbackComponentToVersion);
+
+  app.route(prefix + '/blocks')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.listBlocks)
+    .post(AuthMiddleware.isAdminUser, SduiCtrl.createBlock);
+
+  app.route(prefix + '/blocks/:id')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.getBlock)
+    .put(AuthMiddleware.isAdminUser, SduiCtrl.updateBlock)
+    .delete(AuthMiddleware.isAdminUser, SduiCtrl.deleteBlock);
+
+  app.route(prefix + '/blocks/:id/versions')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.listBlockVersions);
+
+  app.route(prefix + '/blocks/:id/rollback/:versionId')
+    .post(AuthMiddleware.isAdminUser, SduiCtrl.rollbackBlockToVersion);
 };

@@ -287,3 +287,99 @@ exports.deleteComponent = async function(req, res) {
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };
+
+exports.listBlocks = async function(req, res) {
+  try {
+    const { search } = req.query;
+    const result = await SduiService.listBlocks(search);
+    return res.status(200).send(result);
+  } catch (err) {
+    console.error('SDUI listBlocks Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.getBlock = async function(req, res) {
+  try {
+    const block = await SduiService.getBlockById(req.params.id);
+    if (!block) return res.status(404).send({ message: 'Block not found' });
+    return res.status(200).send(block);
+  } catch (err) {
+    console.error('SDUI getBlock Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.createBlock = async function(req, res) {
+  try {
+    const { block_key, name, description, body_json } = req.body;
+    if (!block_key || !name || !body_json) {
+      return res.status(400).send({ message: 'block_key, name, and body_json are required' });
+    }
+    const block = await SduiService.createBlock({
+      block_key,
+      name,
+      description,
+      body_json,
+      created_by: req.user?.email || req.user?.userId,
+    });
+    return res.status(201).send({ data: block });
+  } catch (err) {
+    if (err.message === 'Block key already exists') return res.status(409).send({ message: err.message });
+    console.error('SDUI createBlock Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.updateBlock = async function(req, res) {
+  try {
+    const { name, description, body_json } = req.body;
+    const block = await SduiService.updateBlock(req.params.id, {
+      name,
+      description,
+      body_json,
+      updated_by: req.user?.email || req.user?.userId,
+    });
+    return res.status(200).send({ data: block });
+  } catch (err) {
+    if (err.message === 'Block not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI updateBlock Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.listBlockVersions = async function(req, res) {
+  try {
+    const versions = await SduiService.listBlockVersions(req.params.id);
+    return res.status(200).send({ data: versions });
+  } catch (err) {
+    if (err.message === 'Block not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI listBlockVersions Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.rollbackBlockToVersion = async function(req, res) {
+  try {
+    const block = await SduiService.rollbackBlockToVersion(req.params.id, req.params.versionId);
+    return res.status(200).send({ data: block, message: 'Restored successfully' });
+  } catch (err) {
+    if (err.message === 'Block not found') return res.status(404).send({ message: err.message });
+    if (err.message === 'Version not found or does not belong to this block') {
+      return res.status(404).send({ message: err.message });
+    }
+    console.error('SDUI rollbackBlockToVersion Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.deleteBlock = async function(req, res) {
+  try {
+    await SduiService.deleteBlock(req.params.id);
+    return res.status(200).send({ message: 'Block deleted' });
+  } catch (err) {
+    if (err.message === 'Block not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI deleteBlock Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};

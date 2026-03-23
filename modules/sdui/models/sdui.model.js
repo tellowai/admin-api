@@ -347,3 +347,132 @@ exports.rollbackComponentToVersion = async function(componentId, versionId) {
 exports.deleteComponent = async function(id) {
   await mysqlQueryRunner.runQueryInMaster(`DELETE FROM sdui_components WHERE id = ?`, [id]);
 };
+
+// --- SDUI Blocks (reusable sections; referenced by block_ref) ---
+
+exports.listBlocks = async function(search) {
+  let query = `SELECT id, block_key, name, description, version, updated_at FROM sdui_blocks WHERE 1=1`;
+  const params = [];
+  if (search) {
+    query += ` AND (block_key LIKE ? OR name LIKE ?)`;
+    const searchParam = `%${search}%`;
+    params.push(searchParam, searchParam);
+  }
+  query += ` ORDER BY updated_at DESC`;
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+exports.getBlockById = async function(id) {
+  const query = `SELECT * FROM sdui_blocks WHERE id = ?`;
+  const result = await mysqlQueryRunner.runQueryInSlave(query, [id]);
+  return result[0] || null;
+};
+
+exports.getBlockByKey = async function(blockKey) {
+  const query = `SELECT * FROM sdui_blocks WHERE block_key = ?`;
+  const result = await mysqlQueryRunner.runQueryInSlave(query, [blockKey]);
+  return result[0] || null;
+};
+
+exports.getNextBlockVersionNumber = async function(blockId) {
+  const result = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT COALESCE(MAX(version_number), 0) + 1 as next FROM sdui_block_versions WHERE block_id = ?`,
+    [blockId]
+  );
+  return result[0]?.next || 1;
+};
+
+exports.insertBlockVersionSnapshot = async function(blockId, versionNumber, bodyJson, savedBy) {
+  const vid = crypto.randomUUID();
+  const bj = typeof bodyJson === 'string' ? bodyJson : JSON.stringify(bodyJson);
+  await mysqlQueryRunner.runQueryInMaster(
+    `INSERT INTO sdui_block_versions (id, block_id, version_number, body_json, saved_at, saved_by)
+     VALUES (?, ?, ?, ?, NOW(), ?)`,
+    [vid, blockId, versionNumber, bj, savedBy || null]
+  );
+  return vid;
+};
+
+exports.createBlock = async function(data) {
+  const id = crypto.randomUUID();
+  const bodyJson = typeof data.body_json === 'string' ? data.body_json : JSON.stringify(data.body_json);
+  const startVer = 1;
+  await mysqlQueryRunner.runQueryInMaster(
+    `INSERT INTO sdui_blocks (id, block_key, name, description, version, body_json)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, data.block_key, data.name, data.description || null, startVer, bodyJson]
+  );
+  await exports.insertBlockVersionSnapshot(id, startVer, bodyJson, data.created_by || null);
+  return id;
+};
+
+exports.updateBlock = async function(id, updateData) {
+  const row = await exports.getBlockById(id);
+  if (!row) return null;
+
+  const hasBody = updateData.body_json !== undefined;
+  let bodyJsonStr = null;
+  if (hasBody) {
+    bodyJsonStr =
+      typeof updateData.body_json === 'string' ? updateData.body_json : JSON.stringify(updateData.body_json);
+  }
+
+  if (!hasBody) {
+    const sets = [];
+    const params = [];
+    if (updateData.name !== undefined) {
+      sets.push('name = ?');
+      params.push(updateData.name);
+    }
+    if (updateData.description !== undefined) {
+      sets.push('description = ?');
+      params.push(updateData.description);
+    }
+    if (sets.length === 0) return row;
+    params.push(id);
+    await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_blocks SET ${sets.join(', ')} WHERE id = ?`, params);
+    return await exports.getBlockById(id);
+  }
+
+  const nextVer = await exports.getNextBlockVersionNumber(id);
+  const sets = ['body_json = ?', 'version = ?'];
+  const params = [bodyJsonStr, nextVer];
+  if (updateData.name !== undefined) {
+    sets.push('name = ?');
+    params.push(updateData.name);
+  }
+  if (updateData.description !== undefined) {
+    sets.push('description = ?');
+    params.push(updateData.description);
+  }
+  params.push(id);
+  await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_blocks SET ${sets.join(', ')} WHERE id = ?`, params);
+  await exports.insertBlockVersionSnapshot(id, nextVer, bodyJsonStr, updateData.updated_by || null);
+  return await exports.getBlockById(id);
+};
+
+exports.listBlockVersions = async function(blockId) {
+  const q = `SELECT id, block_id, version_number, saved_at, saved_by FROM sdui_block_versions WHERE block_id = ? ORDER BY version_number DESC`;
+  return await mysqlQueryRunner.runQueryInSlave(q, [blockId]);
+};
+
+exports.getBlockVersionById = async function(versionId) {
+  const q = `SELECT * FROM sdui_block_versions WHERE id = ?`;
+  const result = await mysqlQueryRunner.runQueryInSlave(q, [versionId]);
+  return result[0] || null;
+};
+
+exports.rollbackBlockToVersion = async function(blockId, versionId) {
+  const row = await exports.getBlockVersionById(versionId);
+  if (!row || row.block_id !== blockId) return false;
+  const bj = typeof row.body_json === 'string' ? row.body_json : JSON.stringify(row.body_json);
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_blocks SET body_json = ?, updated_at = NOW() WHERE id = ?`,
+    [bj, blockId]
+  );
+  return true;
+};
+
+exports.deleteBlock = async function(id) {
+  await mysqlQueryRunner.runQueryInMaster(`DELETE FROM sdui_blocks WHERE id = ?`, [id]);
+};

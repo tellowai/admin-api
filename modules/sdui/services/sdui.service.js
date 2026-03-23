@@ -6,6 +6,8 @@ const RedisService = require('../../core/models/redis.promise.model');
 const SDUI_CACHE_PREFIX = 'sdui:screen:';
 const COMPONENT_CACHE_PREFIX = 'sdui:component:';
 const MANIFEST_CACHE_KEY = 'sdui:component:manifest';
+const BLOCK_CACHE_PREFIX = 'sdui:block:';
+const BLOCK_MANIFEST_CACHE_KEY = 'sdui:block:manifest';
 
 function buildScreenCacheKey(screenKey, version) {
   return SDUI_CACHE_PREFIX + screenKey + ':' + (version || '');
@@ -31,6 +33,19 @@ exports.invalidateComponentCache = async function(componentKey, version) {
     await RedisService.deleteData(MANIFEST_CACHE_KEY);
   } catch (err) {
     console.warn('[SDUI] Component Redis cache invalidation failed:', err?.message);
+  }
+};
+
+function buildBlockCacheKey(blockKey, version) {
+  return BLOCK_CACHE_PREFIX + blockKey + ':' + (version || '');
+}
+
+exports.invalidateBlockCache = async function(blockKey, version) {
+  try {
+    await RedisService.deleteData(buildBlockCacheKey(blockKey, version));
+    await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY);
+  } catch (err) {
+    console.warn('[SDUI] Block Redis cache invalidation failed:', err?.message);
   }
 };
 
@@ -192,4 +207,58 @@ exports.deleteComponent = async function(id) {
   if (!component) throw new Error('Component not found');
   await SduiModel.deleteComponent(id);
   try { await RedisService.deleteData(MANIFEST_CACHE_KEY); } catch {}
+};
+
+exports.listBlocks = async function(search) {
+  const items = await SduiModel.listBlocks(search);
+  return { data: items };
+};
+
+exports.getBlockById = async function(id) {
+  return await SduiModel.getBlockById(id);
+};
+
+exports.createBlock = async function(data) {
+  const existing = await SduiModel.getBlockByKey(data.block_key);
+  if (existing) throw new Error('Block key already exists');
+  const id = await SduiModel.createBlock(data);
+  try { await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY); } catch {}
+  return await SduiModel.getBlockById(id);
+};
+
+exports.updateBlock = async function(id, data) {
+  const block = await SduiModel.getBlockById(id);
+  if (!block) throw new Error('Block not found');
+  const updated = await SduiModel.updateBlock(id, {
+    name: data.name,
+    description: data.description,
+    body_json: data.body_json,
+    updated_by: data.updated_by,
+  });
+  if (!updated) throw new Error('Block not found');
+  await exports.invalidateBlockCache(block.block_key, String(updated.version));
+  return updated;
+};
+
+exports.listBlockVersions = async function(blockId) {
+  const block = await SduiModel.getBlockById(blockId);
+  if (!block) throw new Error('Block not found');
+  return await SduiModel.listBlockVersions(blockId);
+};
+
+exports.rollbackBlockToVersion = async function(blockId, versionId) {
+  const block = await SduiModel.getBlockById(blockId);
+  if (!block) throw new Error('Block not found');
+  const ok = await SduiModel.rollbackBlockToVersion(blockId, versionId);
+  if (!ok) throw new Error('Version not found or does not belong to this block');
+  const after = await SduiModel.getBlockById(blockId);
+  await exports.invalidateBlockCache(block.block_key, String(after.version));
+  return after;
+};
+
+exports.deleteBlock = async function(id) {
+  const block = await SduiModel.getBlockById(id);
+  if (!block) throw new Error('Block not found');
+  await SduiModel.deleteBlock(id);
+  try { await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY); } catch {}
 };
