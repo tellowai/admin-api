@@ -1,14 +1,45 @@
 'use strict';
 
+const config = require('../../../config/config');
 const SduiModel = require('../models/sdui.model');
 const RedisService = require('../../core/models/redis.promise.model');
+
+/** Same as photobop-api SDUI font manifest: public CDN base + assets/... path (templates use cf_r2_key + bucketUrl). */
+function resolveRemoteFontPublicUrl(storedUrl) {
+  if (!storedUrl || typeof storedUrl !== 'string') return storedUrl || null;
+  const bucketUrl = (config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
+  const trimmed = storedUrl.trim();
+  if (!bucketUrl) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const path = new URL(trimmed).pathname || '';
+      const idx = path.indexOf('/assets/');
+      if (idx !== -1) {
+        return `${bucketUrl}/${path.slice(idx + 1)}`;
+      }
+    } catch (_) {
+      return trimmed;
+    }
+    return trimmed;
+  }
+  const rel = trimmed.replace(/^\/+/, '');
+  if (rel.startsWith('assets/')) {
+    return `${bucketUrl}/${rel}`;
+  }
+  return trimmed;
+}
+
+function decorateFontRowPublicUrl(row) {
+  if (!row || row.source_type !== 'remote_url' || !row.url) return row;
+  return { ...row, url: resolveRemoteFontPublicUrl(row.url) };
+}
 
 const SDUI_CACHE_PREFIX = 'sdui:screen:';
 const COMPONENT_CACHE_PREFIX = 'sdui:component:';
 const MANIFEST_CACHE_KEY = 'sdui:component:manifest';
 const BLOCK_CACHE_PREFIX = 'sdui:block:';
 const BLOCK_MANIFEST_CACHE_KEY = 'sdui:block:manifest';
-const FONT_MANIFEST_CACHE_KEY = 'sdui:fonts:manifest:v1';
+const FONT_MANIFEST_CACHE_KEY = 'sdui:fonts:manifest:v2';
 
 function buildScreenCacheKey(screenKey, version) {
   return SDUI_CACHE_PREFIX + screenKey + ':' + (version || '');
@@ -16,6 +47,18 @@ function buildScreenCacheKey(screenKey, version) {
 
 function buildComponentCacheKey(componentKey, version) {
   return COMPONENT_CACHE_PREFIX + componentKey + ':' + (version || '');
+}
+
+/** Version string clients use for cache keys / manifest (published snapshot when draft). */
+function liveComponentCacheVersion(row) {
+  if (!row) return '1';
+  if (row.status === 'published') return String(parseInt(row.version, 10) || 1);
+  if (row.published_version != null) return String(parseInt(row.published_version, 10) || 1);
+  return String(parseInt(row.version, 10) || 1);
+}
+
+function liveBlockCacheVersion(row) {
+  return liveComponentCacheVersion(row);
 }
 
 exports.invalidateScreenCache = async function(screenKey, version) {
@@ -183,7 +226,7 @@ exports.updateComponent = async function(id, data) {
   if (data.node_json !== undefined) updateData.node_json = data.node_json;
   const updated = await SduiModel.updateComponent(id, updateData);
   if (!updated) throw new Error('Component not found');
-  await exports.invalidateComponentCache(component.component_key, String(updated.version));
+  await exports.invalidateComponentCache(component.component_key, liveComponentCacheVersion(updated));
   return updated;
 };
 
@@ -199,7 +242,25 @@ exports.rollbackComponentToVersion = async function(componentId, versionId) {
   const ok = await SduiModel.rollbackComponentToVersion(componentId, versionId);
   if (!ok) throw new Error('Version not found or does not belong to this component');
   const after = await SduiModel.getComponentById(componentId);
-  await exports.invalidateComponentCache(component.component_key, String(after.version));
+  await exports.invalidateComponentCache(component.component_key, liveComponentCacheVersion(after));
+  return after;
+};
+
+exports.publishComponent = async function(id, publishedBy) {
+  const before = await SduiModel.getComponentById(id);
+  if (!before) throw new Error('Component not found');
+  const prevLive = liveComponentCacheVersion(before);
+  await SduiModel.publishComponent(id, publishedBy);
+  const after = await SduiModel.getComponentById(id);
+  try {
+    await RedisService.deleteData(buildComponentCacheKey(before.component_key, prevLive));
+  } catch (_) {}
+  try {
+    await RedisService.deleteData(buildComponentCacheKey(after.component_key, liveComponentCacheVersion(after)));
+  } catch (_) {}
+  try {
+    await RedisService.deleteData(MANIFEST_CACHE_KEY);
+  } catch (_) {}
   return after;
 };
 
@@ -237,7 +298,7 @@ exports.updateBlock = async function(id, data) {
     updated_by: data.updated_by,
   });
   if (!updated) throw new Error('Block not found');
-  await exports.invalidateBlockCache(block.block_key, String(updated.version));
+  await exports.invalidateBlockCache(block.block_key, liveBlockCacheVersion(updated));
   return updated;
 };
 
@@ -253,7 +314,25 @@ exports.rollbackBlockToVersion = async function(blockId, versionId) {
   const ok = await SduiModel.rollbackBlockToVersion(blockId, versionId);
   if (!ok) throw new Error('Version not found or does not belong to this block');
   const after = await SduiModel.getBlockById(blockId);
-  await exports.invalidateBlockCache(block.block_key, String(after.version));
+  await exports.invalidateBlockCache(block.block_key, liveBlockCacheVersion(after));
+  return after;
+};
+
+exports.publishBlock = async function(id, publishedBy) {
+  const before = await SduiModel.getBlockById(id);
+  if (!before) throw new Error('Block not found');
+  const prevLive = liveBlockCacheVersion(before);
+  await SduiModel.publishBlock(id, publishedBy);
+  const after = await SduiModel.getBlockById(id);
+  try {
+    await RedisService.deleteData(buildBlockCacheKey(before.block_key, prevLive));
+  } catch (_) {}
+  try {
+    await RedisService.deleteData(buildBlockCacheKey(after.block_key, liveBlockCacheVersion(after)));
+  } catch (_) {}
+  try {
+    await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY);
+  } catch (_) {}
   return after;
 };
 
@@ -271,7 +350,8 @@ async function invalidateFontManifestCache() {
 }
 
 exports.listFonts = async function() {
-  return await SduiModel.listFonts();
+  const rows = await SduiModel.listFonts();
+  return rows.map(decorateFontRowPublicUrl);
 };
 
 exports.createFont = async function(body) {
@@ -296,7 +376,7 @@ exports.createFont = async function(body) {
     is_active,
   });
   await invalidateFontManifestCache();
-  return await SduiModel.getFontById(id);
+  return decorateFontRowPublicUrl(await SduiModel.getFontById(id));
 };
 
 exports.updateFont = async function(id, body) {
@@ -309,7 +389,7 @@ exports.updateFont = async function(id, body) {
   }
   const updated = await SduiModel.updateFont(id, body);
   await invalidateFontManifestCache();
-  return updated;
+  return decorateFontRowPublicUrl(updated);
 };
 
 exports.deleteFont = async function(id) {

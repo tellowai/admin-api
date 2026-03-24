@@ -277,6 +277,17 @@ exports.rollbackComponentToVersion = async function(req, res) {
   }
 };
 
+exports.publishComponent = async function(req, res) {
+  try {
+    const component = await SduiService.publishComponent(req.params.id, req.user?.userId);
+    return res.status(200).send({ data: component, message: 'Component published successfully' });
+  } catch (err) {
+    if (err.message === 'Component not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI publishComponent Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.deleteComponent = async function(req, res) {
   try {
     await SduiService.deleteComponent(req.params.id);
@@ -369,6 +380,17 @@ exports.rollbackBlockToVersion = async function(req, res) {
       return res.status(404).send({ message: err.message });
     }
     console.error('SDUI rollbackBlockToVersion Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.publishBlock = async function(req, res) {
+  try {
+    const block = await SduiService.publishBlock(req.params.id, req.user?.userId);
+    return res.status(200).send({ data: block, message: 'Block published successfully' });
+  } catch (err) {
+    if (err.message === 'Block not found') return res.status(404).send({ message: err.message });
+    console.error('SDUI publishBlock Error:', err);
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };

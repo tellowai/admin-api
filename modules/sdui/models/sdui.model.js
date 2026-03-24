@@ -215,7 +215,7 @@ exports.deprecateRegistryEntry = async function(id) {
 
 // Components - reusable UI compositions referenced by component_key
 exports.listComponents = async function(search) {
-  let query = `SELECT id, component_key, name, description, version, updated_at FROM sdui_components WHERE 1=1`;
+  let query = `SELECT id, component_key, name, description, version, status, published_version, published_at, updated_at FROM sdui_components WHERE 1=1`;
   const params = [];
   if (search) {
     query += ` AND (component_key LIKE ? OR name LIKE ?)`;
@@ -262,8 +262,8 @@ exports.createComponent = async function(data) {
   const nodeJson = typeof data.node_json === 'string' ? data.node_json : JSON.stringify(data.node_json);
   const startVer = 1;
   await mysqlQueryRunner.runQueryInMaster(
-    `INSERT INTO sdui_components (id, component_key, name, description, version, node_json)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sdui_components (id, component_key, name, description, status, version, node_json, published_version)
+     VALUES (?, ?, ?, ?, 'draft', ?, ?, NULL)`,
     [id, data.component_key, data.name, data.description || null, startVer, nodeJson]
   );
   await exports.insertComponentVersionSnapshot(id, startVer, nodeJson, data.created_by || null);
@@ -303,7 +303,7 @@ exports.updateComponent = async function(id, updateData) {
   }
 
   const nextVer = await exports.getNextComponentVersionNumber(id);
-  const sets = ['node_json = ?', 'version = ?'];
+  const sets = ['node_json = ?', 'version = ?', `status = 'draft'`];
   const params = [nodeJsonStr, nextVer];
   if (updateData.name !== undefined) {
     sets.push('name = ?');
@@ -338,10 +338,21 @@ exports.rollbackComponentToVersion = async function(componentId, versionId) {
   if (!row || row.component_id !== componentId) return false;
   const nj = typeof row.node_json === 'string' ? row.node_json : JSON.stringify(row.node_json);
   await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_components SET node_json = ?, updated_at = NOW() WHERE id = ?`,
+    `UPDATE sdui_components SET node_json = ?, updated_at = NOW(), status = 'draft' WHERE id = ?`,
     [nj, componentId]
   );
   return true;
+};
+
+exports.publishComponent = async function(id, publishedBy) {
+  const row = await exports.getComponentById(id);
+  if (!row) return null;
+  const ver = parseInt(row.version, 10) || 1;
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_components SET status = 'published', published_version = ?, published_at = NOW(), published_by = ? WHERE id = ?`,
+    [ver, publishedBy || null, id]
+  );
+  return await exports.getComponentById(id);
 };
 
 exports.deleteComponent = async function(id) {
@@ -351,7 +362,7 @@ exports.deleteComponent = async function(id) {
 // --- SDUI Blocks (reusable sections; referenced by block_ref) ---
 
 exports.listBlocks = async function(search) {
-  let query = `SELECT id, block_key, name, description, version, updated_at FROM sdui_blocks WHERE 1=1`;
+  let query = `SELECT id, block_key, name, description, version, status, published_version, published_at, updated_at FROM sdui_blocks WHERE 1=1`;
   const params = [];
   if (search) {
     query += ` AND (block_key LIKE ? OR name LIKE ?)`;
@@ -398,8 +409,8 @@ exports.createBlock = async function(data) {
   const bodyJson = typeof data.body_json === 'string' ? data.body_json : JSON.stringify(data.body_json);
   const startVer = 1;
   await mysqlQueryRunner.runQueryInMaster(
-    `INSERT INTO sdui_blocks (id, block_key, name, description, version, body_json)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sdui_blocks (id, block_key, name, description, status, version, body_json, published_version)
+     VALUES (?, ?, ?, ?, 'draft', ?, ?, NULL)`,
     [id, data.block_key, data.name, data.description || null, startVer, bodyJson]
   );
   await exports.insertBlockVersionSnapshot(id, startVer, bodyJson, data.created_by || null);
@@ -435,7 +446,7 @@ exports.updateBlock = async function(id, updateData) {
   }
 
   const nextVer = await exports.getNextBlockVersionNumber(id);
-  const sets = ['body_json = ?', 'version = ?'];
+  const sets = ['body_json = ?', 'version = ?', `status = 'draft'`];
   const params = [bodyJsonStr, nextVer];
   if (updateData.name !== undefined) {
     sets.push('name = ?');
@@ -467,10 +478,21 @@ exports.rollbackBlockToVersion = async function(blockId, versionId) {
   if (!row || row.block_id !== blockId) return false;
   const bj = typeof row.body_json === 'string' ? row.body_json : JSON.stringify(row.body_json);
   await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_blocks SET body_json = ?, updated_at = NOW() WHERE id = ?`,
+    `UPDATE sdui_blocks SET body_json = ?, updated_at = NOW(), status = 'draft' WHERE id = ?`,
     [bj, blockId]
   );
   return true;
+};
+
+exports.publishBlock = async function(id, publishedBy) {
+  const row = await exports.getBlockById(id);
+  if (!row) return null;
+  const ver = parseInt(row.version, 10) || 1;
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_blocks SET status = 'published', published_version = ?, published_at = NOW(), published_by = ? WHERE id = ?`,
+    [ver, publishedBy || null, id]
+  );
+  return await exports.getBlockById(id);
 };
 
 exports.deleteBlock = async function(id) {
