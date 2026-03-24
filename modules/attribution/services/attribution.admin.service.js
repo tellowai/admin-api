@@ -142,6 +142,86 @@ function normalizeDeviceOs(query) {
   return 'all';
 }
 
+/** Derive os_family (ios/android/other) from install_os and os_name. */
+function deriveOsFamily(installOs, osName) {
+  const i = String(installOs || '').toLowerCase();
+  const n = String(osName || '').toLowerCase();
+  if (i === 'ios' || i === 'android') return i;
+  if (n.includes('ios') || n.includes('iphone')) return 'ios';
+  if (n.includes('android')) return 'android';
+  return 'other';
+}
+
+/** Stitch funnel rows: group by derived os_family, event_name. */
+function stitchFunnelByOs(rows) {
+  if (!rows || !rows.length) return [];
+  const byOs = {};
+  for (const r of rows) {
+    const osKey = deriveOsFamily(r.install_os, r.os_name);
+    if (!byOs[osKey]) {
+      byOs[osKey] = { os_family: osKey, events: {} };
+    }
+    const ev = r.event_name;
+    if (!byOs[osKey].events[ev]) {
+      byOs[osKey].events[ev] = { cnt: 0, total_revenue: 0 };
+    }
+    byOs[osKey].events[ev].cnt += Number(r.cnt) || 0;
+    byOs[osKey].events[ev].total_revenue += Number(r.total_revenue) || 0;
+  }
+  const out = [];
+  for (const [osKey, data] of Object.entries(byOs)) {
+    for (const [ev, vals] of Object.entries(data.events)) {
+      out.push({ os_family: osKey, event_name: ev, cnt: vals.cnt, total_revenue: vals.total_revenue });
+    }
+  }
+  return out.sort((a, b) => a.os_family.localeCompare(b.os_family) || a.event_name.localeCompare(b.event_name));
+}
+
+/** Stitch installs by OS: group by derived os_family. */
+function stitchInstallsByOs(rows) {
+  if (!rows || !rows.length) return [];
+  const byOs = {};
+  for (const r of rows) {
+    const osKey = deriveOsFamily(r.install_os, r.os_name);
+    byOs[osKey] = (byOs[osKey] || 0) + (Number(r.installs) || 0);
+  }
+  return Object.entries(byOs).map(([os_family, installs]) => ({ os_family, installs }))
+    .sort((a, b) => b.installs - a.installs);
+}
+
+/** Map empty auth_occasion to 'unknown' and merge duplicates. */
+function stitchSignupsByAuthOccasion(rows) {
+  if (!rows || !rows.length) return [];
+  const byKey = {};
+  for (const r of rows) {
+    const key = (r.auth_occasion && String(r.auth_occasion).trim()) ? String(r.auth_occasion) : 'unknown';
+    byKey[key] = (byKey[key] || 0) + (Number(r.signups) || 0);
+  }
+  return Object.entries(byKey).map(([auth_occasion, signups]) => ({ auth_occasion, signups }))
+    .sort((a, b) => b.signups - a.signups);
+}
+
+/** Stitch purchase repeat summary from byUser and byOrdinal. */
+function stitchPurchaseRepeatSummary(byUser, byOrdinal) {
+  const repeatBuyers = (byUser || []).filter((r) => Number(r.cnt) >= 2).length;
+  let total = 0;
+  let taggedFirst = 0;
+  let taggedRepeat = 0;
+  for (const r of byOrdinal || []) {
+    const n = Number(r.cnt) || 0;
+    const ord = parseInt(r.purchase_ordinal, 10) || 0;
+    total += n;
+    if (ord === 1) taggedFirst += n;
+    else if (ord >= 2) taggedRepeat += n;
+  }
+  return {
+    repeat_buyers_distinct_users: repeatBuyers,
+    purchase_events_total: total,
+    purchase_events_tagged_first: taggedFirst,
+    purchase_events_tagged_repeat: taggedRepeat
+  };
+}
+
 /**
  * ClickHouse analytics for one or more tracking link ids (object_id in raw events).
  * Installs chart is install-only; attribution_events includes all types (e.g. attributed_purchase + revenue);
@@ -156,6 +236,7 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
       clicks_total: 0,
       attribution_events: [],
       installs_by_day: [],
+      app_opens_by_day: [],
       purchases_by_day: [],
       events_by_plan: [],
       signups_by_auth_occasion: [],
@@ -176,18 +257,21 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     clicks,
     events,
     installsByDay,
+    appOpensByDay,
     purchasesByDay,
     eventsByPlan,
-    signupsByAuthOccasion,
-    funnelByOs,
-    installsByOs,
+    signupsRaw,
+    funnelRaw,
+    installsByOsRaw,
     attributionByChannel,
     clicksByChannel,
-    purchaseRepeatSummary
+    byUser,
+    byOrdinal
   ] = await Promise.all([
     AttributionChModel.queryClickCountForLinkIds(linkIds, startTs, endTs),
     AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryInstallsByDayForObjectIds(linkIds, startDate, endDate, os),
+    AttributionChModel.queryAppOpensByDayForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.querySignupsByAuthOccasionForObjectIds(linkIds, startDate, endDate, os),
@@ -195,21 +279,23 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     AttributionChModel.queryInstallsByOsForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryAttributionByChannelFromRawForObjectIds(linkIds, startDate, endDate, os),
     AttributionChModel.queryClicksByChannelForLinkIds(linkIds, startTs, endTs),
-    AttributionChModel.queryPurchaseRepeatSummaryForObjectIds(linkIds, startDate, endDate, os)
+    AttributionChModel.queryPurchaseCountsByUser(linkIds, startDate, endDate, os),
+    AttributionChModel.queryPurchasesByOrdinal(linkIds, startDate, endDate, os)
   ]);
   return {
     clicks_total: clicks.total,
     attribution_events: events,
     installs_by_day: installsByDay,
+    app_opens_by_day: appOpensByDay,
     purchases_by_day: purchasesByDay,
     events_by_plan: eventsByPlan,
-    signups_by_auth_occasion: signupsByAuthOccasion,
+    signups_by_auth_occasion: stitchSignupsByAuthOccasion(signupsRaw),
     device_os: os || 'all',
-    funnel_by_os: funnelByOs,
-    installs_by_os: installsByOs,
+    funnel_by_os: stitchFunnelByOs(funnelRaw),
+    installs_by_os: stitchInstallsByOs(installsByOsRaw),
     attribution_by_channel: attributionByChannel,
     clicks_by_channel: clicksByChannel,
-    purchase_repeat_summary: purchaseRepeatSummary
+    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal)
   };
 }
 
@@ -450,29 +536,42 @@ exports.getOverview = async function (query) {
   const osParam = useOsFilter ? deviceOs : null;
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
-  const [byChannel, clicksByCode, clicksByChannel, installsByDay, installsByOs, signupsByAuthOccasion, funnelByOs, purchaseRepeatSummary] =
-    await Promise.all([
-      useOsFilter
-        ? AttributionChModel.queryAttributionByChannelFromRaw(startDate, endDate, deviceOs)
-        : AttributionChModel.queryAttributionByChannel(startDate, endDate),
-      AttributionChModel.queryClicksByShortCode(startTs, endTs),
-      AttributionChModel.queryClicksByChannel(startTs, endTs),
-      AttributionChModel.queryInstallsByDay(startDate, endDate, osParam),
-      AttributionChModel.queryInstallsByOs(startDate, endDate, osParam),
-      AttributionChModel.querySignupsByAuthOccasion(startDate, endDate, osParam),
-      AttributionChModel.queryFunnelMetricsByOs(startDate, endDate),
-      AttributionChModel.queryPurchaseRepeatSummaryGlobal(startDate, endDate, osParam)
-    ]);
+  const [
+    byChannel,
+    clicksByCode,
+    clicksByChannel,
+    installsByDay,
+    appOpensByDay,
+    installsByOsRaw,
+    signupsRaw,
+    funnelRaw,
+    byUser,
+    byOrdinal
+  ] = await Promise.all([
+    useOsFilter
+      ? AttributionChModel.queryAttributionByChannelFromRaw(startDate, endDate, deviceOs)
+      : AttributionChModel.queryAttributionByChannel(startDate, endDate),
+    AttributionChModel.queryClicksByShortCode(startTs, endTs),
+    AttributionChModel.queryClicksByChannel(startTs, endTs),
+    AttributionChModel.queryInstallsByDay(startDate, endDate, osParam),
+    AttributionChModel.queryAppOpensByDay(startDate, endDate, osParam),
+    AttributionChModel.queryInstallsByOs(startDate, endDate, osParam),
+    AttributionChModel.querySignupsByAuthOccasion(startDate, endDate, osParam),
+    AttributionChModel.queryFunnelMetricsByOs(startDate, endDate),
+    AttributionChModel.queryPurchaseCountsByUser(null, startDate, endDate, osParam),
+    AttributionChModel.queryPurchasesByOrdinal(null, startDate, endDate, osParam)
+  ]);
   return {
     attribution_by_channel: byChannel,
     clicks_by_short_code: clicksByCode,
     clicks_by_channel: clicksByChannel,
     installs_by_day: installsByDay,
-    installs_by_os: installsByOs,
-    signups_by_auth_occasion: signupsByAuthOccasion,
-    funnel_by_os: funnelByOs,
+    app_opens_by_day: appOpensByDay,
+    installs_by_os: stitchInstallsByOs(installsByOsRaw),
+    signups_by_auth_occasion: stitchSignupsByAuthOccasion(signupsRaw),
+    funnel_by_os: stitchFunnelByOs(funnelRaw),
     device_os: deviceOs,
-    purchase_repeat_summary: purchaseRepeatSummary
+    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal)
   };
 };
 
