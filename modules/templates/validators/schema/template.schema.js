@@ -53,6 +53,8 @@ const customTextInputFieldSchema = Joi.object({
   default_text: Joi.string().allow('', null).optional(),
   linked_layer_names: Joi.array().items(Joi.string()).default([]).optional(),
   format: Joi.string().allow(null).optional(),
+  /** Moment format for AE/render; optional, falls back to `format` in workers when empty */
+  rendering_date_format: Joi.string().allow(null, '').optional(),
   nfd_field_code: Joi.string().allow(null).optional(), // Matched field code from niche data field definitions
   variable_name: Joi.string().allow(null, '').optional(),
   new_field: Joi.object({
