@@ -9,6 +9,27 @@ const {
   isValidBoothCode
 } = require('../lib/generate-booth-code');
 
+const CAMERA_PIPELINES = new Set(['normal', 'segmented']);
+const PREVIEW_ORIENTATIONS = new Set(['portrait', 'landscape']);
+
+function normalizeCameraPipeline(raw) {
+  if (raw == null || raw === '') return 'normal';
+  const v = String(raw).trim().toLowerCase();
+  if (CAMERA_PIPELINES.has(v)) return v;
+  const err = new Error('camera_pipeline must be "normal" or "segmented"');
+  err.status = 400;
+  throw err;
+}
+
+function normalizePreviewOrientation(raw) {
+  if (raw == null || raw === '') return 'portrait';
+  const v = String(raw).trim().toLowerCase();
+  if (PREVIEW_ORIENTATIONS.has(v)) return v;
+  const err = new Error('preview_orientation must be "portrait" or "landscape"');
+  err.status = 400;
+  throw err;
+}
+
 function stitchTemplates(links, templateRows) {
   const byId = new Map();
   for (const t of templateRows || []) {
@@ -20,6 +41,7 @@ function stitchTemplates(links, templateRows) {
       template_id: link.template_id,
       sort_order: link.sort_order,
       is_default: !!link.is_default,
+      preview_orientation: link.preview_orientation === 'landscape' ? 'landscape' : 'portrait',
       template_name: t ? t.template_name : null,
       template_code: t ? t.template_code : null,
       cf_r2_url: t ? t.cf_r2_url : null
@@ -89,6 +111,7 @@ exports.createBooth = async function (body, adminUserId) {
     booth_cover_image_bucket: body.booth_cover_image_bucket,
     booth_cover_image_key: body.booth_cover_image_key,
     camera_layout: body.camera_layout,
+    camera_pipeline: normalizeCameraPipeline(body.camera_pipeline),
     max_generations_per_device: body.max_generations_per_device,
     rate_limit_window_minutes: body.rate_limit_window_minutes,
     location_name: body.location_name,
@@ -111,6 +134,9 @@ exports.getBoothDetail = async function (photoBoothId) {
 };
 
 exports.updateBooth = async function (photoBoothId, body) {
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_pipeline')) {
+    body = { ...body, camera_pipeline: normalizeCameraPipeline(body.camera_pipeline) };
+  }
   if (body.booth_code != null) {
     const code = normalizeBoothCode(body.booth_code);
     if (!code) {
@@ -140,7 +166,9 @@ exports.archiveBooth = async function (photoBoothId) {
   await BoothAdminModel.archiveBooth(photoBoothId);
 };
 
-exports.addTemplate = async function (photoBoothId, { template_id, sort_order, is_default }) {
+exports.addTemplate = async function (photoBoothId, body) {
+  const { template_id, sort_order, is_default } = body || {};
+  const preview_orientation = normalizePreviewOrientation(body?.preview_orientation);
   const tpl = await TemplateModel.getTemplateById(template_id);
   if (!tpl) {
     const err = new Error('Template not found');
@@ -156,8 +184,25 @@ exports.addTemplate = async function (photoBoothId, { template_id, sort_order, i
     photo_booth_id: photoBoothId,
     template_id,
     sort_order: nextOrder,
-    is_default: !!is_default
+    is_default: !!is_default,
+    preview_orientation
   });
+  return exports.getBoothDetail(photoBoothId);
+};
+
+exports.patchTemplateLink = async function (photoBoothId, templateId, body) {
+  if (!Object.prototype.hasOwnProperty.call(body || {}, 'preview_orientation')) {
+    const err = new Error('preview_orientation is required');
+    err.status = 400;
+    throw err;
+  }
+  const preview_orientation = normalizePreviewOrientation(body.preview_orientation);
+  const n = await BoothAdminModel.updateTemplatePreviewOrientation(photoBoothId, templateId, preview_orientation);
+  if (!n) {
+    const err = new Error('Template link not found');
+    err.status = 404;
+    throw err;
+  }
   return exports.getBoothDetail(photoBoothId);
 };
 

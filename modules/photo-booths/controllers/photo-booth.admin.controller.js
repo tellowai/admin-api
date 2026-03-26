@@ -63,6 +63,19 @@ exports.addTemplate = async function (req, res) {
   }
 };
 
+exports.patchTemplateLink = async function (req, res) {
+  try {
+    const detail = await PhotoBoothAdminService.patchTemplateLink(
+      req.params.boothId,
+      req.params.templateId,
+      req.body || {}
+    );
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: detail });
+  } catch (e) {
+    return res.status(e.status || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: e.message });
+  }
+};
+
 exports.removeTemplate = async function (req, res) {
   try {
     const detail = await PhotoBoothAdminService.removeTemplate(req.params.boothId, req.params.templateId);

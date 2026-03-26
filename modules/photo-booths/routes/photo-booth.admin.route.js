@@ -22,6 +22,7 @@ module.exports = function (app) {
 
   app
     .route(p + '/:boothId/templates/:templateId')
+    .patch(AuthMiddleware.isAuthorizedJWT, Ctrl.patchTemplateLink)
     .delete(AuthMiddleware.isAuthorizedJWT, Ctrl.removeTemplate);
 
   app

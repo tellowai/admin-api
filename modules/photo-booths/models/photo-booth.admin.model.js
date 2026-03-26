@@ -37,10 +37,10 @@ exports.insertBooth = async function (row) {
   const sql = `
     INSERT INTO photo_booths (
       photo_booth_id, booth_name, booth_code, description, status,
-      booth_cover_image_bucket, booth_cover_image_key, camera_layout,
+      booth_cover_image_bucket, booth_cover_image_key, camera_layout, camera_pipeline,
       max_generations_per_device, rate_limit_window_minutes,
       location_name, event_name, starts_at, ends_at, additional_data, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const params = [
     row.photo_booth_id,
@@ -51,6 +51,7 @@ exports.insertBooth = async function (row) {
     row.booth_cover_image_bucket ?? null,
     row.booth_cover_image_key ?? null,
     row.camera_layout || 'side_by_side',
+    row.camera_pipeline || 'normal',
     row.max_generations_per_device ?? 5,
     row.rate_limit_window_minutes ?? 60,
     row.location_name ?? null,
@@ -67,7 +68,7 @@ exports.insertBooth = async function (row) {
 exports.updateBooth = async function (photoBoothId, patch) {
   const allowed = [
     'booth_name', 'booth_code', 'description', 'status',
-    'booth_cover_image_bucket', 'booth_cover_image_key', 'camera_layout',
+    'booth_cover_image_bucket', 'booth_cover_image_key', 'camera_layout', 'camera_pipeline',
     'max_generations_per_device', 'rate_limit_window_minutes',
     'location_name', 'event_name', 'starts_at', 'ends_at', 'additional_data'
   ];
@@ -101,7 +102,7 @@ exports.archiveBooth = async function (photoBoothId) {
 
 exports.listTemplateLinks = async function (photoBoothId) {
   const sql = `
-    SELECT photo_booth_template_id, template_id, sort_order, is_default
+    SELECT photo_booth_template_id, template_id, sort_order, is_default, preview_orientation
     FROM photo_booth_templates
     WHERE photo_booth_id = ? AND archived_at IS NULL
     ORDER BY sort_order ASC, photo_booth_template_id ASC
@@ -109,18 +110,35 @@ exports.listTemplateLinks = async function (photoBoothId) {
   return await mysqlQueryRunner.runQueryInSlave(sql, [photoBoothId]);
 };
 
-exports.insertTemplateLink = async function ({ photo_booth_id, template_id, sort_order, is_default }) {
+exports.insertTemplateLink = async function ({
+  photo_booth_id,
+  template_id,
+  sort_order,
+  is_default,
+  preview_orientation
+}) {
   const sql = `
-    INSERT INTO photo_booth_templates (photo_booth_id, template_id, sort_order, is_default)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO photo_booth_templates (photo_booth_id, template_id, sort_order, is_default, preview_orientation)
+    VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE archived_at = NULL, sort_order = VALUES(sort_order), is_default = VALUES(is_default)
   `;
   await mysqlQueryRunner.runQueryInMaster(sql, [
     photo_booth_id,
     template_id,
     sort_order ?? 0,
-    is_default ? 1 : 0
+    is_default ? 1 : 0,
+    preview_orientation || 'portrait'
   ]);
+};
+
+exports.updateTemplatePreviewOrientation = async function (photoBoothId, templateId, previewOrientation) {
+  const sql = `
+    UPDATE photo_booth_templates
+    SET preview_orientation = ?
+    WHERE photo_booth_id = ? AND template_id = ? AND archived_at IS NULL
+  `;
+  const res = await mysqlQueryRunner.runQueryInMaster(sql, [previewOrientation, photoBoothId, templateId]);
+  return res && res.affectedRows != null ? res.affectedRows : 0;
 };
 
 exports.archiveTemplateLink = async function (photoBoothId, templateId) {
