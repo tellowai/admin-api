@@ -38,9 +38,10 @@ exports.insertBooth = async function (row) {
     INSERT INTO photo_booths (
       photo_booth_id, booth_name, booth_code, description, status,
       booth_cover_image_bucket, booth_cover_image_key, camera_layout, camera_pipeline,
+      camera_panel_orientation, camera_panel_x, camera_panel_y,
       max_generations_per_device, rate_limit_window_minutes,
       location_name, event_name, starts_at, ends_at, additional_data, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const params = [
     row.photo_booth_id,
@@ -52,6 +53,9 @@ exports.insertBooth = async function (row) {
     row.booth_cover_image_key ?? null,
     row.camera_layout || 'side_by_side',
     row.camera_pipeline || 'normal',
+    row.camera_panel_orientation ?? 'landscape',
+    row.camera_panel_x ?? 0.5,
+    row.camera_panel_y ?? 0.5,
     row.max_generations_per_device ?? 5,
     row.rate_limit_window_minutes ?? 60,
     row.location_name ?? null,
@@ -69,6 +73,7 @@ exports.updateBooth = async function (photoBoothId, patch) {
   const allowed = [
     'booth_name', 'booth_code', 'description', 'status',
     'booth_cover_image_bucket', 'booth_cover_image_key', 'camera_layout', 'camera_pipeline',
+    'camera_panel_orientation', 'camera_panel_x', 'camera_panel_y',
     'max_generations_per_device', 'rate_limit_window_minutes',
     'location_name', 'event_name', 'starts_at', 'ends_at', 'additional_data'
   ];
@@ -102,7 +107,8 @@ exports.archiveBooth = async function (photoBoothId) {
 
 exports.listTemplateLinks = async function (photoBoothId) {
   const sql = `
-    SELECT photo_booth_template_id, template_id, sort_order, is_default, preview_orientation
+    SELECT photo_booth_template_id, template_id, sort_order, is_default, preview_orientation,
+           camera_pipeline, camera_panel_orientation, camera_panel_x, camera_panel_y
     FROM photo_booth_templates
     WHERE photo_booth_id = ? AND archived_at IS NULL
     ORDER BY sort_order ASC, photo_booth_template_id ASC
@@ -115,11 +121,18 @@ exports.insertTemplateLink = async function ({
   template_id,
   sort_order,
   is_default,
-  preview_orientation
+  preview_orientation,
+  camera_pipeline,
+  camera_panel_orientation,
+  camera_panel_x,
+  camera_panel_y
 }) {
   const sql = `
-    INSERT INTO photo_booth_templates (photo_booth_id, template_id, sort_order, is_default, preview_orientation)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO photo_booth_templates (
+      photo_booth_id, template_id, sort_order, is_default, preview_orientation,
+      camera_pipeline, camera_panel_orientation, camera_panel_x, camera_panel_y
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE archived_at = NULL, sort_order = VALUES(sort_order), is_default = VALUES(is_default)
   `;
   await mysqlQueryRunner.runQueryInMaster(sql, [
@@ -127,17 +140,38 @@ exports.insertTemplateLink = async function ({
     template_id,
     sort_order ?? 0,
     is_default ? 1 : 0,
-    preview_orientation || 'portrait'
+    preview_orientation || 'portrait',
+    camera_pipeline || 'normal',
+    camera_panel_orientation ?? 'landscape',
+    camera_panel_x ?? 0.5,
+    camera_panel_y ?? 0.5
   ]);
 };
 
-exports.updateTemplatePreviewOrientation = async function (photoBoothId, templateId, previewOrientation) {
+exports.patchTemplateLinkRow = async function (photoBoothId, templateId, patch) {
+  const allowed = [
+    'preview_orientation',
+    'camera_pipeline',
+    'camera_panel_orientation',
+    'camera_panel_x',
+    'camera_panel_y'
+  ];
+  const sets = [];
+  const params = [];
+  for (const key of allowed) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) {
+      sets.push(`${key} = ?`);
+      params.push(patch[key]);
+    }
+  }
+  if (!sets.length) return 0;
+  params.push(photoBoothId, templateId);
   const sql = `
     UPDATE photo_booth_templates
-    SET preview_orientation = ?
+    SET ${sets.join(', ')}
     WHERE photo_booth_id = ? AND template_id = ? AND archived_at IS NULL
   `;
-  const res = await mysqlQueryRunner.runQueryInMaster(sql, [previewOrientation, photoBoothId, templateId]);
+  const res = await mysqlQueryRunner.runQueryInMaster(sql, params);
   return res && res.affectedRows != null ? res.affectedRows : 0;
 };
 

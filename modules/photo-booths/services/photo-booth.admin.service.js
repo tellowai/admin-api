@@ -11,6 +11,7 @@ const {
 
 const CAMERA_PIPELINES = new Set(['normal', 'segmented']);
 const PREVIEW_ORIENTATIONS = new Set(['portrait', 'landscape']);
+const CAMERA_PANEL_ORIENTATIONS = new Set(['portrait', 'landscape']);
 
 function normalizeCameraPipeline(raw) {
   if (raw == null || raw === '') return 'normal';
@@ -30,6 +31,31 @@ function normalizePreviewOrientation(raw) {
   throw err;
 }
 
+function normalizeCameraPanelOrientation(raw) {
+  if (raw == null || raw === '') return 'landscape';
+  const v = String(raw).trim().toLowerCase();
+  if (CAMERA_PANEL_ORIENTATIONS.has(v)) return v;
+  const err = new Error('camera_panel_orientation must be "portrait" or "landscape"');
+  err.status = 400;
+  throw err;
+}
+
+function normalizeCameraPanelCoord(raw) {
+  if (raw == null || raw === '') return 0.5;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    const err = new Error('camera_panel_x and camera_panel_y must be numbers between 0 and 1');
+    err.status = 400;
+    throw err;
+  }
+  if (n < 0 || n > 1) {
+    const err = new Error('camera_panel_x and camera_panel_y must be between 0 and 1');
+    err.status = 400;
+    throw err;
+  }
+  return n;
+}
+
 function stitchTemplates(links, templateRows) {
   const byId = new Map();
   for (const t of templateRows || []) {
@@ -42,6 +68,10 @@ function stitchTemplates(links, templateRows) {
       sort_order: link.sort_order,
       is_default: !!link.is_default,
       preview_orientation: link.preview_orientation === 'landscape' ? 'landscape' : 'portrait',
+      camera_pipeline: link.camera_pipeline === 'segmented' ? 'segmented' : 'normal',
+      camera_panel_orientation: link.camera_panel_orientation === 'portrait' ? 'portrait' : 'landscape',
+      camera_panel_x: link.camera_panel_x != null ? Number(link.camera_panel_x) : 0.5,
+      camera_panel_y: link.camera_panel_y != null ? Number(link.camera_panel_y) : 0.5,
       template_name: t ? t.template_name : null,
       template_code: t ? t.template_code : null,
       cf_r2_url: t ? t.cf_r2_url : null
@@ -112,6 +142,9 @@ exports.createBooth = async function (body, adminUserId) {
     booth_cover_image_key: body.booth_cover_image_key,
     camera_layout: body.camera_layout,
     camera_pipeline: normalizeCameraPipeline(body.camera_pipeline),
+    camera_panel_orientation: normalizeCameraPanelOrientation(body.camera_panel_orientation),
+    camera_panel_x: normalizeCameraPanelCoord(body.camera_panel_x),
+    camera_panel_y: normalizeCameraPanelCoord(body.camera_panel_y),
     max_generations_per_device: body.max_generations_per_device,
     rate_limit_window_minutes: body.rate_limit_window_minutes,
     location_name: body.location_name,
@@ -134,8 +167,18 @@ exports.getBoothDetail = async function (photoBoothId) {
 };
 
 exports.updateBooth = async function (photoBoothId, body) {
+  body = { ...body };
   if (Object.prototype.hasOwnProperty.call(body, 'camera_pipeline')) {
-    body = { ...body, camera_pipeline: normalizeCameraPipeline(body.camera_pipeline) };
+    body.camera_pipeline = normalizeCameraPipeline(body.camera_pipeline);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_orientation')) {
+    body.camera_panel_orientation = normalizeCameraPanelOrientation(body.camera_panel_orientation);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_x')) {
+    body.camera_panel_x = normalizeCameraPanelCoord(body.camera_panel_x);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_y')) {
+    body.camera_panel_y = normalizeCameraPanelCoord(body.camera_panel_y);
   }
   if (body.booth_code != null) {
     const code = normalizeBoothCode(body.booth_code);
@@ -180,24 +223,50 @@ exports.addTemplate = async function (photoBoothId, body) {
   }
   const links = await BoothAdminModel.listTemplateLinks(photoBoothId);
   const nextOrder = sort_order != null ? sort_order : links.length;
+  const camera_pipeline = normalizeCameraPipeline(body?.camera_pipeline);
+  const camera_panel_orientation = normalizeCameraPanelOrientation(body?.camera_panel_orientation);
+  const camera_panel_x = normalizeCameraPanelCoord(body?.camera_panel_x);
+  const camera_panel_y = normalizeCameraPanelCoord(body?.camera_panel_y);
   await BoothAdminModel.insertTemplateLink({
     photo_booth_id: photoBoothId,
     template_id,
     sort_order: nextOrder,
     is_default: !!is_default,
-    preview_orientation
+    preview_orientation,
+    camera_pipeline,
+    camera_panel_orientation,
+    camera_panel_x,
+    camera_panel_y
   });
   return exports.getBoothDetail(photoBoothId);
 };
 
 exports.patchTemplateLink = async function (photoBoothId, templateId, body) {
-  if (!Object.prototype.hasOwnProperty.call(body || {}, 'preview_orientation')) {
-    const err = new Error('preview_orientation is required');
+  body = body || {};
+  const patch = {};
+  if (Object.prototype.hasOwnProperty.call(body, 'preview_orientation')) {
+    patch.preview_orientation = normalizePreviewOrientation(body.preview_orientation);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_pipeline')) {
+    patch.camera_pipeline = normalizeCameraPipeline(body.camera_pipeline);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_orientation')) {
+    patch.camera_panel_orientation = normalizeCameraPanelOrientation(body.camera_panel_orientation);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_x')) {
+    patch.camera_panel_x = normalizeCameraPanelCoord(body.camera_panel_x);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_y')) {
+    patch.camera_panel_y = normalizeCameraPanelCoord(body.camera_panel_y);
+  }
+  if (!Object.keys(patch).length) {
+    const err = new Error(
+      'At least one field required: preview_orientation, camera_pipeline, camera_panel_orientation, camera_panel_x, camera_panel_y'
+    );
     err.status = 400;
     throw err;
   }
-  const preview_orientation = normalizePreviewOrientation(body.preview_orientation);
-  const n = await BoothAdminModel.updateTemplatePreviewOrientation(photoBoothId, templateId, preview_orientation);
+  const n = await BoothAdminModel.patchTemplateLinkRow(photoBoothId, templateId, patch);
   if (!n) {
     const err = new Error('Template link not found');
     err.status = 404;
