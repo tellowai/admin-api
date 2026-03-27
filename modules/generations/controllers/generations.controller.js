@@ -3,6 +3,7 @@
 const path = require('path');
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
+const SupportModel = require('../../support/models/support.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const TimezoneService = require('../../analytics/services/timezone.service');
@@ -246,6 +247,25 @@ function enrichOutputPayloadsWithUrls(rows, urlByRefKey) {
     row.output_payload = payload;
   }
 }
+
+/**
+ * Credit ledger rows for a single media generation (same data as support ticket "Generation Transactions").
+ */
+exports.getGenerationCreditTransactions = async function (req, res) {
+  try {
+    const { mediaGenerationId } = req.params;
+    if (!mediaGenerationId) {
+      return res.status(400).send({ message: 'mediaGenerationId is required' });
+    }
+    const transactions = await SupportModel.getTransactionsForGeneration(mediaGenerationId);
+    res.json({ data: transactions });
+  } catch (err) {
+    console.error('Error fetching generation credit transactions:', err);
+    return res.status(500).send({
+      message: 'Internal server error while fetching generation credit transactions'
+    });
+  }
+};
 
 exports.getNodeExecutions = async function (req, res) {
   try {
