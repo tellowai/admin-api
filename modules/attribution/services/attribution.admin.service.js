@@ -706,3 +706,34 @@ exports.createPhotoboothAdminShareLink = async function ({ photo_booth_id, booth
 exports.getLatestPhotoboothShareLink = async function (photoBoothId) {
   return TrackingLinkModel.getLatestByPhotoBoothId(photoBoothId);
 };
+
+function parseTrackingLinkMetadata(raw) {
+  if (raw == null || raw === '') return {};
+  if (typeof raw === 'object' && !Array.isArray(raw)) return { ...raw };
+  if (typeof raw === 'string') {
+    try {
+      const o = JSON.parse(raw);
+      return typeof o === 'object' && o !== null && !Array.isArray(o) ? o : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Update sl_landing on the latest active share link for this booth (same short URL, new behavior on /sl).
+ */
+exports.updatePhotoboothShareLinkSlLanding = async function (photoBoothId, slLandingRaw) {
+  const link = await TrackingLinkModel.getLatestByPhotoBoothId(photoBoothId);
+  if (!link) {
+    const err = new Error('Share link not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const slLanding = slLandingRaw === 'website_only' ? 'website_only' : 'app_install';
+  const meta = parseTrackingLinkMetadata(link.metadata);
+  meta.sl_landing = slLanding;
+  await TrackingLinkModel.update(link.id, { sl_landing: slLanding, metadata: meta });
+  return TrackingLinkModel.getById(link.id);
+};

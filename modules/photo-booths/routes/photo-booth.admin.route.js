@@ -36,5 +36,6 @@ module.exports = function (app) {
   app
     .route(p + '/:boothId/share-link')
     .get(AuthMiddleware.isAuthorizedJWT, Ctrl.getShareLink)
-    .post(AuthMiddleware.isAuthorizedJWT, Ctrl.generateShareLink);
+    .post(AuthMiddleware.isAuthorizedJWT, Ctrl.generateShareLink)
+    .patch(AuthMiddleware.isAuthorizedJWT, Ctrl.patchShareLink);
 };

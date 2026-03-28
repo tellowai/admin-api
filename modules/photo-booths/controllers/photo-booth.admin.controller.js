@@ -146,3 +146,13 @@ exports.generateShareLink = async function (req, res) {
     return res.status(code).json({ message: e.message });
   }
 };
+
+exports.patchShareLink = async function (req, res) {
+  try {
+    const out = await PhotoBoothAdminService.patchPhotoboothShareLink(req.params.boothId, req.body || {});
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: out });
+  } catch (e) {
+    const code = e.statusCode || e.status || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: e.message });
+  }
+};

@@ -367,3 +367,22 @@ exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId,
   );
   return { link };
 };
+
+exports.patchPhotoboothShareLink = async function (photoBoothId, body = {}) {
+  const booth = await BoothAdminModel.getBoothById(photoBoothId);
+  if (!booth) {
+    const err = new Error('Photo booth not found');
+    err.status = 404;
+    throw err;
+  }
+  if (body.sl_landing === undefined || body.sl_landing === null) {
+    const err = new Error('sl_landing is required');
+    err.status = 400;
+    throw err;
+  }
+  const link = await AttributionAdminService.updatePhotoboothShareLinkSlLanding(
+    photoBoothId,
+    body.sl_landing
+  );
+  return { link };
+};
