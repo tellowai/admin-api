@@ -159,3 +159,123 @@ exports.getTemplatesByIds = async function (templateIds) {
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
 };
 
+function chStringLiteral(value) {
+  return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Map MySQL media_generations.job_status to values the admin generations UI expects.
+ */
+function mapMysqlJobStatusToUi(status) {
+  if (status == null) return status;
+  const s = String(status).toLowerCase();
+  if (s === 'in_progress') return 'processing';
+  if (s === 'submitted' || s === 'draft') return 'queued';
+  return s;
+}
+
+/**
+ * Terminal COMPLETED/FAILED events from ClickHouse for a fixed set of resource_generation_ids.
+ * @param {object} [filters] optional { template_id, job_status } same semantics as getGenerationsByDateRange
+ */
+exports.getTerminalEventsForMediaIds = async function (mediaGenerationIds, filters = {}) {
+  if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
+
+  const idsSql = mediaGenerationIds.map((id) => chStringLiteral(id)).join(',');
+
+  const conditions = [
+    `resource_generation_id IN (${idsSql})`,
+    `event_type IN ('COMPLETED', 'FAILED')`
+  ];
+
+  if (filters.job_status) {
+    if (filters.job_status === 'completed') {
+      conditions.push(`event_type = 'COMPLETED'`);
+    } else if (filters.job_status === 'failed') {
+      conditions.push(`event_type = 'FAILED'`);
+    }
+  }
+
+  if (filters.template_id) {
+    conditions.push(
+      `resource_generation_id IN (SELECT resource_generation_id FROM resource_generations WHERE template_id = ${chStringLiteral(filters.template_id)})`
+    );
+  }
+
+  const query = `
+    SELECT 
+      resource_generation_id AS media_generation_id,
+      if(event_type = 'COMPLETED', 'completed', 'failed') AS job_status,
+      JSONExtractString(additional_data, 'output', 'asset_bucket') AS output_media_bucket,
+      JSONExtractString(additional_data, 'output', 'asset_key') AS output_media_asset_key,
+      created_at AS completed_at,
+      if(event_type = 'FAILED', JSONExtractString(additional_data, 'error', 'message'), '') AS error_message
+    FROM resource_generation_events
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created_at DESC, resource_generation_id ASC
+  `;
+
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
+};
+
+exports.getMediaGenerationsByIds = async function (mediaGenerationIds) {
+  if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
+  const query = `
+    SELECT 
+      media_generation_id,
+      job_status,
+      output_media_bucket,
+      output_media_asset_key,
+      error_message,
+      media_type,
+      updated_at,
+      completed_at
+    FROM media_generations
+    WHERE media_generation_id IN (?)
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [mediaGenerationIds]);
+};
+
+/**
+ * Build one row per id (preserves order) for admin generations enrichment.
+ * Prefer ClickHouse terminal event; fall back to MySQL media_generations for in-flight jobs.
+ */
+exports.mergeGenerationRowsForIds = async function (orderedIds, filters = {}) {
+  if (!orderedIds || orderedIds.length === 0) return [];
+
+  const chRows = await exports.getTerminalEventsForMediaIds(orderedIds, filters);
+  const chById = new Map();
+  for (const row of chRows) {
+    if (row.media_generation_id && !chById.has(row.media_generation_id)) {
+      chById.set(row.media_generation_id, row);
+    }
+  }
+
+  const missingForMysql = orderedIds.filter((id) => !chById.has(id));
+  let mysqlById = new Map();
+  if (missingForMysql.length > 0) {
+    const mysqlRows = await exports.getMediaGenerationsByIds(missingForMysql);
+    mysqlById = new Map(mysqlRows.map((r) => [r.media_generation_id, r]));
+  }
+
+  const out = [];
+  for (const id of orderedIds) {
+    let row = chById.get(id);
+    if (!row) {
+      const mg = mysqlById.get(id);
+      if (!mg) continue;
+      row = {
+        media_generation_id: mg.media_generation_id,
+        job_status: mapMysqlJobStatusToUi(mg.job_status),
+        output_media_bucket: mg.output_media_bucket,
+        output_media_asset_key: mg.output_media_asset_key,
+        completed_at: mg.completed_at || mg.updated_at,
+        error_message: mg.error_message || ''
+      };
+    }
+    out.push(row);
+  }
+  return out;
+};
+

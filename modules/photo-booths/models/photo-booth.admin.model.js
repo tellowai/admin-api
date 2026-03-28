@@ -1,6 +1,13 @@
 'use strict';
 
+const moment = require('moment');
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+
+function formatDateForMySQL(date) {
+  if (!date) return null;
+  const m = moment(date);
+  return m.isValid() ? m.format('YYYY-MM-DD HH:mm:ss') : null;
+}
 
 exports.listBooths = async function ({ status, q, limit, offset }) {
   let sql = `
@@ -219,6 +226,55 @@ exports.updateTemplateSortBatch = async function (photoBoothId, templateIdToOrde
     AND template_id IN (${inPh})
   `;
   await mysqlQueryRunner.runQueryInMaster(sql, params);
+};
+
+/**
+ * Paginate booth generations by MySQL created_at (guest session time), ordered newest first.
+ * Optional jobStatus narrows via media_generations (aligns with admin generations filters).
+ */
+exports.listMediaGenerationIdsInDateRange = async function ({
+  photoBoothId,
+  startDate,
+  endDate,
+  templateId,
+  jobStatus,
+  limit,
+  offset
+}) {
+  const startFormatted = formatDateForMySQL(startDate);
+  const endFormatted = formatDateForMySQL(endDate);
+  if (!startFormatted || !endFormatted) {
+    return [];
+  }
+
+  let sql = `
+    SELECT pbg.media_generation_id
+    FROM photo_booth_generations pbg
+  `;
+  const params = [];
+
+  if (jobStatus) {
+    sql += ` INNER JOIN media_generations mg ON mg.media_generation_id = pbg.media_generation_id `;
+  }
+
+  sql += ` WHERE pbg.photo_booth_id = ? AND pbg.created_at >= ? AND pbg.created_at <= ?`;
+  params.push(photoBoothId, startFormatted, endFormatted);
+
+  if (templateId) {
+    sql += ` AND pbg.template_id = ?`;
+    params.push(templateId);
+  }
+
+  if (jobStatus === 'completed') {
+    sql += ` AND mg.job_status = 'completed'`;
+  } else if (jobStatus === 'failed') {
+    sql += ` AND mg.job_status IN ('failed', 'cancelled')`;
+  }
+
+  sql += ` ORDER BY pbg.created_at DESC LIMIT ? OFFSET ?`;
+  params.push(Number(limit) || 10, Number(offset) || 0);
+
+  return await mysqlQueryRunner.runQueryInSlave(sql, params);
 };
 
 exports.listGenerations = async function ({ photoBoothId, templateId, from, to, limit, offset }) {
