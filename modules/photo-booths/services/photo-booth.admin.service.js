@@ -181,26 +181,10 @@ exports.updateBooth = async function (photoBoothId, body) {
   if (Object.prototype.hasOwnProperty.call(body, 'camera_panel_y')) {
     body.camera_panel_y = normalizeCameraPanelCoord(body.camera_panel_y);
   }
-  if (body.booth_code != null) {
-    const code = normalizeBoothCode(body.booth_code);
-    if (!code) {
-      const err = new Error('booth_code cannot be empty');
-      err.status = 400;
-      throw err;
-    }
-    if (!isValidBoothCode(code)) {
-      const err = new Error(
-        'Invalid booth code: use format AAAA-BBB-CCC (4+3+3 characters, letters A–Z except I and O, digits 2–9, hyphens).'
-      );
-      err.status = 400;
-      throw err;
-    }
-    if (await BoothAdminModel.boothCodeExists(code, photoBoothId)) {
-      const err = new Error('This booth code is already in use');
-      err.status = 409;
-      throw err;
-    }
-    body = { ...body, booth_code: code };
+  if (Object.prototype.hasOwnProperty.call(body, 'booth_code')) {
+    const err = new Error('booth_code cannot be changed after the booth is created');
+    err.status = 400;
+    throw err;
   }
   await BoothAdminModel.updateBooth(photoBoothId, body);
   return BoothAdminModel.getBoothById(photoBoothId);

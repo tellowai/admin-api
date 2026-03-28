@@ -78,7 +78,7 @@ exports.insertBooth = async function (row) {
 
 exports.updateBooth = async function (photoBoothId, patch) {
   const allowed = [
-    'booth_name', 'booth_code', 'description', 'status',
+    'booth_name', 'description', 'status',
     'booth_cover_image_bucket', 'booth_cover_image_key', 'camera_layout', 'camera_pipeline',
     'camera_panel_orientation', 'camera_panel_x', 'camera_panel_y',
     'max_generations_per_device', 'rate_limit_window_minutes',
