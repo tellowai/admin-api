@@ -367,6 +367,9 @@ exports.listTrackingLinks = async function (pagination) {
   if (pagination.influencer_profile_id) {
     filters.influencer_profile_id = pagination.influencer_profile_id;
   }
+  if (pagination.photo_booth_id) {
+    filters.photo_booth_id = pagination.photo_booth_id;
+  }
   const rows = await TrackingLinkModel.list(limit, offset, filters);
   return { data: rows };
 };
@@ -389,6 +392,7 @@ exports.createTrackingLink = async function (payload, adminUserId) {
     }
   }
   const id = uuidv4();
+  const slLanding = payload.sl_landing === 'website_only' ? 'website_only' : 'app_install';
   await TrackingLinkModel.insert({
     id,
     short_code: shortCode,
@@ -410,7 +414,9 @@ exports.createTrackingLink = async function (payload, adminUserId) {
     external_link_key: payload.external_link_key,
     metadata: payload.metadata,
     schema_version: payload.schema_version != null ? Number(payload.schema_version) : 1,
-    influencer_profile_id: payload.influencer_profile_id || null
+    influencer_profile_id: payload.influencer_profile_id || null,
+    photo_booth_id: payload.photo_booth_id || null,
+    sl_landing: slLanding
   });
   return TrackingLinkModel.getById(id);
 };
@@ -463,7 +469,9 @@ exports.updateTrackingLink = async function (id, patch) {
 exports.listInfluencers = async function (pagination) {
   const limit = Math.min(Number(pagination.limit) || 50, 200);
   const offset = Number(pagination.offset) || 0;
-  const rows = await InfluencerModel.list(limit, offset);
+  const rows = await InfluencerModel.list(limit, offset, {
+    list_in_admin_only: !!pagination.admin_list_only
+  });
   const data = rows.map((r) => serializeInfluencer(r));
   return { data };
 };
@@ -486,6 +494,7 @@ exports.createInfluencer = async function (payload) {
     platform: platformForDb,
     profile_urls: profileUrls,
     is_active: true,
+    list_in_admin: payload.list_in_admin === false ? false : true,
     attribution_provider: normalizeProvider(payload.attribution_provider, 'internal'),
     external_profile_key: payload.external_profile_key,
     metadata: payload.metadata,
@@ -616,4 +625,84 @@ exports.getProfileStats = async function (profileId, query) {
   const deviceOs = normalizeDeviceOs(query);
   const analytics = await buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs);
   return { profile: serializeInfluencer(profile), links, analytics };
+};
+
+const MAGIC_PHOTOBOOTH_PROFILE_KEY = 'tellow_magic_photobooth';
+const MAGIC_PHOTOBOOTH_PROFILE_NAME = 'Tellow Magic Photobooth';
+
+/**
+ * System acquisition profile for admin-created magic photobooth share links.
+ */
+exports.ensureMagicPhotoboothProfile = async function () {
+  let row = await InfluencerModel.getByExternalProfileKey(MAGIC_PHOTOBOOTH_PROFILE_KEY);
+  if (row) return row;
+  const id = uuidv4();
+  await InfluencerModel.insert({
+    id,
+    name: MAGIC_PHOTOBOOTH_PROFILE_NAME,
+    handle: 'tellow_magic_photobooth',
+    platform: null,
+    profile_urls: null,
+    is_active: true,
+    list_in_admin: true,
+    attribution_provider: 'internal',
+    external_profile_key: MAGIC_PHOTOBOOTH_PROFILE_KEY,
+    metadata: { kind: 'photobooth_admin_bucket' },
+    schema_version: 1
+  });
+  return InfluencerModel.getById(id);
+};
+
+/**
+ * New tracking link under Tellow Magic Photobooth profile; deep link opens this booth in app / web funnel.
+ * opts.sl_landing: 'app_install' | 'website_only' — controls public /sl page behavior.
+ */
+exports.createPhotoboothAdminShareLink = async function ({ photo_booth_id, booth_code, booth_name }, adminUserId, opts = {}) {
+  if (!photo_booth_id || !booth_code) {
+    const err = new Error('photo_booth_id and booth_code are required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const slLanding = opts.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const profile = await exports.ensureMagicPhotoboothProfile();
+  const shortCode = await resolveShortCodeForCreate({});
+  const codeEnc = encodeURIComponent(String(booth_code).trim());
+  const safeName = String(booth_name || 'Magic booth').trim() || 'Magic booth';
+  const id = uuidv4();
+  const campaignSlug = String(booth_code).replace(/[^a-zA-Z0-9_]+/g, '_');
+  await TrackingLinkModel.insert({
+    id,
+    short_code: shortCode,
+    display_name: `${safeName} (${booth_code})`,
+    channel: 'offline',
+    platform: 'all',
+    placement_platform: null,
+    source_name: shortCode,
+    campaign: `photobooth_${campaignSlug}`,
+    utm_medium: 'offline',
+    ad_group: booth_code,
+    ad_name: `pb_${campaignSlug}`,
+    deep_link_path: `/photo-booth/${codeEnc}`,
+    redirect_url: null,
+    tags: ['photobooth', 'admin_magic_booth', 'generated_share'],
+    is_active: true,
+    created_by: adminUserId ? String(adminUserId) : null,
+    attribution_provider: 'internal',
+    external_link_key: null,
+    metadata: {
+      photo_booth_id,
+      booth_code: String(booth_code).trim(),
+      origin: 'admin_photobooth_detail',
+      sl_landing: slLanding
+    },
+    schema_version: 1,
+    influencer_profile_id: profile.id,
+    photo_booth_id,
+    sl_landing: slLanding
+  });
+  return TrackingLinkModel.getById(id);
+};
+
+exports.getLatestPhotoboothShareLink = async function (photoBoothId) {
+  return TrackingLinkModel.getLatestByPhotoBoothId(photoBoothId);
 };

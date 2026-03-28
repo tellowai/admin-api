@@ -8,7 +8,8 @@ exports.listTrackingLinks = async function (req, res) {
     const out = await AttributionAdminService.listTrackingLinks({
       limit: req.query.limit,
       offset: req.query.offset,
-      influencer_profile_id: req.query.influencer_profile_id
+      influencer_profile_id: req.query.influencer_profile_id,
+      photo_booth_id: req.query.photo_booth_id
     });
     return res.status(HTTP_STATUS_CODES.OK).json(out);
   } catch (err) {
@@ -39,9 +40,12 @@ exports.updateTrackingLink = async function (req, res) {
 
 exports.listInfluencers = async function (req, res) {
   try {
+    const q = req.query.admin_list_only ?? req.query.list_in_admin;
+    const adminOnly = q === '1' || q === 'true' || q === true;
     const out = await AttributionAdminService.listInfluencers({
       limit: req.query.limit,
-      offset: req.query.offset
+      offset: req.query.offset,
+      admin_list_only: adminOnly
     });
     return res.status(HTTP_STATUS_CODES.OK).json(out);
   } catch (err) {

@@ -12,19 +12,31 @@ function metadataToDb(val) {
   }
 }
 
-exports.list = async function (limit, offset) {
-  const q = `
+exports.list = async function (limit, offset, filters = {}) {
+  const params = [];
+  let q = `
     SELECT *
     FROM influencer_profiles
-    ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
+    WHERE 1=1
   `;
-  return mysqlQueryRunner.runQueryInSlave(q, [limit, offset]);
+  if (filters.list_in_admin_only) {
+    q += ` AND list_in_admin = 1`;
+  }
+  q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+  return mysqlQueryRunner.runQueryInSlave(q, params);
 };
 
 exports.getById = async function (id) {
   const q = `SELECT * FROM influencer_profiles WHERE id = ? LIMIT 1`;
   const rows = await mysqlQueryRunner.runQueryInSlave(q, [id]);
+  return rows && rows[0] ? rows[0] : null;
+};
+
+exports.getByExternalProfileKey = async function (key) {
+  if (!key) return null;
+  const q = `SELECT * FROM influencer_profiles WHERE external_profile_key = ? LIMIT 1`;
+  const rows = await mysqlQueryRunner.runQueryInSlave(q, [String(key)]);
   return rows && rows[0] ? rows[0] : null;
 };
 
@@ -43,10 +55,12 @@ exports.insert = async function (row) {
   const q = `
     INSERT INTO influencer_profiles (
       id, name, handle, platform, profile_urls,
-      is_active,
+      is_active, list_in_admin,
       attribution_provider, external_profile_key, metadata, schema_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
+  const listInAdmin =
+    row.list_in_admin === undefined || row.list_in_admin === null ? 1 : row.list_in_admin ? 1 : 0;
   return mysqlQueryRunner.runQueryInMaster(q, [
     row.id,
     row.name,
@@ -54,6 +68,7 @@ exports.insert = async function (row) {
     row.platform || null,
     profileUrlsToDb(row.profile_urls),
     row.is_active !== false ? 1 : 0,
+    listInAdmin,
     row.attribution_provider || 'internal',
     row.external_profile_key || null,
     metadataToDb(row.metadata),
@@ -69,6 +84,7 @@ exports.update = async function (id, patch) {
     'handle',
     'platform',
     'is_active',
+    'list_in_admin',
     'attribution_provider',
     'external_profile_key',
     'schema_version'
@@ -76,7 +92,7 @@ exports.update = async function (id, patch) {
   allowed.forEach((k) => {
     if (patch[k] !== undefined) {
       fields.push(`${k} = ?`);
-      if (k === 'is_active') vals.push(patch[k] ? 1 : 0);
+      if (k === 'is_active' || k === 'list_in_admin') vals.push(patch[k] ? 1 : 0);
       else vals.push(patch[k]);
     }
   });

@@ -8,6 +8,7 @@ const {
   normalizeBoothCode,
   isValidBoothCode
 } = require('../lib/generate-booth-code');
+const AttributionAdminService = require('../../attribution/services/attribution.admin.service');
 
 const CAMERA_PIPELINES = new Set(['normal', 'segmented']);
 const PREVIEW_ORIENTATIONS = new Set(['portrait', 'landscape']);
@@ -334,4 +335,35 @@ exports.getStats = async function (photoBoothId) {
     BoothAdminModel.countGenerationsSince(photoBoothId, d1)
   ]);
   return { data: { generations_last_7d: c7, generations_last_24h: c24 } };
+};
+
+exports.getPhotoboothShareLink = async function (photoBoothId) {
+  const booth = await BoothAdminModel.getBoothById(photoBoothId);
+  if (!booth) {
+    const err = new Error('Photo booth not found');
+    err.status = 404;
+    throw err;
+  }
+  const link = await AttributionAdminService.getLatestPhotoboothShareLink(photoBoothId);
+  return { link };
+};
+
+exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId, body = {}) {
+  const booth = await BoothAdminModel.getBoothById(photoBoothId);
+  if (!booth) {
+    const err = new Error('Photo booth not found');
+    err.status = 404;
+    throw err;
+  }
+  const slLanding = body.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const link = await AttributionAdminService.createPhotoboothAdminShareLink(
+    {
+      photo_booth_id: booth.photo_booth_id,
+      booth_code: booth.booth_code,
+      booth_name: booth.booth_name
+    },
+    adminUserId,
+    { sl_landing: slLanding }
+  );
+  return { link };
 };

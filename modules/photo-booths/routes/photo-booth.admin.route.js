@@ -32,4 +32,9 @@ module.exports = function (app) {
   app.route(p + '/:boothId/generations').get(AuthMiddleware.isAuthorizedJWT, Ctrl.listGenerations);
 
   app.route(p + '/:boothId/stats').get(AuthMiddleware.isAuthorizedJWT, Ctrl.getStats);
+
+  app
+    .route(p + '/:boothId/share-link')
+    .get(AuthMiddleware.isAuthorizedJWT, Ctrl.getShareLink)
+    .post(AuthMiddleware.isAuthorizedJWT, Ctrl.generateShareLink);
 };

@@ -23,6 +23,10 @@ exports.list = async function (limit, offset, filters = {}) {
     q += ` AND influencer_profile_id = ?`;
     params.push(filters.influencer_profile_id);
   }
+  if (filters.photo_booth_id) {
+    q += ` AND photo_booth_id = ?`;
+    params.push(filters.photo_booth_id);
+  }
   q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
   params.push(limit, offset);
   return mysqlQueryRunner.runQueryInSlave(q, params);
@@ -50,16 +54,30 @@ exports.getByShortCode = async function (shortCode) {
   return rows && rows[0] ? rows[0] : null;
 };
 
+exports.getLatestByPhotoBoothId = async function (photoBoothId) {
+  if (!photoBoothId) return null;
+  const q = `
+    SELECT *
+    FROM tracking_links
+    WHERE photo_booth_id = ? AND is_active = 1
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(q, [photoBoothId]);
+  return rows && rows[0] ? rows[0] : null;
+};
+
 exports.insert = async function (row) {
   const q = `
     INSERT INTO tracking_links (
       id, short_code, display_name, channel, platform, placement_platform, source_name, campaign, utm_medium, ad_group, ad_name,
       deep_link_path, redirect_url, tags, is_active, created_by,
-      attribution_provider, external_link_key, metadata, schema_version, influencer_profile_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      attribution_provider, external_link_key, metadata, schema_version, influencer_profile_id, photo_booth_id, sl_landing
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const tagsJson = row.tags != null ? JSON.stringify(row.tags) : null;
   const metadataJson = metadataToDb(row.metadata);
+  const slLanding = row.sl_landing === 'website_only' ? 'website_only' : 'app_install';
   return mysqlQueryRunner.runQueryInMaster(q, [
     row.id,
     row.short_code,
@@ -81,7 +99,9 @@ exports.insert = async function (row) {
     row.external_link_key || null,
     metadataJson,
     row.schema_version != null ? row.schema_version : 1,
-    row.influencer_profile_id || null
+    row.influencer_profile_id || null,
+    row.photo_booth_id || null,
+    slLanding
   ]);
 };
 
@@ -105,7 +125,9 @@ exports.update = async function (id, patch) {
     attribution_provider: 'attribution_provider',
     external_link_key: 'external_link_key',
     schema_version: 'schema_version',
-    influencer_profile_id: 'influencer_profile_id'
+    influencer_profile_id: 'influencer_profile_id',
+    photo_booth_id: 'photo_booth_id',
+    sl_landing: 'sl_landing'
   };
   Object.keys(map).forEach((k) => {
     if (patch[k] !== undefined) {

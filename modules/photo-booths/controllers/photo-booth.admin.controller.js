@@ -123,3 +123,26 @@ exports.getStats = async function (req, res) {
     return res.status(e.status || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: e.message });
   }
 };
+
+exports.getShareLink = async function (req, res) {
+  try {
+    const out = await PhotoBoothAdminService.getPhotoboothShareLink(req.params.boothId);
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: out });
+  } catch (e) {
+    return res.status(e.status || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: e.message });
+  }
+};
+
+exports.generateShareLink = async function (req, res) {
+  try {
+    const out = await PhotoBoothAdminService.generatePhotoboothShareLink(
+      req.params.boothId,
+      req.user?.userId,
+      req.body || {}
+    );
+    return res.status(HTTP_STATUS_CODES.CREATED).json({ data: out });
+  } catch (e) {
+    const code = e.statusCode || e.status || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: e.message });
+  }
+};
