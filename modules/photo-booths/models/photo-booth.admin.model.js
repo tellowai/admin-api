@@ -44,11 +44,13 @@ exports.insertBooth = async function (row) {
   const sql = `
     INSERT INTO photo_booths (
       photo_booth_id, booth_name, booth_code, description, status,
-      booth_cover_image_bucket, booth_cover_image_key, camera_layout, camera_pipeline,
+      booth_cover_image_bucket, booth_cover_image_key,
+      booth_cover_lottie_bucket, booth_cover_lottie_key,
+      camera_layout, camera_pipeline,
       camera_panel_orientation, camera_panel_x, camera_panel_y,
       max_generations_per_device, rate_limit_window_minutes,
       location_name, event_name, starts_at, ends_at, additional_data, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const params = [
     row.photo_booth_id,
@@ -58,6 +60,8 @@ exports.insertBooth = async function (row) {
     row.status || 'inactive',
     row.booth_cover_image_bucket ?? null,
     row.booth_cover_image_key ?? null,
+    row.booth_cover_lottie_bucket ?? null,
+    row.booth_cover_lottie_key ?? null,
     row.camera_layout || 'side_by_side',
     row.camera_pipeline || 'normal',
     row.camera_panel_orientation ?? 'landscape',
@@ -79,7 +83,9 @@ exports.insertBooth = async function (row) {
 exports.updateBooth = async function (photoBoothId, patch) {
   const allowed = [
     'booth_name', 'description', 'status',
-    'booth_cover_image_bucket', 'booth_cover_image_key', 'camera_layout', 'camera_pipeline',
+    'booth_cover_image_bucket', 'booth_cover_image_key',
+    'booth_cover_lottie_bucket', 'booth_cover_lottie_key',
+    'camera_layout', 'camera_pipeline',
     'camera_panel_orientation', 'camera_panel_x', 'camera_panel_y',
     'max_generations_per_device', 'rate_limit_window_minutes',
     'location_name', 'event_name', 'starts_at', 'ends_at', 'additional_data'

@@ -1,6 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const config = require('../../../config/config');
 const BoothAdminModel = require('../models/photo-booth.admin.model');
 const TemplateModel = require('../../templates/models/template.model');
 const {
@@ -55,6 +56,27 @@ function normalizeCameraPanelCoord(raw) {
     throw err;
   }
   return n;
+}
+
+/**
+ * Public R2 URLs for booth assets (same pattern as template.controller bodymovin_json_r2_url / clip asset_r2_url).
+ * @param {Object|null} booth
+ * @returns {Object|null}
+ */
+function enrichBoothPublicUrls(booth) {
+  if (!booth || typeof booth !== 'object') return booth;
+  const base = String(config.os2?.r2?.public?.bucketUrl || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const next = { ...booth };
+  const lottieKey = next.booth_cover_lottie_key;
+  if (lottieKey && base) {
+    const k = String(lottieKey).replace(/^\/+/, '');
+    next.booth_cover_lottie_url = `${base}/${k}`;
+  } else {
+    next.booth_cover_lottie_url = null;
+  }
+  return next;
 }
 
 function stitchTemplates(links, templateRows) {
@@ -141,6 +163,8 @@ exports.createBooth = async function (body, adminUserId) {
     status: body.status || 'inactive',
     booth_cover_image_bucket: body.booth_cover_image_bucket,
     booth_cover_image_key: body.booth_cover_image_key,
+    booth_cover_lottie_bucket: body.booth_cover_lottie_bucket,
+    booth_cover_lottie_key: body.booth_cover_lottie_key,
     camera_layout: body.camera_layout,
     camera_pipeline: normalizeCameraPipeline(body.camera_pipeline),
     camera_panel_orientation: normalizeCameraPanelOrientation(body.camera_panel_orientation),
@@ -155,11 +179,11 @@ exports.createBooth = async function (body, adminUserId) {
     additional_data: body.additional_data,
     created_by: adminUserId || null
   });
-  return BoothAdminModel.getBoothById(id);
+  return enrichBoothPublicUrls(await BoothAdminModel.getBoothById(id));
 };
 
 exports.getBoothDetail = async function (photoBoothId) {
-  const booth = await BoothAdminModel.getBoothById(photoBoothId);
+  const booth = enrichBoothPublicUrls(await BoothAdminModel.getBoothById(photoBoothId));
   if (!booth) return null;
   const links = await BoothAdminModel.listTemplateLinks(photoBoothId);
   const ids = [...new Set(links.map((l) => l.template_id))];
@@ -187,7 +211,7 @@ exports.updateBooth = async function (photoBoothId, body) {
     throw err;
   }
   await BoothAdminModel.updateBooth(photoBoothId, body);
-  return BoothAdminModel.getBoothById(photoBoothId);
+  return enrichBoothPublicUrls(await BoothAdminModel.getBoothById(photoBoothId));
 };
 
 exports.archiveBooth = async function (photoBoothId) {
