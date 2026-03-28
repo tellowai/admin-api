@@ -30,9 +30,38 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
   const startFormatted = formatDateForMySQL(startDate);
   let endFormatted = formatDateForMySQL(endDate);
 
-  if(!endFormatted) {
-    // defaults to end of today if not valid
+  if (!endFormatted) {
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+
+  /** Template filter: two simple queries (resource_generations by range, then events by ID) — no subquery on events. */
+  if (filters.template_id) {
+    const idRows = await exports.listResourceGenerationIdsByTemplateCreatedRange(
+      filters.template_id,
+      startDate,
+      endDate,
+      limit,
+      offset
+    );
+    const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
+    if (!orderedIds.length) return [];
+    const events = await exports.getTerminalEventsForMediaIds(orderedIds, {
+      job_status: filters.job_status,
+      eventStartFormatted: startFormatted,
+      eventEndFormatted: endFormatted
+    });
+    const byId = new Map();
+    for (const row of events) {
+      if (row.media_generation_id && !byId.has(row.media_generation_id)) {
+        byId.set(row.media_generation_id, row);
+      }
+    }
+    const out = [];
+    for (const id of orderedIds) {
+      const row = byId.get(id);
+      if (row) out.push(row);
+    }
+    return out;
   }
 
   let conditions = [
@@ -50,13 +79,6 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     }
   } else {
     conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
-  }
-
-  if (filters.template_id) {
-    // We need to filter by template_id which is in resource_generations table.
-    // ClickHouse JOINs can be heavy, but here we can use a subquery for IDs if it's small or IN clause.
-    // Given the zero-join policy (though ClickHouse is different), let's keep it efficient.
-    conditions.push(`resource_generation_id IN (SELECT resource_generation_id FROM resource_generations WHERE template_id = '${filters.template_id}')`);
   }
 
   const query = `
@@ -164,6 +186,38 @@ function chStringLiteral(value) {
 }
 
 /**
+ * Simple range scan on resource_generations (no join / subquery).
+ */
+exports.listResourceGenerationIdsByTemplateCreatedRange = async function (
+  templateId,
+  startDate,
+  endDate,
+  limit,
+  offset
+) {
+  if (!templateId) return [];
+  const startFormatted = formatDateForMySQL(startDate);
+  let endFormatted = formatDateForMySQL(endDate);
+  if (!endFormatted) {
+    endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+  const tid = chStringLiteral(templateId);
+  const lim = parseInt(limit, 10);
+  const off = parseInt(offset, 10);
+  const query = `
+    SELECT resource_generation_id
+    FROM resource_generations
+    WHERE template_id = ${tid}
+      AND created_at >= '${startFormatted}'
+      AND created_at <= '${endFormatted}'
+    ORDER BY created_at DESC, resource_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Map MySQL media_generations.job_status to values the admin generations UI expects.
  */
 function mapMysqlJobStatusToUi(status) {
@@ -176,7 +230,7 @@ function mapMysqlJobStatusToUi(status) {
 
 /**
  * Terminal COMPLETED/FAILED events from ClickHouse for a fixed set of resource_generation_ids.
- * @param {object} [filters] optional { template_id, job_status } same semantics as getGenerationsByDateRange
+ * @param {object} [filters] optional { job_status, eventStartFormatted, eventEndFormatted }
  */
 exports.getTerminalEventsForMediaIds = async function (mediaGenerationIds, filters = {}) {
   if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
@@ -196,10 +250,11 @@ exports.getTerminalEventsForMediaIds = async function (mediaGenerationIds, filte
     }
   }
 
-  if (filters.template_id) {
-    conditions.push(
-      `resource_generation_id IN (SELECT resource_generation_id FROM resource_generations WHERE template_id = ${chStringLiteral(filters.template_id)})`
-    );
+  if (filters.eventStartFormatted) {
+    conditions.push(`created_at >= '${filters.eventStartFormatted}'`);
+  }
+  if (filters.eventEndFormatted) {
+    conditions.push(`created_at <= '${filters.eventEndFormatted}'`);
   }
 
   const query = `

@@ -228,9 +228,35 @@ exports.updateTemplateSortBatch = async function (photoBoothId, templateIdToOrde
   await mysqlQueryRunner.runQueryInMaster(sql, params);
 };
 
+function mysqlJobStatusMatchesFilter(mgJobStatus, filter) {
+  if (!filter) return true;
+  if (filter === 'completed') return mgJobStatus === 'completed';
+  if (filter === 'failed') return mgJobStatus === 'failed' || mgJobStatus === 'cancelled';
+  return true;
+}
+
+/**
+ * Single-table page from photo_booth_generations (no joins).
+ */
+async function listPbgIdsPage({ photoBoothId, startFormatted, endFormatted, templateId, limit, offset }) {
+  let sql = `
+    SELECT media_generation_id
+    FROM photo_booth_generations
+    WHERE photo_booth_id = ? AND created_at >= ? AND created_at <= ?
+  `;
+  const params = [photoBoothId, startFormatted, endFormatted];
+  if (templateId) {
+    sql += ` AND template_id = ?`;
+    params.push(templateId);
+  }
+  sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(Number(limit) || 10, Number(offset) || 0);
+  return await mysqlQueryRunner.runQueryInSlave(sql, params);
+}
+
 /**
  * Paginate booth generations by MySQL created_at (guest session time), ordered newest first.
- * Optional jobStatus narrows via media_generations (aligns with admin generations filters).
+ * When jobStatus is set: scan pbg in batches, load job_status via simple IN (?) on media_generations, filter in memory (no JOIN).
  */
 exports.listMediaGenerationIdsInDateRange = async function ({
   photoBoothId,
@@ -247,34 +273,54 @@ exports.listMediaGenerationIdsInDateRange = async function ({
     return [];
   }
 
-  let sql = `
-    SELECT pbg.media_generation_id
-    FROM photo_booth_generations pbg
-  `;
-  const params = [];
+  const lim = Number(limit) || 10;
+  const off = Number(offset) || 0;
 
-  if (jobStatus) {
-    sql += ` INNER JOIN media_generations mg ON mg.media_generation_id = pbg.media_generation_id `;
+  if (!jobStatus) {
+    return listPbgIdsPage({
+      photoBoothId,
+      startFormatted,
+      endFormatted,
+      templateId,
+      limit: lim,
+      offset: off
+    });
   }
 
-  sql += ` WHERE pbg.photo_booth_id = ? AND pbg.created_at >= ? AND pbg.created_at <= ?`;
-  params.push(photoBoothId, startFormatted, endFormatted);
+  const needCount = off + lim;
+  const matched = [];
+  const batchSize = 200;
+  const maxRowsScanned = 10000;
+  let scanOffset = 0;
 
-  if (templateId) {
-    sql += ` AND pbg.template_id = ?`;
-    params.push(templateId);
+  while (matched.length < needCount && scanOffset < maxRowsScanned) {
+    const batch = await listPbgIdsPage({
+      photoBoothId,
+      startFormatted,
+      endFormatted,
+      templateId,
+      limit: batchSize,
+      offset: scanOffset
+    });
+    if (!batch.length) break;
+
+    const ids = batch.map((r) => r.media_generation_id).filter(Boolean);
+    const statusRows = await exports.getMediaGenerationJobStatusByIds(ids);
+    const statusById = new Map(statusRows.map((r) => [r.media_generation_id, r.job_status]));
+
+    for (const row of batch) {
+      const id = row.media_generation_id;
+      if (!id) continue;
+      const st = statusById.get(id);
+      if (!mysqlJobStatusMatchesFilter(st, jobStatus)) continue;
+      matched.push({ media_generation_id: id });
+    }
+
+    scanOffset += batch.length;
+    if (batch.length < batchSize) break;
   }
 
-  if (jobStatus === 'completed') {
-    sql += ` AND mg.job_status = 'completed'`;
-  } else if (jobStatus === 'failed') {
-    sql += ` AND mg.job_status IN ('failed', 'cancelled')`;
-  }
-
-  sql += ` ORDER BY pbg.created_at DESC LIMIT ? OFFSET ?`;
-  params.push(Number(limit) || 10, Number(offset) || 0);
-
-  return await mysqlQueryRunner.runQueryInSlave(sql, params);
+  return matched.slice(off, off + lim);
 };
 
 exports.listGenerations = async function ({ photoBoothId, templateId, from, to, limit, offset }) {
