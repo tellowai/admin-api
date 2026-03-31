@@ -26,7 +26,14 @@ class PaymentModeConfigService {
         allow_alacarte: true,
         subscription_providers: ['revenuecat'],
         alacarte_providers: ['revenuecat'],
-        one_time_providers: ['revenuecat','razorpay', 'dodopayments', 'google_play', 'apple_iap']
+        one_time_providers: ['revenuecat','razorpay', 'dodopayments', 'google_play', 'apple_iap'],
+        // Per-platform provider overrides
+        ios_subscription_providers: ['revenuecat'],
+        android_subscription_providers: ['revenuecat'],
+        ios_alacarte_providers: ['revenuecat'],
+        android_alacarte_providers: ['revenuecat'],
+        ios_one_time_providers: ['revenuecat'],
+        android_one_time_providers: ['google_play'],
       };
 
       const configMap = { ...defaults };
