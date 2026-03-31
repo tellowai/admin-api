@@ -1,12 +1,14 @@
 'use strict';
 
-const path = require('path');
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
+const BoothAdminModel = require('../../photo-booths/models/photo-booth.admin.model');
 const SupportModel = require('../../support/models/support.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const TimezoneService = require('../../analytics/services/timezone.service');
+
+const BOOTH_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Fixed page size for list generations; UI sends only page=1,2,3... */
 const PER_PAGE = 10;
@@ -38,9 +40,32 @@ exports.listGenerations = async function (req, res) {
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const { template_id, job_status } = req.query;
+    const photo_booth_id = req.query.photo_booth_id ? String(req.query.photo_booth_id).trim() : '';
+    if (photo_booth_id && !BOOTH_UUID_RE.test(photo_booth_id)) {
+      return res.status(400).send({
+        message: 'Invalid photo_booth_id'
+      });
+    }
 
-    // Page-based fetch only; no count. UI sends page=1,2,3...; offset/limit handled here.
-    const generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, { template_id, job_status });
+    let generations;
+    if (photo_booth_id) {
+      const idRows = await BoothAdminModel.listMediaGenerationIdsInDateRange({
+        photoBoothId: photo_booth_id,
+        startDate,
+        endDate,
+        templateId: template_id || null,
+        jobStatus: job_status || null,
+        limit: PER_PAGE,
+        offset: (page - 1) * PER_PAGE
+      });
+      const orderedIds = idRows.map((r) => r.media_generation_id).filter(Boolean);
+      if (orderedIds.length === 0) {
+        return res.json({ data: [] });
+      }
+      generations = await generationsModel.mergeGenerationRowsForIds(orderedIds, {});
+    } else {
+      generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, { template_id, job_status });
+    }
 
     const storage = StorageFactory.getProvider();
 

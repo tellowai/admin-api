@@ -2,17 +2,30 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+const VALID_PLAN_TYPES = ['single', 'bundle', 'credits', 'addon'];
+
 /**
  * List payment plans with pagination.
  * @param {Object} pagination - { limit, offset }
- * @param {Object} [options] - { isActive: true|false } filter by status; omit for all
+ * @param {Object} [options] - { isActive: true|false } filter by status; omit for all.
+ *   { planType: 'single'|'bundle'|'credits'|'addon' } optional filter by plan_type.
  */
 exports.listPlans = async function (pagination, options = {}) {
-  const whereClause = options.isActive === true
-    ? 'WHERE is_active = 1'
-    : options.isActive === false
-      ? 'WHERE is_active = 0'
-      : '';
+  const conditions = [];
+  const queryParams = [];
+
+  if (options.isActive === true) {
+    conditions.push('is_active = 1');
+  } else if (options.isActive === false) {
+    conditions.push('is_active = 0');
+  }
+
+  if (options.planType && VALID_PLAN_TYPES.includes(options.planType)) {
+    conditions.push('plan_type = ?');
+    queryParams.push(options.planType);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   const query = `
     SELECT 
       pp_id,
@@ -38,7 +51,8 @@ exports.listPlans = async function (pagination, options = {}) {
     LIMIT ? OFFSET ?
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, [pagination.limit, pagination.offset]);
+  queryParams.push(pagination.limit, pagination.offset);
+  return await mysqlQueryRunner.runQueryInSlave(query, queryParams);
 };
 
 exports.getUIConfigsForPlans = async function (planIds) {

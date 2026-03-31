@@ -33,7 +33,7 @@ const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
 
 /**
  * Compute default alacarte_price (INR) from credits when not explicitly provided.
- * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 499.
+ * Formula: rawInr = floor((credits/50)*83.33), tier = rawInr<=49 ? 49 : (floor(rawInr/50)*50)+49, cap at 999.
  * @param {number} credits
  * @returns {number|null} Computed price in INR, or null if credits invalid
  */
@@ -41,7 +41,7 @@ function computeAlacartePriceFromCredits(credits) {
   if (!credits || credits < 1) return null;
   const rawInr = Math.floor((credits / 50) * 83.33);
   const tier = rawInr <= 49 ? 49 : (Math.floor(rawInr / 50) * 50) + 49;
-  return Math.min(tier, 499);
+  return Math.min(tier, 999);
 }
 
 /**

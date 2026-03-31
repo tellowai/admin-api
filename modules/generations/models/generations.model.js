@@ -30,9 +30,38 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
   const startFormatted = formatDateForMySQL(startDate);
   let endFormatted = formatDateForMySQL(endDate);
 
-  if(!endFormatted) {
-    // defaults to end of today if not valid
+  if (!endFormatted) {
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+
+  /** Template filter: two simple queries (resource_generations by range, then events by ID) — no subquery on events. */
+  if (filters.template_id) {
+    const idRows = await exports.listResourceGenerationIdsByTemplateCreatedRange(
+      filters.template_id,
+      startDate,
+      endDate,
+      limit,
+      offset
+    );
+    const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
+    if (!orderedIds.length) return [];
+    const events = await exports.getTerminalEventsForMediaIds(orderedIds, {
+      job_status: filters.job_status,
+      eventStartFormatted: startFormatted,
+      eventEndFormatted: endFormatted
+    });
+    const byId = new Map();
+    for (const row of events) {
+      if (row.media_generation_id && !byId.has(row.media_generation_id)) {
+        byId.set(row.media_generation_id, row);
+      }
+    }
+    const out = [];
+    for (const id of orderedIds) {
+      const row = byId.get(id);
+      if (row) out.push(row);
+    }
+    return out;
   }
 
   let conditions = [
@@ -50,13 +79,6 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     }
   } else {
     conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
-  }
-
-  if (filters.template_id) {
-    // We need to filter by template_id which is in resource_generations table.
-    // ClickHouse JOINs can be heavy, but here we can use a subquery for IDs if it's small or IN clause.
-    // Given the zero-join policy (though ClickHouse is different), let's keep it efficient.
-    conditions.push(`resource_generation_id IN (SELECT resource_generation_id FROM resource_generations WHERE template_id = '${filters.template_id}')`);
   }
 
   const query = `
@@ -157,5 +179,158 @@ exports.getTemplatesByIds = async function (templateIds) {
     WHERE template_id IN (?)
   `;
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
+};
+
+function chStringLiteral(value) {
+  return `'${String(value).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Simple range scan on resource_generations (no join / subquery).
+ */
+exports.listResourceGenerationIdsByTemplateCreatedRange = async function (
+  templateId,
+  startDate,
+  endDate,
+  limit,
+  offset
+) {
+  if (!templateId) return [];
+  const startFormatted = formatDateForMySQL(startDate);
+  let endFormatted = formatDateForMySQL(endDate);
+  if (!endFormatted) {
+    endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+  const tid = chStringLiteral(templateId);
+  const lim = parseInt(limit, 10);
+  const off = parseInt(offset, 10);
+  const query = `
+    SELECT resource_generation_id
+    FROM resource_generations
+    WHERE template_id = ${tid}
+      AND created_at >= '${startFormatted}'
+      AND created_at <= '${endFormatted}'
+    ORDER BY created_at DESC, resource_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Map MySQL media_generations.job_status to values the admin generations UI expects.
+ */
+function mapMysqlJobStatusToUi(status) {
+  if (status == null) return status;
+  const s = String(status).toLowerCase();
+  if (s === 'in_progress') return 'processing';
+  if (s === 'submitted' || s === 'draft') return 'queued';
+  return s;
+}
+
+/**
+ * Terminal COMPLETED/FAILED events from ClickHouse for a fixed set of resource_generation_ids.
+ * @param {object} [filters] optional { job_status, eventStartFormatted, eventEndFormatted }
+ */
+exports.getTerminalEventsForMediaIds = async function (mediaGenerationIds, filters = {}) {
+  if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
+
+  const idsSql = mediaGenerationIds.map((id) => chStringLiteral(id)).join(',');
+
+  const conditions = [
+    `resource_generation_id IN (${idsSql})`,
+    `event_type IN ('COMPLETED', 'FAILED')`
+  ];
+
+  if (filters.job_status) {
+    if (filters.job_status === 'completed') {
+      conditions.push(`event_type = 'COMPLETED'`);
+    } else if (filters.job_status === 'failed') {
+      conditions.push(`event_type = 'FAILED'`);
+    }
+  }
+
+  if (filters.eventStartFormatted) {
+    conditions.push(`created_at >= '${filters.eventStartFormatted}'`);
+  }
+  if (filters.eventEndFormatted) {
+    conditions.push(`created_at <= '${filters.eventEndFormatted}'`);
+  }
+
+  const query = `
+    SELECT 
+      resource_generation_id AS media_generation_id,
+      if(event_type = 'COMPLETED', 'completed', 'failed') AS job_status,
+      JSONExtractString(additional_data, 'output', 'asset_bucket') AS output_media_bucket,
+      JSONExtractString(additional_data, 'output', 'asset_key') AS output_media_asset_key,
+      created_at AS completed_at,
+      if(event_type = 'FAILED', JSONExtractString(additional_data, 'error', 'message'), '') AS error_message
+    FROM resource_generation_events
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created_at DESC, resource_generation_id ASC
+  `;
+
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
+};
+
+exports.getMediaGenerationsByIds = async function (mediaGenerationIds) {
+  if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
+  const query = `
+    SELECT 
+      media_generation_id,
+      job_status,
+      output_media_bucket,
+      output_media_asset_key,
+      error_message,
+      media_type,
+      updated_at,
+      completed_at
+    FROM media_generations
+    WHERE media_generation_id IN (?)
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [mediaGenerationIds]);
+};
+
+/**
+ * Build one row per id (preserves order) for admin generations enrichment.
+ * Prefer ClickHouse terminal event; fall back to MySQL media_generations for in-flight jobs.
+ */
+exports.mergeGenerationRowsForIds = async function (orderedIds, filters = {}) {
+  if (!orderedIds || orderedIds.length === 0) return [];
+
+  const chRows = await exports.getTerminalEventsForMediaIds(orderedIds, filters);
+  const chById = new Map();
+  for (const row of chRows) {
+    if (row.media_generation_id && !chById.has(row.media_generation_id)) {
+      chById.set(row.media_generation_id, row);
+    }
+  }
+
+  const missingForMysql = orderedIds.filter((id) => !chById.has(id));
+  let mysqlById = new Map();
+  if (missingForMysql.length > 0) {
+    const mysqlRows = await exports.getMediaGenerationsByIds(missingForMysql);
+    mysqlById = new Map(mysqlRows.map((r) => [r.media_generation_id, r]));
+  }
+
+  const out = [];
+  for (const id of orderedIds) {
+    let row = chById.get(id);
+    if (!row) {
+      const mg = mysqlById.get(id);
+      if (!mg) continue;
+      row = {
+        media_generation_id: mg.media_generation_id,
+        job_status: mapMysqlJobStatusToUi(mg.job_status),
+        output_media_bucket: mg.output_media_bucket,
+        output_media_asset_key: mg.output_media_asset_key,
+        completed_at: mg.completed_at || mg.updated_at,
+        error_message: mg.error_message || ''
+      };
+    }
+    out.push(row);
+  }
+  return out;
 };
 
