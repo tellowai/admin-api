@@ -174,7 +174,7 @@ exports.getUsersByIds = async function (userIds) {
 exports.getTemplatesByIds = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) return [];
   const query = `
-    SELECT template_id, template_name
+    SELECT template_id, template_name, template_type
     FROM templates
     WHERE template_id IN (?)
   `;

@@ -238,13 +238,21 @@ exports.updatePlan = async function (req, res) {
         const currentByGatewayAndPlatform = new Map(currentGateways.map(g => [`${g.payment_gateway}_${g.platform}`, g]));
         const gatewayErrors = {};
 
+        const gatewaySkuFields = ['pg_plan_id', 'pg_plan_id_ios', 'pg_plan_id_android'];
+
         for (const incoming of req.validatedBody.gateways) {
           const key = `${incoming.payment_gateway}_${incoming.platform || 'all'}`;
           const current = currentByGatewayAndPlatform.get(key);
-          const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
-          const incomingId = incoming.pg_plan_id != null ? String(incoming.pg_plan_id).trim() : '';
-
-          if (currentId !== '' && incomingId !== currentId) {
+          let mismatch = false;
+          for (const field of gatewaySkuFields) {
+            const currentVal = current && current[field] != null ? String(current[field]).trim() : '';
+            const incomingVal = incoming[field] != null ? String(incoming[field]).trim() : '';
+            if (currentVal !== '' && incomingVal !== currentVal) {
+              mismatch = true;
+              break;
+            }
+          }
+          if (mismatch) {
             const label = incoming.payment_gateway.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ` (${incoming.platform || 'all'})`;
             const template = req.t('payment_plans:GATEWAY_PLAN_ID_CANNOT_CHANGE') || 'Gateway Plan ID cannot change';
             gatewayErrors[key] = String(template).replace(/\{\{gateway\}\}/g, label);
@@ -258,15 +266,19 @@ exports.updatePlan = async function (req, res) {
           });
         }
 
-        // Sanitize: keep existing pg_plan_id for gateway+platform combinations that already have one set
+        // Sanitize: keep existing SKU fields for gateway+platform combinations that already have values set
         const sanitizedGateways = req.validatedBody.gateways.map(g => {
           const key = `${g.payment_gateway}_${g.platform || 'all'}`;
           const current = currentByGatewayAndPlatform.get(key);
-          const currentId = current && current.pg_plan_id != null ? String(current.pg_plan_id).trim() : '';
-          if (currentId !== '') {
-            return { ...g, pg_plan_id: current.pg_plan_id };
+          if (!current) return g;
+          const out = { ...g };
+          for (const field of gatewaySkuFields) {
+            const currentVal = current[field] != null ? String(current[field]).trim() : '';
+            if (currentVal !== '') {
+              out[field] = current[field];
+            }
           }
-          return g;
+          return out;
         });
         req.validatedBody.gateways = sanitizedGateways;
       }
@@ -383,9 +395,12 @@ exports.togglePlanStatus = async function (req, res) {
         errors.push({ field: 'validity_days', message: 'Validity days must be greater than 0' });
       }
 
-      // Validate gateways - at least one active gateway required
+      // Validate gateways - at least one active gateway with any resolved SKU (fallback / iOS / Android)
       const gateways = await PaymentPlansModel.getPlanGateways(planId);
-      const activeGateways = gateways.filter(g => g.is_active === 1 && g.pg_plan_id && g.pg_plan_id.trim() !== '');
+      const nonEmpty = (v) => v != null && String(v).trim() !== '';
+      const gatewayHasAnyPlanId = (g) =>
+        nonEmpty(g.pg_plan_id) || nonEmpty(g.pg_plan_id_ios) || nonEmpty(g.pg_plan_id_android);
+      const activeGateways = gateways.filter(g => Number(g.is_active) === 1 && gatewayHasAnyPlanId(g));
 
       if (activeGateways.length === 0) {
         errors.push({ field: 'gateways', message: 'At least one active payment gateway with valid plan ID is required' });

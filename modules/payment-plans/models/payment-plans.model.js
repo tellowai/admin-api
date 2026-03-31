@@ -151,17 +151,24 @@ exports.createPlan = async function (data) {
 
     // 2. Insert into payment_gateway_plans
     if (data.gateways && Array.isArray(data.gateways) && data.gateways.length > 0) {
-      const gatewayValues = data.gateways.map(g => [
-        planId,
-        g.payment_gateway,
-        g.pg_plan_id,
-        g.platform || 'all',
-        g.is_active !== undefined ? g.is_active : 1
-      ]);
+      const gatewayValues = data.gateways.map(g => {
+        const pg = g.pg_plan_id != null && String(g.pg_plan_id).trim() !== '' ? String(g.pg_plan_id).trim() : '';
+        const ios = g.pg_plan_id_ios != null && String(g.pg_plan_id_ios).trim() !== '' ? String(g.pg_plan_id_ios).trim() : null;
+        const android = g.pg_plan_id_android != null && String(g.pg_plan_id_android).trim() !== '' ? String(g.pg_plan_id_android).trim() : null;
+        return [
+          planId,
+          g.payment_gateway,
+          pg,
+          ios,
+          android,
+          g.platform || 'all',
+          g.is_active !== undefined ? g.is_active : 1
+        ];
+      });
 
       if (gatewayValues.length > 0) {
         await conn.query(
-          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, platform, is_active) VALUES ?',
+          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, pg_plan_id_ios, pg_plan_id_android, platform, is_active) VALUES ?',
           [gatewayValues]
         );
       }
@@ -245,16 +252,23 @@ exports.updatePlan = async function (planId, data) {
       await conn.query('DELETE FROM payment_gateway_plans WHERE payment_plan_id = ?', [planId]);
 
       if (data.gateways.length > 0) {
-        const gatewayValues = data.gateways.map(g => [
-          planId,
-          g.payment_gateway,
-          g.pg_plan_id,
-          g.platform || 'all',
-          g.is_active !== undefined ? g.is_active : 1
-        ]);
+        const gatewayValues = data.gateways.map(g => {
+          const pg = g.pg_plan_id != null && String(g.pg_plan_id).trim() !== '' ? String(g.pg_plan_id).trim() : '';
+          const ios = g.pg_plan_id_ios != null && String(g.pg_plan_id_ios).trim() !== '' ? String(g.pg_plan_id_ios).trim() : null;
+          const android = g.pg_plan_id_android != null && String(g.pg_plan_id_android).trim() !== '' ? String(g.pg_plan_id_android).trim() : null;
+          return [
+            planId,
+            g.payment_gateway,
+            pg,
+            ios,
+            android,
+            g.platform || 'all',
+            g.is_active !== undefined ? g.is_active : 1
+          ];
+        });
 
         await conn.query(
-          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, platform, is_active) VALUES ?',
+          'INSERT INTO payment_gateway_plans (payment_plan_id, payment_gateway, pg_plan_id, pg_plan_id_ios, pg_plan_id_android, platform, is_active) VALUES ?',
           [gatewayValues]
         );
       }
