@@ -57,6 +57,8 @@ const customTextInputFieldSchema = Joi.object({
   rendering_date_format: Joi.string().allow(null, '').optional(),
   nfd_field_code: Joi.string().allow(null).optional(), // Matched field code from niche data field definitions
   variable_name: Joi.string().allow(null, '').optional(),
+  /** When true, end users may leave this text field empty */
+  is_optional: Joi.boolean().optional(),
   new_field: Joi.object({
     field_code: Joi.string().required(),
     field_label: Joi.string().required(),
@@ -166,7 +168,8 @@ const createTemplateSchema = Joi.object().keys({
         asset_key: Joi.string().optional(),
         bucket: Joi.string().optional()
       }).allow(null).optional(),
-      skip_user_input: Joi.boolean().default(false).optional()
+      skip_user_input: Joi.boolean().default(false).optional(),
+      is_optional: Joi.boolean().optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
@@ -264,7 +267,8 @@ const updateTemplateSchema = Joi.object().keys({
       clip_index: Joi.number().integer().min(0).allow(null).optional(),
       skip_user_input: Joi.boolean().default(false).optional(),
       step_index: Joi.number().integer().min(0).optional(),
-      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional()
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
+      is_optional: Joi.boolean().optional()
     })
   ).allow(null).optional(),
   image_input_fields_json: Joi.array().items(
@@ -281,7 +285,8 @@ const updateTemplateSchema = Joi.object().keys({
       variable_key: Joi.string().allow(null, '').optional(),
       label: Joi.string().allow(null, '').optional(),
       clip_index: Joi.number().integer().min(0).allow(null).optional(),
-      skip_user_input: Joi.boolean().default(false).optional()
+      skip_user_input: Joi.boolean().default(false).optional(),
+      is_optional: Joi.boolean().optional()
     })
   ).allow(null).optional(),
   niche_id: Joi.number().integer().positive().allow(null).optional(),
