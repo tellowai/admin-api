@@ -2353,7 +2353,7 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
   }
   return fromBodymovin.map((entry, i) => {
     const req = fromRequest[i];
-    return {
+    const merged = {
       ...entry,
       field_code: (req && req.field_code != null && req.field_code !== '') ? req.field_code : entry.field_code,
       user_input_field_name: (req && req.user_input_field_name != null) ? req.user_input_field_name : entry.user_input_field_name,
@@ -2363,6 +2363,14 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
       clip_index: (req && req.clip_index != null) ? req.clip_index : entry.clip_index,
       skip_user_input: (req && req.skip_user_input != null) ? req.skip_user_input : entry.skip_user_input
     };
+    if (req && Object.prototype.hasOwnProperty.call(req, 'is_optional')) {
+      if (req.is_optional === true) {
+        merged.is_optional = true;
+      } else {
+        delete merged.is_optional;
+      }
+    }
+    return merged;
   });
 }
 
