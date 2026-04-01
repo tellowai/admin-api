@@ -1650,7 +1650,7 @@ exports.createTemplate = async function (req, res) {
           templateData.video_uploads_required = videoCount;
           const fromBodymovin = generateImageInputFieldsJsonFromBodymovin(bodymovinJson);
           templateData.image_input_fields_json = mergeImageInputFieldsFromRequest(fromBodymovin, templateData.image_input_fields_json);
-          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, templateData.image_input_fields_json);
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
         }
       } catch (error) {
@@ -2266,7 +2266,7 @@ function computeTotalAssetCountsFromBodymovin(bodymovinJson) {
  * @param {Object} bodymovinJson - Parsed Bodymovin JSON
  * @returns {Array}
  */
-function generateImageUploadsJsonFromBodymovin(bodymovinJson, imageInputFields = []) {
+function generateImageUploadsJsonFromBodymovin(bodymovinJson) {
   try {
     const assets = Array.isArray(bodymovinJson?.assets) ? bodymovinJson.assets : [];
     const imageAssets = assets.filter(a => {
@@ -2274,19 +2274,11 @@ function generateImageUploadsJsonFromBodymovin(bodymovinJson, imageInputFields =
       const name = String(a.p).toLowerCase();
       return name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp');
     });
-    return imageAssets.map((asset, index) => {
-      // Find corresponding field config
-      const id = (asset.id != null && asset.id !== '') ? String(asset.id) : `image_${index}`;
-      const fieldConfig = imageInputFields.find(f => f.image_id === id);
-      const skip = fieldConfig ? (fieldConfig.skip_user_input || false) : false;
-
-      return {
-        clip_index: 1,
-        step_index: index,
-        gender: 'unisex',
-        skip_user_input: skip
-      };
-    });
+    return imageAssets.map((asset, index) => ({
+      clip_index: 1,
+      step_index: index,
+      gender: 'unisex'
+    }));
   } catch (_e) {
     return [];
   }
@@ -2332,8 +2324,7 @@ function generateImageInputFieldsJsonFromBodymovin(bodymovinJson) {
       layer_name: a.nm || a.p || String(a.id),
       field_code: `image_${index}`,
       user_input_field_name: null,
-      field_data_type: 'photo',
-      skip_user_input: false
+      field_data_type: 'photo'
     }));
   } catch (_e) {
     return [];
@@ -2351,7 +2342,7 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
   if (!Array.isArray(fromRequest) || fromRequest.length !== fromBodymovin.length) {
     return fromBodymovin;
   }
-  return fromBodymovin.map((entry, i) => {
+    return fromBodymovin.map((entry, i) => {
     const req = fromRequest[i];
     return {
       ...entry,
@@ -2361,7 +2352,7 @@ function mergeImageInputFieldsFromRequest(fromBodymovin, fromRequest) {
       variable_key: (req && (req.variable_key != null && req.variable_key !== '')) ? req.variable_key : entry.variable_key,
       label: (req && (req.label != null && req.label !== '')) ? req.label : entry.label,
       clip_index: (req && req.clip_index != null) ? req.clip_index : entry.clip_index,
-      skip_user_input: (req && req.skip_user_input != null) ? req.skip_user_input : entry.skip_user_input
+      is_optional: (req && req.is_optional === true) ? true : false
     };
   });
 }
@@ -3225,13 +3216,10 @@ exports.updateTemplate = async function (req, res) {
           templateData.image_input_fields_json = finalImageInputFields;
 
           // Calculate image_uploads_required based on finalImageInputFields
-          // Count fields where skip_user_input is false or undefined
-          const activeImageFields = finalImageInputFields.filter(f => !f.skip_user_input);
-          templateData.image_uploads_required = activeImageFields.length;
+          templateData.image_uploads_required = finalImageInputFields.length;
           templateData.video_uploads_required = 0;
 
-          // Generate uploads using the finalized fields (ensures skip_user_input is carried over)
-          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson, finalImageInputFields);
+          templateData.image_uploads_json = generateImageUploadsJsonFromBodymovin(bodymovinJson);
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
           */
 
