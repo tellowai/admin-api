@@ -27,6 +27,12 @@ const { generateBlurHashFromBuffer } = require('../utils/blurhash.utils');
 const { computeTemplateCostFromClips, extractModelIdsFromClips } = require('../utils/workflowCost.utils');
 const WorkflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
 const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-registry.model');
+const {
+  validateAETemplateAssets: validateAETemplateAssetsForPublish,
+  getAETemplateAssetGapMessages,
+  resolveWorkflowScenarioPublishErrors,
+  VALID_WORKFLOW_TYPES: TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES
+} = require('../services/template.workflow.publish.validation');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -3426,37 +3432,44 @@ async function validateTemplatePublishing(template, t) {
   if (!template.template_code) errors.push(t('template:PUBLISH_ERROR_CODE_MISSING'));
   if (!template.template_type) errors.push(t('template:PUBLISH_ERROR_TYPE_MISSING'));
   if (!template.template_output_type) errors.push(t('template:PUBLISH_ERROR_OUTPUT_TYPE_MISSING'));
-  const aeEngine = template.ae_rendering_engine || 'transparent_webm';
-  const isTransparentWebmMode = aeEngine === 'transparent_webm' || (template.additional_data && template.additional_data.transparent_webm_mode);
-  const hasScenes = template.scenes && template.scenes.length > 0;
 
-  if (!isTransparentWebmMode) {
-    if (!template.color_video_key) errors.push(t('template:PUBLISH_ERROR_COLOR_VIDEO_MISSING') || 'Color video asset is missing');
-    if (!template.mask_video_key) errors.push(t('template:PUBLISH_ERROR_MASK_VIDEO_MISSING') || 'Mask video asset is missing');
-    if (!template.bodymovin_json_key) errors.push(t('template:PUBLISH_ERROR_BODYMOVIN_JSON_MISSING') || 'Bodymovin JSON asset is missing');
-  } else {
-    if (!template.scenes || template.scenes.length === 0) {
-      errors.push('Template must have at least one scene configured');
-    } else {
-      let hasLayers = false;
-      for (const scene of template.scenes) {
-        if (scene.layers && scene.layers.length > 0) {
-          hasLayers = true;
-          break;
-        }
-      }
-      if (!hasLayers) {
-        errors.push('Template scenes must contain at least one layer components');
-      }
-    }
+  if (!template.template_workflow_type || String(template.template_workflow_type).trim() === '') {
+    errors.push(t('template:PUBLISH_ERROR_WORKFLOW_TYPE_MISSING'));
+    return errors;
+  }
+  if (!TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES.includes(template.template_workflow_type)) {
+    errors.push(t('template:PUBLISH_ERROR_WORKFLOW_TYPE_INVALID'));
+    return errors;
   }
 
-  if (template.template_clips_assets_type === 'ai') {
+  // Same structural rules as photobop-workers WorkflowUtils (validateAETemplateAssets + resolveWorkflowScenario)
+  const clipsForScenario = await TemplateModel.getTemplateAiClips(template.template_id);
+  const hasAIClips = !!(clipsForScenario && clipsForScenario.length > 0);
+  const hasAEAssets = validateAETemplateAssetsForPublish(template);
+  const aeGapMessages = !hasAEAssets ? getAETemplateAssetGapMessages(template, t) : [];
+  errors.push(
+    ...resolveWorkflowScenarioPublishErrors(
+      template.template_workflow_type,
+      hasAIClips,
+      hasAEAssets,
+      t,
+      {
+        templateClipsAssetsType: template.template_clips_assets_type,
+        aeGapMessages
+      }
+    )
+  );
+
+  const needsAiClipWorkflowValidation =
+    template.template_workflow_type === 'AI_ONLY' ||
+    template.template_workflow_type === 'AI_PLUS_AE';
+
+  if (needsAiClipWorkflowValidation && template.template_clips_assets_type === 'ai') {
     const workflowBuilderVersion = (template.workflow_builder_version || 'v1').toLowerCase();
 
     if (workflowBuilderVersion === 'v2') {
       // V2: validate template_ai_clips + workflows table (each clip has wf_id, workflow exists, has nodes)
-      const clips = await TemplateModel.getTemplateAiClips(template.template_id);
+      const clips = clipsForScenario;
       if (!clips || clips.length === 0) {
         errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
       } else {
@@ -3486,7 +3499,7 @@ async function validateTemplatePublishing(template, t) {
       }
     } else {
       // V1: legacy validation (clip_workflow workflow array)
-      const clips = await TemplateModel.getTemplateAiClips(template.template_id);
+      const clips = clipsForScenario;
       if (!clips || clips.length === 0) {
         errors.push(t('template:PUBLISH_ERROR_AI_CLIPS_MISSING'));
       } else {
@@ -3527,7 +3540,7 @@ exports.updateTemplateStatus = async function (req, res) {
       const errors = await validateTemplatePublishing(template, req.t);
       if (errors.length > 0) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
-          message: 'Template is not ready for publishing',
+          message: "Can't publish",
           errors: errors
         });
       }
