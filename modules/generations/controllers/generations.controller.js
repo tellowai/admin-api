@@ -40,6 +40,7 @@ exports.listGenerations = async function (req, res) {
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const { template_id, job_status } = req.query;
+    const user_id = req.query.user_id ? String(req.query.user_id).trim() : '';
     const photo_booth_id = req.query.photo_booth_id ? String(req.query.photo_booth_id).trim() : '';
     if (photo_booth_id && !BOOTH_UUID_RE.test(photo_booth_id)) {
       return res.status(400).send({
@@ -64,7 +65,11 @@ exports.listGenerations = async function (req, res) {
       }
       generations = await generationsModel.mergeGenerationRowsForIds(orderedIds, {});
     } else {
-      generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, { template_id, job_status });
+      generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, {
+        template_id,
+        job_status,
+        user_id: user_id || undefined
+      });
     }
 
     const storage = StorageFactory.getProvider();

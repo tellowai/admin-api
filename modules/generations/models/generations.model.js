@@ -21,7 +21,7 @@ function formatDateForMySQL(date) {
  * @param {Date|string} endDate 
  * @param {number} page 
  * @param {number} limit 
- * @param {object} filters { template_id, job_status }
+ * @param {object} filters { template_id, job_status, user_id }
  * @returns {Promise<Array>}
  */
 exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20, filters = {}) {
@@ -34,14 +34,14 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
 
-  /** Template filter: two simple queries (resource_generations by range, then events by ID) — no subquery on events. */
-  if (filters.template_id) {
-    const idRows = await exports.listResourceGenerationIdsByTemplateCreatedRange(
-      filters.template_id,
+  /** Optional filters on resource_generations (template and/or user), then terminal events by ID. */
+  if (filters.template_id || filters.user_id) {
+    const idRows = await exports.listResourceGenerationIdsByCreatedRangeFilters(
       startDate,
       endDate,
       limit,
-      offset
+      offset,
+      { template_id: filters.template_id || null, user_id: filters.user_id || null }
     );
     const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
     if (!orderedIds.length) return [];
@@ -186,7 +186,47 @@ function chStringLiteral(value) {
 }
 
 /**
- * Simple range scan on resource_generations (no join / subquery).
+ * resource_generation rows in created_at range, optionally filtered by template_id and/or user_id.
+ */
+exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
+  startDate,
+  endDate,
+  limit,
+  offset,
+  filters = {}
+) {
+  const templateId = filters.template_id || null;
+  const userId = filters.user_id || null;
+  if (!templateId && !userId) return [];
+
+  const startFormatted = formatDateForMySQL(startDate);
+  let endFormatted = formatDateForMySQL(endDate);
+  if (!endFormatted) {
+    endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+
+  const conditions = [
+    `created_at >= '${startFormatted}'`,
+    `created_at <= '${endFormatted}'`
+  ];
+  if (templateId) conditions.push(`template_id = ${chStringLiteral(templateId)}`);
+  if (userId) conditions.push(`user_id = ${chStringLiteral(userId)}`);
+
+  const lim = parseInt(limit, 10);
+  const off = parseInt(offset, 10);
+  const query = `
+    SELECT resource_generation_id
+    FROM resource_generations
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created_at DESC, resource_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * @deprecated Prefer listResourceGenerationIdsByCreatedRangeFilters; kept for callers that only pass template.
  */
 exports.listResourceGenerationIdsByTemplateCreatedRange = async function (
   templateId,
@@ -195,26 +235,9 @@ exports.listResourceGenerationIdsByTemplateCreatedRange = async function (
   limit,
   offset
 ) {
-  if (!templateId) return [];
-  const startFormatted = formatDateForMySQL(startDate);
-  let endFormatted = formatDateForMySQL(endDate);
-  if (!endFormatted) {
-    endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
-  }
-  const tid = chStringLiteral(templateId);
-  const lim = parseInt(limit, 10);
-  const off = parseInt(offset, 10);
-  const query = `
-    SELECT resource_generation_id
-    FROM resource_generations
-    WHERE template_id = ${tid}
-      AND created_at >= '${startFormatted}'
-      AND created_at <= '${endFormatted}'
-    ORDER BY created_at DESC, resource_generation_id ASC
-    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
-  `;
-  const result = await slaveClickhouse.querying(query, { dataObjects: true });
-  return result.data || [];
+  return exports.listResourceGenerationIdsByCreatedRangeFilters(startDate, endDate, limit, offset, {
+    template_id: templateId
+  });
 };
 
 /**
