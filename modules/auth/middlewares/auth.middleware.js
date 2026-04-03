@@ -13,6 +13,20 @@ function bearerTokenFromReq(req) {
   return null;
 }
 
+/** Cookie first, then Bearer if different — avoids stale Authorization overriding session cookies. */
+function accessTokenCandidates(req) {
+  var cookieTok = req.cookies.accessToken ? req.cookies.accessToken : null;
+  var bearerTok = bearerTokenFromReq(req);
+  var candidates = [];
+  if (cookieTok) {
+    candidates.push(cookieTok);
+  }
+  if (bearerTok && bearerTok !== cookieTok) {
+    candidates.push(bearerTok);
+  }
+  return candidates;
+}
+
 exports.hasATRTTokens = function (req, res, next) {
 
   var accessToken = (req.cookies.accessToken) ? 
@@ -73,38 +87,30 @@ exports.hasRTTokenNRsid = function (req, res, next) {
 }
 
 exports.isAuthorizedJWT = function (req, res, next) {
+  var candidates = accessTokenCandidates(req);
+  var secret = config.jwt.secret;
 
-  var accessToken = (req.cookies.accessToken)? req.cookies.accessToken : null;
-  
-  var accessToken;
-
-  if (req.headers.authorization) {
-
-    var tokenArray = req.headers.authorization.split(' ');
-
-    if (tokenArray[0] === 'Bearer') {
-      
-      accessToken = tokenArray[1] ? tokenArray[1] : undefined;
-    }
+  if (candidates.length === 0) {
+    const errMsg = req.t('UNAUTHORIZED');
+    return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
   }
 
-  JWT.verify(accessToken, config.jwt.secret, function (err, decodedData) {
-
-    if(err) {
-
+  function tryCandidate(index) {
+    if (index >= candidates.length) {
       const errMsg = req.t('UNAUTHORIZED');
-      var responsePayload = {
-        message : errMsg
-      };
-
-      return res.status(
-        HTTP_STATUS_CODES.UNAUTHORIZED
-      ).json(responsePayload);
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
     }
 
-    req.user = decodedData;
-    next(null);
-  });
+    JWT.verify(candidates[index], secret, function (err, decodedData) {
+      if (err) {
+        return tryCandidate(index + 1);
+      }
+      req.user = decodedData;
+      next(null);
+    });
+  }
+
+  tryCandidate(0);
 }
 
 exports.verifyAndDecodeJWT = function (req, res, next) {
@@ -136,19 +142,7 @@ exports.verifyAndDecodeJWT = function (req, res, next) {
 
 
 exports.isAdminUser = function (req, res, next) {
-  // Browser admin-ui sends the session via httpOnly cookie. Some clients also send
-  // Authorization: Bearer. If both are present, we must not let a stale/non-admin Bearer
-  // override a valid admin cookie (extensions, proxies, or leftover headers).
-  var cookieTok = req.cookies.accessToken ? req.cookies.accessToken : null;
-  var bearerTok = bearerTokenFromReq(req);
-
-  var candidates = [];
-  if (cookieTok) {
-    candidates.push(cookieTok);
-  }
-  if (bearerTok && bearerTok !== cookieTok) {
-    candidates.push(bearerTok);
-  }
+  var candidates = accessTokenCandidates(req);
 
   if (candidates.length === 0) {
     const errMsg = req.t('UNAUTHORIZED');
@@ -163,7 +157,11 @@ exports.isAdminUser = function (req, res, next) {
       const errMsg = sawValidJwtWithoutAdmin
         ? req.t('user:NOT_AN_ADMIN')
         : req.t('UNAUTHORIZED');
-      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
+      var payload = { message: errMsg };
+      if (sawValidJwtWithoutAdmin) {
+        payload.code = 'NOT_AN_ADMIN';
+      }
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json(payload);
     }
 
     JWT.verify(candidates[index], secret, function (err, decodedData) {

@@ -109,7 +109,7 @@ module.exports = function (app) {
     versionConfig.routePrefix +
     '/me'
   ).get(
-    AuthMiddleware.isAdminUser,
+    AuthMiddleware.isAuthorizedJWT,
     UsersCtrl.getLoggedInUserData
   );
 };
