@@ -1,6 +1,7 @@
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const JWT = require('jsonwebtoken');
-const config = require('../../../config/config')
+const config = require('../../../config/config');
+const RbacModel = require('../models/rbac.model');
 
 function bearerTokenFromReq(req) {
   if (!req.headers.authorization) {
@@ -25,6 +26,30 @@ function accessTokenCandidates(req) {
     candidates.push(bearerTok);
   }
   return candidates;
+}
+
+function decodeFirstValidAccessJwt(candidates, secret) {
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      return JWT.verify(candidates[i], secret);
+    } catch (e) {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+function jwtClaimsIndicateAdmin(decoded) {
+  if (decoded.isAdmin === true) {
+    return true;
+  }
+  if (Array.isArray(decoded.roles) && decoded.roles.length > 0) {
+    return true;
+  }
+  if (Array.isArray(decoded.permissions) && decoded.permissions.length > 0) {
+    return true;
+  }
+  return false;
 }
 
 exports.hasATRTTokens = function (req, res, next) {
@@ -141,41 +166,54 @@ exports.verifyAndDecodeJWT = function (req, res, next) {
 }
 
 
+/**
+ * Admin routes: valid JWT + (admin claim OR any role in DB).
+ * JWT alone is not enough — generateToken() falls back to isAdmin:false when RBAC errors,
+ * so we re-check MySQL when claims say non-admin (fixes stuck NOT_AN_ADMIN until refresh).
+ */
 exports.isAdminUser = function (req, res, next) {
-  var candidates = accessTokenCandidates(req);
+  (async function () {
+    var candidates = accessTokenCandidates(req);
 
-  if (candidates.length === 0) {
-    const errMsg = req.t('UNAUTHORIZED');
-    return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
-  }
-
-  var sawValidJwtWithoutAdmin = false;
-  var secret = config.jwt.secret;
-
-  function tryCandidate(index) {
-    if (index >= candidates.length) {
-      const errMsg = sawValidJwtWithoutAdmin
-        ? req.t('user:NOT_AN_ADMIN')
-        : req.t('UNAUTHORIZED');
-      var payload = { message: errMsg };
-      if (sawValidJwtWithoutAdmin) {
-        payload.code = 'NOT_AN_ADMIN';
-      }
-      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json(payload);
+    if (candidates.length === 0) {
+      const errMsg = req.t('UNAUTHORIZED');
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
     }
 
-    JWT.verify(candidates[index], secret, function (err, decodedData) {
-      if (err) {
-        return tryCandidate(index + 1);
-      }
-      if (decodedData.isAdmin) {
-        req.user = decodedData;
-        return next(null);
-      }
-      sawValidJwtWithoutAdmin = true;
-      return tryCandidate(index + 1);
-    });
-  }
+    var decoded = decodeFirstValidAccessJwt(candidates, config.jwt.secret);
+    if (!decoded || !decoded.userId) {
+      const errMsg = req.t('UNAUTHORIZED');
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
+    }
 
-  tryCandidate(0);
-}
+    var allowed = jwtClaimsIndicateAdmin(decoded);
+
+    if (!allowed) {
+      try {
+        var rbac = await RbacModel.getUserRolesAndPermissions(decoded.userId, false);
+        if (rbac.roles && rbac.roles.length > 0) {
+          allowed = true;
+          decoded = Object.assign({}, decoded, {
+            isAdmin: true,
+            roles: rbac.roles.map(function (r) { return r.role_name; }),
+            permissions: rbac.permissions.map(function (p) { return p.permission_code; })
+          });
+        }
+      } catch (rbacErr) {
+        console.error('isAdminUser RBAC lookup failed:', rbacErr.message);
+      }
+    }
+
+    if (!allowed) {
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+        message: req.t('user:NOT_AN_ADMIN'),
+        code: 'NOT_AN_ADMIN'
+      });
+    }
+
+    req.user = decoded;
+    return next(null);
+  })().catch(function (err) {
+    return next(err);
+  });
+};
