@@ -321,6 +321,19 @@ exports.getBlock = async function(req, res) {
   }
 };
 
+exports.getBlockByKey = async function(req, res) {
+  try {
+    const blockKey = req.params.blockKey ? decodeURIComponent(req.params.blockKey) : '';
+    if (!blockKey) return res.status(400).send({ message: 'block_key is required' });
+    const block = await SduiService.getBlockRowByKey(blockKey);
+    if (!block) return res.status(404).send({ message: 'Block not found' });
+    return res.status(200).send(block);
+  } catch (err) {
+    console.error('SDUI getBlockByKey Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.createBlock = async function(req, res) {
   try {
     const { block_key, name, description, body_json } = req.body;

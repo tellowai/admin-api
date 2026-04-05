@@ -95,9 +95,16 @@ exports.invalidateBlockCache = async function(blockKey, version) {
 
 exports.listScreens = async function({ page, limit, status, search }) {
   const p = parseInt(page) || 1;
-  const l = Math.min(parseInt(limit) || 20, 100);
+  const l = Math.min(Math.max(parseInt(limit) || 20, 1), 500);
   const items = await SduiModel.listScreens(p, l, status, search);
-  return { data: items };
+  /** Listing payloads omit body_json — clients load full document via GET /screens/:id */
+  const data = (items || []).map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const slim = { ...row };
+    delete slim.body_json;
+    return slim;
+  });
+  return { data };
 };
 
 exports.getScreenById = async function(id) {
@@ -278,6 +285,11 @@ exports.listBlocks = async function(search) {
 
 exports.getBlockById = async function(id) {
   return await SduiModel.getBlockById(id);
+};
+
+/** Full row for admin preview / tooling (exact key; avoids list+filter). */
+exports.getBlockRowByKey = async function(blockKey) {
+  return await SduiModel.getBlockByKey(blockKey);
 };
 
 exports.createBlock = async function(data) {

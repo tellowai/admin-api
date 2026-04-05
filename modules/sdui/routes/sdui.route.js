@@ -59,6 +59,8 @@ module.exports = function(app) {
     .get(AuthMiddleware.isAdminUser, SduiCtrl.listBlocks)
     .post(AuthMiddleware.isAdminUser, SduiCtrl.createBlock);
 
+  app.route(prefix + '/blocks/by-key/:blockKey').get(AuthMiddleware.isAdminUser, SduiCtrl.getBlockByKey);
+
   app.route(prefix + '/blocks/:id')
     .get(AuthMiddleware.isAdminUser, SduiCtrl.getBlock)
     .put(AuthMiddleware.isAdminUser, SduiCtrl.updateBlock)
