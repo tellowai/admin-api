@@ -23,6 +23,7 @@ var emailConfig = require('../config/email.json');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const PROJECT_CONSTANTS = require('../constants/project.constants').CONSTANTS;
+const authCookieOpts = require('../utils/auth-cookie-options');
 const moment = require('moment');
 
 
@@ -196,19 +197,11 @@ exports.loginWithOAuthGoogle = function (req, res) {
                   rsid: tokenData.redisRefreshTokenObj.rsid
                 };
 
-                return res.cookie('accessToken', tokenData.jwtToken, {
-                  httpOnly: true,
-                  maxAge: config.jwt.expiresInMilliseconds
-                }).cookie('refreshToken', tokenData.encryptedRT, {
-                  httpOnly: true,
-                  maxAge: config.refreshToken.expiresInMilliseconds
-                }).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, {
-                  httpOnly: true,
-                  maxAge: config.refreshToken.expiresInMilliseconds
-                }).cookie('sessIat', moment().unix(), {
-                  httpOnly: true,
-                  maxAge: config.jwt.expiresInMilliseconds
-                }).status(
+                return res.cookie('accessToken', tokenData.jwtToken, authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+                ).cookie('refreshToken', tokenData.encryptedRT, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+                ).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+                ).cookie('sessIat', moment().unix(), authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+                ).status(
                   HTTP_STATUS_CODES.OK
                 ).redirect(config.clientDomainUrl + "/");
               }
@@ -274,19 +267,11 @@ exports.loginWithOAuthGoogle = function (req, res) {
 
                   // return next(null, tokenPayload);
 
-                  return res.cookie('accessToken', tokenData.jwtToken, {
-                    httpOnly: true,
-                    maxAge: config.jwt.expiresInMilliseconds,
-                  }).cookie('refreshToken', tokenData.encryptedRT, {
-                    httpOnly: true,
-                    maxAge: config.refreshToken.expiresInMilliseconds,
-                  }).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, {
-                    httpOnly: true,
-                    maxAge: config.refreshToken.expiresInMilliseconds,
-                  }).cookie('sessIat', moment().unix(), {
-                    httpOnly: true,
-                    maxAge: config.jwt.expiresInMilliseconds,
-                  }).status(
+                  return res.cookie('accessToken', tokenData.jwtToken, authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+                  ).cookie('refreshToken', tokenData.encryptedRT, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+                  ).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+                  ).cookie('sessIat', moment().unix(), authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+                  ).status(
                     HTTP_STATUS_CODES.OK
                   ).redirect(config.clientDomainUrl + "/");
                 }

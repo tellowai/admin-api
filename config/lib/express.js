@@ -169,6 +169,10 @@ module.exports.handleCors = function (app) {
   var whitelist = config?.cors?.whitelist || [];
   var corsOptions = {
     origin: function (origin, callback) {
+      // No Origin: same-origin navigation, curl, some mobile clients — allow so API stays usable.
+      if (!origin) {
+        return callback(null, true);
+      }
       var originIsWhitelisted = whitelist.indexOf(origin) !== -1;
       callback(null, originIsWhitelisted);
     },

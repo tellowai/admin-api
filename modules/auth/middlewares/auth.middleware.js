@@ -175,6 +175,15 @@ exports.isAdminUser = function (req, res, next) {
   (async function () {
     var candidates = accessTokenCandidates(req);
 
+    if (process.env.DEBUG_ADMIN_AUTH === '1') {
+      console.log('[DEBUG_ADMIN_AUTH]', req.method, req.originalUrl || req.url, {
+        origin: req.headers.origin || null,
+        cookieHeaderPresent: typeof req.headers.cookie === 'string' && req.headers.cookie.length > 0,
+        hasAccessTokenCookie: !!(req.cookies && req.cookies.accessToken),
+        jwtCandidateCount: candidates.length
+      });
+    }
+
     if (candidates.length === 0) {
       const errMsg = req.t('UNAUTHORIZED');
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });

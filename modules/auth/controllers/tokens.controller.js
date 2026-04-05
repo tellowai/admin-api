@@ -1,5 +1,6 @@
 const redis = require('../../../config/lib/redis')
 const config = require('../../../config/config')
+const authCookieOpts = require('../utils/auth-cookie-options');
 var jwtCtrl = require('../controllers/jwt.controller');
 var refreshTokenCtrl = require('./refreshToken.controller');
 var AES256GCM = require('../controllers/aes-gcm.contorller').aes256gcm;
@@ -420,23 +421,11 @@ exports.refreshJwtnRotateRT = function (req, res) {
 
       return res.status(
         HTTP_STATUS_CODES.OK
-      ).cookie('accessToken', newTokensObj.jwtToken, {
-        httpOnly: true,
-        maxAge: config.jwt.expiresInMilliseconds,
-        domain: config.cookieDomain
-      }).cookie('refreshToken', newTokensObj.encryptedRT, {
-        httpOnly: true,
-        maxAge: config.refreshToken.expiresInMilliseconds,
-        domain: config.cookieDomain
-      }).cookie('rsid', newTokensObj.redisRefreshTokenObj.rsid, {
-        httpOnly: true,
-        maxAge: config.refreshToken.expiresInMilliseconds,
-        domain: config.cookieDomain
-      }).cookie('sessIat', moment().unix(), {
-        httpOnly: true,
-        maxAge: config.jwt.expiresInMilliseconds,
-        domain: config.cookieDomain
-      }).json({
+      ).cookie('accessToken', newTokensObj.jwtToken, authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+      ).cookie('refreshToken', newTokensObj.encryptedRT, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+      ).cookie('rsid', newTokensObj.redisRefreshTokenObj.rsid, authCookieOpts.forMaxAge(config.refreshToken.expiresInMilliseconds)
+      ).cookie('sessIat', moment().unix(), authCookieOpts.forMaxAge(config.jwt.expiresInMilliseconds)
+      ).json({
         message: req.t('TOKEN_GENERATED_SUCCESS'),
         ...responsePayload
       });
