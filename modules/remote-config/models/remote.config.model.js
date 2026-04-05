@@ -28,3 +28,8 @@ exports.getAllRemoteConfigKeysAndDefaultValues = async function() {
 
     return await mysqlQueryRunner.runQueryInSlave(query, values);
 };
+
+exports.getValueByKeyFromRemoteConfig = async function (key) {
+    const query = `SELECT rc_value FROM remote_config WHERE rc_key_name = ? AND archived_at IS NULL`;
+    return await mysqlQueryRunner.runQueryInSlave(query, [key]);
+};
