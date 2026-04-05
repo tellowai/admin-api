@@ -347,11 +347,29 @@ exports.rollbackComponentToVersion = async function(componentId, versionId) {
 exports.publishComponent = async function(id, publishedBy) {
   const row = await exports.getComponentById(id);
   if (!row) return null;
-  const ver = parseInt(row.version, 10) || 1;
-  await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_components SET status = 'published', published_version = ?, published_at = NOW(), published_by = ? WHERE id = ?`,
-    [ver, publishedBy || null, id]
-  );
+  const draftVer = parseInt(row.version, 10) || 1;
+  let pubVer = null;
+  if (row.published_version != null && row.published_version !== '') {
+    const p = parseInt(row.published_version, 10);
+    if (!Number.isNaN(p)) pubVer = p;
+  }
+  const nodeJson = typeof row.node_json === 'string' ? row.node_json : JSON.stringify(row.node_json);
+
+  // First publish of current draft, or draft ahead of published: stamp published_version = draft (no extra snapshot).
+  // Republish same draft version as already live: bump version + append snapshot (parity with screen republish).
+  if (pubVer === null || pubVer !== draftVer) {
+    await mysqlQueryRunner.runQueryInMaster(
+      `UPDATE sdui_components SET status = 'published', published_version = ?, published_at = NOW(), published_by = ?, updated_at = NOW() WHERE id = ?`,
+      [draftVer, publishedBy || null, id]
+    );
+  } else {
+    const nextVer = draftVer + 1;
+    await exports.insertComponentVersionSnapshot(id, nextVer, nodeJson, publishedBy);
+    await mysqlQueryRunner.runQueryInMaster(
+      `UPDATE sdui_components SET status = 'published', published_version = ?, version = ?, published_at = NOW(), published_by = ?, updated_at = NOW() WHERE id = ?`,
+      [nextVer, nextVer, publishedBy || null, id]
+    );
+  }
   return await exports.getComponentById(id);
 };
 
@@ -487,11 +505,27 @@ exports.rollbackBlockToVersion = async function(blockId, versionId) {
 exports.publishBlock = async function(id, publishedBy) {
   const row = await exports.getBlockById(id);
   if (!row) return null;
-  const ver = parseInt(row.version, 10) || 1;
-  await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_blocks SET status = 'published', published_version = ?, published_at = NOW(), published_by = ? WHERE id = ?`,
-    [ver, publishedBy || null, id]
-  );
+  const draftVer = parseInt(row.version, 10) || 1;
+  let pubVer = null;
+  if (row.published_version != null && row.published_version !== '') {
+    const p = parseInt(row.published_version, 10);
+    if (!Number.isNaN(p)) pubVer = p;
+  }
+  const bodyJson = typeof row.body_json === 'string' ? row.body_json : JSON.stringify(row.body_json);
+
+  if (pubVer === null || pubVer !== draftVer) {
+    await mysqlQueryRunner.runQueryInMaster(
+      `UPDATE sdui_blocks SET status = 'published', published_version = ?, published_at = NOW(), published_by = ?, updated_at = NOW() WHERE id = ?`,
+      [draftVer, publishedBy || null, id]
+    );
+  } else {
+    const nextVer = draftVer + 1;
+    await exports.insertBlockVersionSnapshot(id, nextVer, bodyJson, publishedBy);
+    await mysqlQueryRunner.runQueryInMaster(
+      `UPDATE sdui_blocks SET status = 'published', published_version = ?, version = ?, published_at = NOW(), published_by = ?, updated_at = NOW() WHERE id = ?`,
+      [nextVer, nextVer, publishedBy || null, id]
+    );
+  }
   return await exports.getBlockById(id);
 };
 
