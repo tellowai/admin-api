@@ -61,7 +61,6 @@ exports.createScreen = async function(data) {
     data.created_by || null,
     data.updated_by || null
   ]);
-  await exports.insertScreenVersionSnapshot(id, ver, bodyJson, data.created_by || null);
   return id;
 };
 
@@ -77,6 +76,30 @@ exports.insertScreenVersionSnapshot = async function(screenId, versionNumber, bo
     [vid, screenId, versionNumber, bj, savedBy || null]
   );
   return vid;
+};
+
+exports.getLatestScreenVersionSnapshot = async function(screenId) {
+  const q = `SELECT version_number, body_json FROM sdui_screen_versions WHERE screen_id = ? ORDER BY version_number DESC LIMIT 1`;
+  const result = await mysqlQueryRunner.runQueryInSlave(q, [screenId]);
+  return result[0] || null;
+};
+
+exports.getScreenVersionJsonByNumber = async function(screenId, versionNumber) {
+  const q = `SELECT body_json FROM sdui_screen_versions WHERE screen_id = ? AND version_number = ? LIMIT 1`;
+  const result = await mysqlQueryRunner.runQueryInSlave(q, [screenId, versionNumber]);
+  return result[0] || null;
+};
+
+/** Update snapshot row if it exists (e.g. legacy per-save rows); otherwise insert. */
+exports.upsertScreenVersionSnapshot = async function(screenId, versionNumber, bodyJson, savedBy) {
+  const bj = typeof bodyJson === 'string' ? bodyJson : JSON.stringify(bodyJson);
+  const upd = await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_screen_versions SET body_json = ?, published_at = NOW(), published_by = ? WHERE screen_id = ? AND version_number = ?`,
+    [bj, savedBy || null, screenId, versionNumber]
+  );
+  const ar = upd && upd.affectedRows != null ? upd.affectedRows : 0;
+  if (ar > 0) return;
+  await exports.insertScreenVersionSnapshot(screenId, versionNumber, bj, savedBy);
 };
 
 /** Next draft version: above both history max and current row.version (legacy rows). */
@@ -132,7 +155,18 @@ exports.updateScreen = async function(id, updateData) {
     return;
   }
 
-  const nextVer = await exports.getNextScreenDraftVersionNumber(id, screen.version);
+  let draftVer = parseInt(screen.version, 10) || 1;
+  let pub = null;
+  if (screen.published_version != null && screen.published_version !== '') {
+    const pv = parseInt(screen.published_version, 10);
+    if (!Number.isNaN(pv)) pub = pv;
+  }
+  let newVersion = draftVer;
+  if (pub != null && draftVer === pub) {
+    const latest = await exports.getLatestScreenVersionSnapshot(id);
+    const maxHist = latest ? parseInt(latest.version_number, 10) || 0 : 0;
+    newVersion = Math.max(maxHist, draftVer, pub) + 1;
+  }
 
   const rowVer = parseInt(screen.version, 10) || 1;
   let pv =
@@ -156,37 +190,42 @@ exports.updateScreen = async function(id, updateData) {
     params.push(updateData.description);
   }
   setParts.push('body_json = ?', 'version = ?', `status = 'draft'`, 'published_version = ?', 'updated_by = ?', 'updated_at = NOW()');
-  params.push(newBody, nextVer, publishedVersionToSet, updateData.updated_by || null);
+  params.push(newBody, newVersion, publishedVersionToSet, updateData.updated_by || null);
   params.push(id);
   await mysqlQueryRunner.runQueryInMaster(`UPDATE sdui_screens SET ${setParts.join(', ')} WHERE id = ?`, params);
-  await exports.insertScreenVersionSnapshot(id, nextVer, newBody, updateData.updated_by || null);
 };
 
-/** Same semantics as publishComponent: first publish or new draft vs live → stamp published_version only; republish same version → bump + snapshot. */
+/** Publish current draft at `version` (no bump). Snapshots only on publish; upserts if row exists. */
 exports.publishScreen = async function(id, publishedBy) {
   const screen = await exports.getScreenById(id);
   if (!screen) return null;
-  const draftVer = parseInt(screen.version, 10) || 1;
-  let pubVer = null;
-  if (screen.published_version != null && screen.published_version !== '') {
-    const p = parseInt(screen.published_version, 10);
-    if (!Number.isNaN(p)) pubVer = p;
-  }
   const bodyJson = typeof screen.body_json === 'string' ? screen.body_json : JSON.stringify(screen.body_json);
 
-  if (pubVer === null || pubVer !== draftVer) {
-    await mysqlQueryRunner.runQueryInMaster(
-      `UPDATE sdui_screens SET status = 'published', published_version = ?, published_at = NOW(), updated_at = NOW() WHERE id = ?`,
-      [draftVer, id]
-    );
-  } else {
-    const nextVer = draftVer + 1;
-    await exports.insertScreenVersionSnapshot(id, nextVer, bodyJson, publishedBy || null);
-    await mysqlQueryRunner.runQueryInMaster(
-      `UPDATE sdui_screens SET status = 'published', published_version = ?, version = ?, published_at = NOW(), updated_at = NOW() WHERE id = ?`,
-      [nextVer, nextVer, id]
-    );
+  let pub = null;
+  if (screen.published_version != null && screen.published_version !== '') {
+    const pv = parseInt(screen.published_version, 10);
+    if (!Number.isNaN(pv)) pub = pv;
   }
+
+  if (screen.status === 'published' && pub != null) {
+    const sr = await exports.getScreenVersionJsonByNumber(id, pub);
+    const snapJson = sr
+      ? typeof sr.body_json === 'string'
+        ? sr.body_json
+        : JSON.stringify(sr.body_json)
+      : null;
+    if (snapJson === bodyJson) {
+      return true;
+    }
+  }
+
+  const draftVer = parseInt(screen.version, 10) || 1;
+
+  await exports.upsertScreenVersionSnapshot(id, draftVer, bodyJson, publishedBy || null);
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE sdui_screens SET status = 'published', published_version = ?, version = ?, published_at = NOW(), updated_at = NOW() WHERE id = ?`,
+    [draftVer, draftVer, id]
+  );
   return true;
 };
 
@@ -220,9 +259,10 @@ exports.rollbackToVersion = async function(screenId, versionId, updatedBy) {
   const version = await exports.getVersionById(versionId);
   if (!version || version.screen_id !== screenId) return false;
   const bodyJson = typeof version.body_json === 'string' ? version.body_json : JSON.stringify(version.body_json);
+  const vn = parseInt(version.version_number, 10) || 1;
   await mysqlQueryRunner.runQueryInMaster(
-    `UPDATE sdui_screens SET body_json = ?, updated_by = ?, status = 'draft', updated_at = NOW() WHERE id = ?`,
-    [bodyJson, updatedBy || null, screenId]
+    `UPDATE sdui_screens SET body_json = ?, version = ?, updated_by = ?, status = 'draft', updated_at = NOW() WHERE id = ?`,
+    [bodyJson, vn, updatedBy || null, screenId]
   );
   return true;
 };
