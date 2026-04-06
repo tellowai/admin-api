@@ -258,6 +258,14 @@ exports.loginWithOAuthGoogle = function (req, res) {
       var userEmail = userData.userDataFromGoogle.email;
       var providerUserId = userData.existingUserData[0].user_id;
 
+      if (userData.existingUserData.length > 1) {
+        adminOauthLog('finishAdminOAuthGoogle:warn_duplicate_provider_rows_same_sub', {
+          count: userData.existingUserData.length,
+          distinctUserIds: _.uniq(userData.existingUserData.map(function (r) { return r.user_id; })),
+          note: 'MySQL returns arbitrary first row as providerUserId; resolve by user.email or user_secondary_email.email'
+        });
+      }
+
       adminOauthLog('finishAdminOAuthGoogle:entered', {
         userEmail: userEmail,
         providerUserId: providerUserId,
@@ -302,12 +310,44 @@ exports.loginWithOAuthGoogle = function (req, res) {
           return runAdminJwtRedirectForUser(loggedInUserData[0].user_id, 'primary_email_on_user_table');
         }
 
-        adminOauthLog('finishAdminOAuthGoogle:branch_secondary_email_path', {
-          providerUserId: providerUserId,
-          userEmail: userEmail
+        adminOauthLog('finishAdminOAuthGoogle:primary_user_table_no_row_try_secondary_table', {
+          userEmail: userEmail,
+          providerUserId: providerUserId
         });
 
-        async.waterfall([
+        AuthDbo.getUserIdsBySecondaryEmailFromMaster(userEmail, function (secErr, secRows) {
+
+          if (secErr) {
+            adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_err', { message: secErr.message });
+            return res.status(secErr.httpStatusCode).json({ message: secErr.message });
+          }
+
+          adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_ok', {
+            rowCount: secRows.length,
+            userIds: secRows.map(function (r) { return r.user_id; })
+          });
+
+          if (secRows.length > 1) {
+            return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+              message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+              email: userEmail,
+              code: 'MULTIPLE_USER_IDS_FOR_SECONDARY_EMAIL'
+            });
+          }
+
+          if (secRows.length === 1) {
+            adminOauthLog('finishAdminOAuthGoogle:branch_resolved_via_secondary_email_table', {
+              resolvedUserId: secRows[0].user_id
+            });
+            return runAdminJwtRedirectForUser(secRows[0].user_id, 'google_email_on_secondary_email_table');
+          }
+
+          adminOauthLog('finishAdminOAuthGoogle:branch_secondary_email_path', {
+            providerUserId: providerUserId,
+            userEmail: userEmail
+          });
+
+          async.waterfall([
           function registerSecondaryEmailStep(next) {
 
             var rawDataForSecondayEmail = {
@@ -332,8 +372,34 @@ exports.loginWithOAuthGoogle = function (req, res) {
                     adminOauthLog('finishAdminOAuthGoogle:dup_recovery_found_user', { userId: rows[0].user_id });
                     return runAdminJwtRedirectForUser(rows[0].user_id, 'dup_recovery_to_primary_email_user');
                   }
-                  adminOauthLog('finishAdminOAuthGoogle:dup_recovery_no_single_row', { rowCount: rows ? rows.length : 0 });
-                  return res.status(err.httpStatusCode).json({ message: err.message });
+                  AuthDbo.getUserIdsBySecondaryEmailFromMaster(userEmail, function (e3, secRows) {
+                    if (e3) {
+                      adminOauthLog('finishAdminOAuthGoogle:dup_recovery_secondary_lookup_err', { message: e3.message });
+                      return res.status(e3.httpStatusCode).json({ message: e3.message });
+                    }
+                    if (secRows && secRows.length === 1) {
+                      adminOauthLog('finishAdminOAuthGoogle:dup_recovery_found_via_secondary_table', {
+                        userId: secRows[0].user_id
+                      });
+                      return runAdminJwtRedirectForUser(secRows[0].user_id, 'dup_recovery_secondary_email_owner');
+                    }
+                    if (secRows && secRows.length > 1) {
+                      return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+                        message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+                        email: userEmail,
+                        code: 'MULTIPLE_USER_IDS_FOR_SECONDARY_EMAIL'
+                      });
+                    }
+                    adminOauthLog('finishAdminOAuthGoogle:dup_recovery_exhausted', {
+                      primaryRowCount: rows ? rows.length : 0,
+                      secondaryRowCount: secRows ? secRows.length : 0
+                    });
+                    return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+                      message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+                      email: userEmail,
+                      code: 'OAUTH_EMAIL_LINK_AMBIGUOUS'
+                    });
+                  });
                 });
               }
               if (err) {
@@ -409,6 +475,7 @@ exports.loginWithOAuthGoogle = function (req, res) {
             HTTP_STATUS_CODES.OK
           ).json(tokenPayload);
         });
+        });
       });
     }
 
@@ -446,11 +513,37 @@ exports.loginWithOAuthGoogle = function (req, res) {
             adminOauthLog('loginWithOAuthGoogle:precheck_set_existing_from_email', { userId: emailRows[0].user_id });
             return finishAdminOAuthGoogle(userData);
           }
-          adminOauthLog('loginWithOAuthGoogle:response', { branch: 'NOT_AN_ADMIN_no_user_row_for_email' });
-          return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
-            message: req.t('user:NOT_AN_ADMIN'),
-            code: 'NOT_AN_ADMIN'
-          });
+          AuthDbo.getUserIdsBySecondaryEmailFromMaster(
+            userData.userDataFromGoogle.email,
+            function (secErr, secRows) {
+              if (secErr) {
+                return res.status(secErr.httpStatusCode).json({ message: secErr.message });
+              }
+              adminOauthLog('loginWithOAuthGoogle:secondary_precheck_no_provider', {
+                rowCount: secRows.length,
+                userIds: secRows.map(function (r) { return r.user_id; })
+              });
+              if (secRows.length > 1) {
+                return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+                  message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+                  email: userData.userDataFromGoogle.email,
+                  code: 'MULTIPLE_USER_IDS_FOR_SECONDARY_EMAIL'
+                });
+              }
+              if (secRows.length === 1) {
+                userData.existingUserData = [{ user_id: secRows[0].user_id }];
+                adminOauthLog('loginWithOAuthGoogle:precheck_set_existing_from_secondary_email', {
+                  userId: secRows[0].user_id
+                });
+                return finishAdminOAuthGoogle(userData);
+              }
+              adminOauthLog('loginWithOAuthGoogle:response', { branch: 'NOT_AN_ADMIN_no_user_row_for_email' });
+              return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+                message: req.t('user:NOT_AN_ADMIN'),
+                code: 'NOT_AN_ADMIN'
+              });
+            }
+          );
         }
       );
     } else {

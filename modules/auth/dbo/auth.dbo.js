@@ -203,6 +203,65 @@ exports.getUserDataByEmailFromMaster = function (userEmail, options, next) {
   });
 };
 
+/**
+ * Google email may live only on user_secondary_email (PK = email), not user.email.
+ * Master read for OAuth resolution and duplicate-recovery paths.
+ */
+exports.getUserIdsBySecondaryEmailFromMaster = function (userEmail, next) {
+
+  masterConnection.getConnection(function (connErr, connection) {
+
+    if (connErr) {
+
+      console.error(chalk.red(connErr));
+
+      var finalErrObj = mysqlErrorHandler.handleMysqlConnErrors(connErr);
+
+      if (connection) {
+
+        connection.release();
+      }
+
+      adminDebug.warn('auth.dbo.getUserIdsBySecondaryEmailFromMaster:conn_err', {
+        email: userEmail,
+        message: connErr.message
+      });
+      return next(finalErrObj);
+    }
+
+    connection.query(
+      'SELECT user_id FROM user_secondary_email WHERE email = ? AND deleted_at IS NULL',
+      [userEmail],
+      function (err, rows) {
+
+        if (err) {
+
+          console.error(chalk.red(err));
+          connection.release();
+
+          var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
+
+          adminDebug.warn('auth.dbo.getUserIdsBySecondaryEmailFromMaster:query_err', {
+            email: userEmail,
+            message: finalErrObj.message
+          });
+          return next(finalErrObj);
+        }
+
+        connection.release();
+
+        adminDebug.log('auth.dbo.getUserIdsBySecondaryEmailFromMaster:ok', {
+          email: userEmail,
+          rowCount: rows.length,
+          userIds: rows.map(function (r) { return r.user_id; })
+        });
+
+        return next(null, rows);
+      }
+    );
+  });
+};
+
 exports.registerDevice = function (deviceData, next) {
 
   masterConnection.getConnection(function (connErr, connection) {
