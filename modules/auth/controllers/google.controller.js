@@ -24,7 +24,33 @@ const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const PROJECT_CONSTANTS = require('../constants/project.constants').CONSTANTS;
 const moment = require('moment');
+const CUSTOM_ERROR_CODES =
+  require('../../core/controllers/customerrorcodes.server.controller').CODES;
 
+function registerOrRelinkGoogleProvider(resolvedUserId, userDataFromGoogle, next) {
+  if (!userDataFromGoogle || !userDataFromGoogle.user_id_from_provider) {
+    return next(null);
+  }
+  var providerDataObj = {
+    auth_provider_id: createId(),
+    provider_type: 'google',
+    user_id_from_provider: userDataFromGoogle.user_id_from_provider,
+    user_id: resolvedUserId
+  };
+  UserDbo.registerUserProvider(providerDataObj, function (err, rows) {
+    if (err && err.customErrCode === CUSTOM_ERROR_CODES.RESOURCE_EXISTS) {
+      return UserDbo.updateGoogleProviderUserIdBySub(
+        userDataFromGoogle.user_id_from_provider,
+        resolvedUserId,
+        next
+      );
+    }
+    if (err) {
+      return next(err);
+    }
+    next(null, rows);
+  });
+}
 
 /**
   * @api {get} /oauth/google OAuth login with Google
@@ -80,28 +106,18 @@ exports.loginWithOAuthGoogle = function (req, res) {
 
     const clientIp = requestIp.getClientIp(req);
 
-    // If user doesn't exist --> register user --> then login
-    if (!userData.existingUserData.length) {
-      return res.status(
-        HTTP_STATUS_CODES.BAD_REQUEST
-      ).json({
-        message: req.t('user:NOT_AN_ADMIN')
-      });
-    } else {
-
-      // If user exists 
-      // a) check if email provided from fb and in our db are same
-      // b) if same --> login
-      // c) if not same --> add this email in our db as secondary email
-      // d) then login
+    function finishAdminOAuthGoogle(userData) {
+      if (!userData.existingUserData.length) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: req.t('user:NOT_AN_ADMIN')
+        });
+      }
 
       var userEmail = userData.userDataFromGoogle.email;
-      var userId = userData.existingUserData[0].user_id;
+      var providerUserId = userData.existingUserData[0].user_id;
 
-      if (!userId) {
-        return res.status(
-          HTTP_STATUS_CODES.BAD_REQUEST
-        ).json({
+      if (!providerUserId) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
           message: req.t('user:USER_NOT_FOUND')
         });
       }
@@ -113,88 +129,68 @@ exports.loginWithOAuthGoogle = function (req, res) {
       AuthDbo.getUserDataByEmail(userEmail, options, function (err, loggedInUserData) {
 
         if (err) {
-
-          var responsePayload = {
-            message: err.message
-          };
-
-          return res.status(
-            err.httpStatusCode
-          ).json(responsePayload);
+          return res.status(err.httpStatusCode).json({ message: err.message });
         }
 
-        // This email exists -> not a new email
-        if (loggedInUserData.length) {
+        if (loggedInUserData.length > 1) {
+          return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+            message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+            email: userEmail
+          });
+        }
 
-          UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
-            if (err) {
+        // Primary email on `user` row — admin + JWT must follow the canonical user_id for this email
+        if (loggedInUserData.length === 1) {
+          var resolvedUserId = loggedInUserData[0].user_id;
 
-              var responsePayload = {
-                message: err.message
-              };
-
-              return res.status(
-                err.httpStatusCode
-              ).json(responsePayload);
+          registerOrRelinkGoogleProvider(resolvedUserId, userData.userDataFromGoogle, function (linkErr) {
+            if (linkErr) {
+              return res.status(linkErr.httpStatusCode || HTTP_STATUS_CODES.BAD_REQUEST).json({
+                message: linkErr.message
+              });
             }
 
-            if (!adminUserData) {
-
-              var responsePayload = {
-                message: req.t('user:NOT_AN_ADMIN')
-              };
-
-              return res.status(
-                HTTP_STATUS_CODES.UNAUTHORIZED
-              ).json(responsePayload);
-            }
-
-            var userDataForJWT = {
-              user_id: userId
-            };
-
-            TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
-
+            UserDbo.getAdminUserRoleByUserId(resolvedUserId, function (err, adminUserData) {
               if (err) {
+                return res.status(err.httpStatusCode).json({ message: err.message });
+              }
 
-                const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
-                var responsePayload = {
-                  message: errMsg
-                };
+              if (!adminUserData) {
+                return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+                  message: req.t('user:NOT_AN_ADMIN')
+                });
+              }
 
-                res.status(
-                  HTTP_STATUS_CODES.BAD_REQUEST
-                ).json(responsePayload);
-              } else {
+              var userDataForJWT = {
+                user_id: resolvedUserId
+              };
+
+              TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
+
+                if (err) {
+                  const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+                  return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: errMsg });
+                }
 
                 var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
-                userLoginDeviceData.userId = userId;
+                userLoginDeviceData.userId = resolvedUserId;
                 userLoginDeviceData.tokenData = tokenData;
                 userLoginDeviceData.clientIp = clientIp;
 
                 AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-
-                  // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
-                  // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
+                  // best-effort
                 });
 
-                // publish kafka event
                 kafkaCtrl.sendMessage(
                   TOPICS.AUTH_EVENT_LOGGED_IN,
                   [{
                     value: {
-                      userId: userId,
+                      userId: resolvedUserId,
                       provider: 'google'
                     }
                   }],
                   'logged_in'
                 );
-
-                var responsePayload = {
-                  accessToken: tokenData.jwtToken,
-                  refreshToken: tokenData.encryptedRT,
-                  rsid: tokenData.redisRefreshTokenObj.rsid
-                };
 
                 return res.cookie('accessToken', tokenData.jwtToken, {
                   httpOnly: true,
@@ -211,33 +207,28 @@ exports.loginWithOAuthGoogle = function (req, res) {
                 }).status(
                   HTTP_STATUS_CODES.OK
                 ).redirect(config.clientDomainUrl + "/");
-              }
+              });
             });
           });
         } else {
 
-          // This email does not exist -> new email
+          // Google email not stored on `user` — attach as secondary on the provider-linked account
           async.waterfall([
             function registerSecondaryEmail(next) {
 
               var rawDataForSecondayEmail = {
                 email: userEmail,
-                user_id: userId
-              }
+                user_id: providerUserId
+              };
 
-              var secondaryEmailObj = getSecondaryEmailData(rawDataForSecondayEmail)
+              var secondaryEmailObj = getSecondaryEmailData(rawDataForSecondayEmail);
 
               UserDbo.registerSecondaryEmail(secondaryEmailObj, function (err, registeredUserProvider) {
-
-                // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE JUST TRYING TO INSERT NEW EMAIL
-                // ONLY IF EMAIL DOES NOT EXIST. WHEN THIS EMAIL IS ALREADY EXISTS ON DB
-                // DB THROWS DUP_ENTRY ERROR. WE DO NOT NEED TO HANDLE IT SPECIFICALLY
-
                 return next(null);
               });
             }, function (next) {
 
-              UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
+              UserDbo.getAdminUserRoleByUserId(providerUserId, function (err, adminUserData) {
                 if (err) {
                   var errPayload = { message: err.message };
                   return res.status(err.httpStatusCode).json(errPayload);
@@ -250,32 +241,23 @@ exports.loginWithOAuthGoogle = function (req, res) {
                 }
 
                 var userDataForJWT = {
-                  user_id: userId
+                  user_id: providerUserId
                 };
 
                 TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
 
                   if (err) {
-
                     const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
-                    var responsePayload = {
-                      message: errMsg
-                    };
-
-                    return res.status(
-                      HTTP_STATUS_CODES.BAD_REQUEST
-                    ).json(responsePayload);
+                    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: errMsg });
                   }
 
                   var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
-                  userLoginDeviceData.userId = userId;
+                  userLoginDeviceData.userId = providerUserId;
                   userLoginDeviceData.tokenData = tokenData;
                   userLoginDeviceData.clientIp = clientIp;
 
                   AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-
-                    // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
-                    // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
+                    // best-effort
                   });
 
                   return res.cookie('accessToken', tokenData.jwtToken, {
@@ -299,7 +281,6 @@ exports.loginWithOAuthGoogle = function (req, res) {
           ], function (errObj, tokenPayload) {
 
             if (errObj) {
-
               return res.status(
                 errObj.httpStatusCode
               ).json({
@@ -313,6 +294,39 @@ exports.loginWithOAuthGoogle = function (req, res) {
           });
         }
       });
+    }
+
+    if (!userData.userDataFromGoogle || !userData.userDataFromGoogle.email) {
+      return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+        message: req.t('user:AUTHENTICATION_FAILED') || 'Authentication failed'
+      });
+    }
+
+    if (!userData.existingUserData.length) {
+      AuthDbo.getUserDataByEmail(
+        userData.userDataFromGoogle.email,
+        { select: ['email', 'user_id'] },
+        function (emailErr, emailRows) {
+          if (emailErr) {
+            return res.status(emailErr.httpStatusCode).json({ message: emailErr.message });
+          }
+          if (emailRows.length > 1) {
+            return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+              message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+              email: userData.userDataFromGoogle.email
+            });
+          }
+          if (emailRows.length === 1) {
+            userData.existingUserData = emailRows;
+            return finishAdminOAuthGoogle(userData);
+          }
+          return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+            message: req.t('user:NOT_AN_ADMIN')
+          });
+        }
+      );
+    } else {
+      finishAdminOAuthGoogle(userData);
     }
   })(req, res);;
 }

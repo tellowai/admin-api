@@ -89,6 +89,40 @@ exports.registerUserProvider = function (providerDataObj, next) {
   });
 };
 
+/**
+ * Re-point Google login (by `sub`) at the canonical user row — e.g. admin lives on email match, provider was tied to a duplicate user.
+ */
+exports.updateGoogleProviderUserIdBySub = function (googleSub, userId, next) {
+  masterConnection.getConnection(function (connErr, connection) {
+    if (connErr) {
+      console.error(chalk.red(connErr));
+      var finalErrObj = mysqlErrorHandler.handleMysqlConnErrors(connErr);
+      if (connection) {
+        connection.release();
+      }
+      return next(finalErrObj);
+    }
+
+    var safeSub = String(googleSub).trim();
+
+    connection.query(
+      'UPDATE user_authentication_provider SET user_id = ? WHERE user_id_from_provider = ? AND provider_type = ?',
+      [userId, safeSub, 'google'],
+      function (err, result) {
+        if (err) {
+          console.error(chalk.red(err));
+          connection.release();
+          var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
+          return next(finalErrObj);
+        }
+
+        connection.release();
+        return next(null, result);
+      }
+    );
+  });
+};
+
 exports.registerSecondaryEmail = function (userDataObj, next) {
 
   masterConnection.getConnection(function (connErr, connection) {
