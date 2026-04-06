@@ -468,7 +468,8 @@ exports.getAdminUserRoleByUserId = async function(userId, options, next) {
     };
   }
 
-  slaveConnection.getConnection(function (connErr, connection) {
+  // Use master so this gate matches RbacModel (master) and JWT claims; replica lag could wrongly deny/allow OAuth.
+  masterConnection.getConnection(function (connErr, connection) {
 
     if (connErr) {
         
@@ -499,12 +500,11 @@ exports.getAdminUserRoleByUserId = async function(userId, options, next) {
 
         connection.release();
 
-        if(rows.length) {
-
+        if (rows.length) {
           return next(null, rows[0]);
-        } 
-        
-        return next(null, rows[0]);
+        }
+
+        return next(null, null);
       }
     );
   });

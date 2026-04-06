@@ -2,13 +2,14 @@
 const JWT = require('jsonwebtoken');
 const config = require('../../../config/config');
 const RbacModel = require('../models/rbac.model');
+const logger = require('../../../config/lib/logger');
 
 exports.generateToken = function (user, next) {
   // Use async IIFE to handle async operations with callback
   (async () => {
     try {
-      // Fetch user roles and permissions from database
-      const { roles, permissions } = await RbacModel.getUserRolesAndPermissions(user.user_id);
+      // Always read fresh RBAC for minted tokens (avoid stale in-memory cache between login/refresh)
+      const { roles, permissions } = await RbacModel.getUserRolesAndPermissions(user.user_id, false);
       
       // Extract permission codes for easier checking
       const permissionCodes = permissions.map(p => p.permission_code);
@@ -44,7 +45,11 @@ exports.generateToken = function (user, next) {
         next(jwtToken);
       }
     } catch (error) {
-      console.error('Error generating JWT token:', error);
+      logger.error('generateToken: RBAC fetch failed; issuing minimal JWT (isAdmin false, empty roles)', {
+        userId: user.user_id,
+        errName: error.name,
+        errMessage: error.message
+      });
       // Fallback to basic token if RBAC fetch fails
       let payload = {
         userId: user.user_id,

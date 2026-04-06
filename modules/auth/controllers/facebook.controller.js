@@ -234,35 +234,46 @@ exports.loginWithOAuthFacebook = function (req, res) {
               });
             }, function (next) {
 
-              var userDataForJWT = {
-                user_id : userId
-              };
+              UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
+                if (err) {
+                  return res.status(err.httpStatusCode).json({ message: err.message });
+                }
 
-              TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
+                if (!adminUserData) {
+                  return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+                    message: req.t('user:NOT_AN_ADMIN')
+                  });
+                }
 
-                if(err) {
-            
-                  const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
-                  var responsePayload = {
-                    message : errMsg
-                  };
-            
-                  return res.status(
-                    HTTP_STATUS_CODES.BAD_REQUEST
-                  ).json(responsePayload);
-                } else {
+                var userDataForJWT = {
+                  user_id : userId
+                };
+
+                TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
+
+                  if(err) {
+              
+                    const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+                    var responsePayload = {
+                      message : errMsg
+                    };
+              
+                    return res.status(
+                      HTTP_STATUS_CODES.BAD_REQUEST
+                    ).json(responsePayload);
+                  }
 
                   var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
                   userLoginDeviceData.userId = userId;
                   userLoginDeviceData.tokenData = tokenData;
                   userLoginDeviceData.clientIp = clientIp;
-    
+      
                   AuthCtrl.registerDeviceNSaveLoginHistory(userLoginDeviceData, function (err, loginDeviceSavedResp) {
-            
+              
                     // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
                     // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
                   });
-            
+      
                   var tokenPayload = {
                     accessToken : tokenData.jwtToken,
                     refreshToken : tokenData.encryptedRT,
@@ -270,27 +281,7 @@ exports.loginWithOAuthFacebook = function (req, res) {
                   };
 
                   return next(null, tokenPayload);
-                  
-                  // res.cookie('accessToken', tokenData.jwtToken, {
-                  //   httpOnly : true,
-                  //   maxAge : config.jwt.expiresInMilliseconds,
-                  //   domain : config.cookieDomain
-                  // }).cookie('refreshToken', tokenData.encryptedRT, {
-                  //   httpOnly : true,
-                  //   maxAge : config.refreshToken.expiresInMilliseconds,
-                  //   domain : config.cookieDomain
-                  // }).cookie('rsid', tokenData.redisRefreshTokenObj.rsid, {
-                  //   httpOnly : true,
-                  //   maxAge : config.refreshToken.expiresInMilliseconds,
-                  //   domain : config.cookieDomain
-                  // }).cookie('sessIat', moment().unix(), {
-                  //   httpOnly : true,
-                  //   maxAge : config.jwt.expiresInMilliseconds,
-                  //   domain : config.cookieDomain
-                  // }).status(
-                  //   HTTP_STATUS_CODES.OK
-                  // ).redirect(config.creatorsWebDomainUrl);
-                }
+                });
               });
             }
           ], function (errObj, tokenPayload) {

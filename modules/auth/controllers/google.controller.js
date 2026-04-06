@@ -237,23 +237,35 @@ exports.loginWithOAuthGoogle = function (req, res) {
               });
             }, function (next) {
 
-              var userDataForJWT = {
-                user_id: userId
-              };
-
-              TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
-
+              UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
                 if (err) {
+                  var errPayload = { message: err.message };
+                  return res.status(err.httpStatusCode).json(errPayload);
+                }
 
-                  const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
-                  var responsePayload = {
-                    message: errMsg
-                  };
+                if (!adminUserData) {
+                  return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+                    message: req.t('user:NOT_AN_ADMIN')
+                  });
+                }
 
-                  return res.status(
-                    HTTP_STATUS_CODES.BAD_REQUEST
-                  ).json(responsePayload);
-                } else {
+                var userDataForJWT = {
+                  user_id: userId
+                };
+
+                TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
+
+                  if (err) {
+
+                    const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+                    var responsePayload = {
+                      message: errMsg
+                    };
+
+                    return res.status(
+                      HTTP_STATUS_CODES.BAD_REQUEST
+                    ).json(responsePayload);
+                  }
 
                   var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
                   userLoginDeviceData.userId = userId;
@@ -265,14 +277,6 @@ exports.loginWithOAuthGoogle = function (req, res) {
                     // DO NOT BOTHER IF THERE IS ANY ERROR FROM DB. WE ARE TRYING TO INSERT DEVICE DATA AND 
                     // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
                   });
-
-                  var tokenPayload = {
-                    accessToken: tokenData.jwtToken,
-                    refreshToken: tokenData.encryptedRT,
-                    rsid: tokenData.redisRefreshTokenObj.rsid
-                  };
-
-                  // return next(null, tokenPayload);
 
                   return res.cookie('accessToken', tokenData.jwtToken, {
                     httpOnly: true,
@@ -289,7 +293,7 @@ exports.loginWithOAuthGoogle = function (req, res) {
                   }).status(
                     HTTP_STATUS_CODES.OK
                   ).redirect(config.clientDomainUrl + "/");
-                }
+                });
               });
             }
           ], function (errObj, tokenPayload) {
@@ -558,23 +562,36 @@ exports.loginWithGoogleToken = function (req, res) {
         var options = {
           select: ['email', 'user_id']
         };
-        var userDataForJWT = {
-          user_id: userId
-        };
 
-        TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
-
+        UserDbo.getAdminUserRoleByUserId(userId, function (err, adminUserData) {
           if (err) {
+            return res.status(err.httpStatusCode).json({ message: err.message });
+          }
 
-            const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
-            var responsePayload = {
-              message: errMsg
-            };
+          if (!adminUserData) {
+            return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
+              message: req.t('user:NOT_AN_ADMIN')
+            });
+          }
 
-            res.status(
-              HTTP_STATUS_CODES.BAD_REQUEST
-            ).json(responsePayload);
-          } else {
+          var userDataForJWT = {
+            user_id: userId
+          };
+
+          TokensCtrl.generateJWTnRefreshTokens(userDataForJWT, function (err, tokenData) {
+
+            if (err) {
+
+              const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+              var responsePayload = {
+                message: errMsg
+              };
+
+              return res.status(
+                HTTP_STATUS_CODES.BAD_REQUEST
+              ).json(responsePayload);
+            }
+
             var userLoginDeviceData = getLoggedInDeviceData(req.headers['user-agent'], req.body);
             userLoginDeviceData.userId = userId;
             userLoginDeviceData.tokenData = tokenData;
@@ -586,7 +603,6 @@ exports.loginWithGoogleToken = function (req, res) {
               // LOGIN HISTORY DATA HERE. RESPONSE IS NOT NEEDED
             });
 
-            // publish kafka event
             kafkaCtrl.sendMessage(
               TOPICS.AUTH_EVENT_LOGGED_IN,
               [{
@@ -605,10 +621,10 @@ exports.loginWithGoogleToken = function (req, res) {
               username: userData.existingUserData[0].username
             };
 
-            res.status(
+            return res.status(
               HTTP_STATUS_CODES.OK
             ).json(responsePayload);
-          }
+          });
         });
       }
     }
