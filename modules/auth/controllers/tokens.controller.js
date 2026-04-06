@@ -4,6 +4,7 @@ var jwtCtrl = require('../controllers/jwt.controller');
 var refreshTokenCtrl = require('./refreshToken.controller');
 var AES256GCM = require('../controllers/aes-gcm.contorller').aes256gcm;
 var HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const adminDebug = require('../utils/adminDebugStdout');
 
 var _ = require('lodash');
 var i18next = require('i18next');
@@ -25,6 +26,11 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
     next = options;
     options = {};
   }
+
+  adminDebug.log('tokens.generateJWTnRefreshTokens:start', {
+    userId: userDataForJWT && userDataForJWT.user_id,
+    isRotateRT: Boolean(options && options.isRotateRT)
+  });
 
   var finalTokenObj = {};
 
@@ -55,8 +61,13 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
       generateBcryptHash(finalTokenObj.refreshToken, function (err, hashedRT) {
 
         if (err) {
-          const errMsg = req.t('HASH_FAILED') + ' ' +
-            req.t('PLEASE_TRY_AGAIN');
+          const errMsg = i18next.t('HASH_FAILED') + ' ' +
+            i18next.t('PLEASE_TRY_AGAIN');
+
+          adminDebug.warn('tokens.generateJWTnRefreshTokens:bcrypt_hash_failed', {
+            userId: userDataForJWT && userDataForJWT.user_id,
+            errMessage: err && err.message
+          });
 
           callback({
             message: errMsg
@@ -108,6 +119,11 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
               const errMsg = i18next.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
 
+              adminDebug.warn('tokens.generateJWTnRefreshTokens:redis_rt_obj_failed_rotate', {
+                userId: userDataForJWT && userDataForJWT.user_id,
+                errMessage: err && err.message
+              });
+
               return callback({
                 message: errMsg
               });
@@ -126,7 +142,12 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
             if (err) {
 
-              const errMsg = req.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+              const errMsg = i18next.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+
+              adminDebug.warn('tokens.generateJWTnRefreshTokens:redis_rt_obj_failed', {
+                userId: userDataForJWT && userDataForJWT.user_id,
+                errMessage: err && err.message
+              });
 
               return callback({
                 message: errMsg
@@ -167,10 +188,20 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
           if (err) {
 
+            adminDebug.warn('tokens.generateJWTnRefreshTokens:redis_save_refresh_failed', {
+              userId: userDataForJWT && userDataForJWT.user_id,
+              errMessage: err && String(err)
+            });
+
             return callback({
               message: err
             });
           }
+
+          adminDebug.log('tokens.generateJWTnRefreshTokens:redis_save_refresh_ok', {
+            userId: userDataForJWT && userDataForJWT.user_id,
+            rsid: finalTokenObj.redisRefreshTokenObj && finalTokenObj.redisRefreshTokenObj.rsid
+          });
 
           return callback(null, finalTokenObj);
         });
@@ -179,10 +210,21 @@ var generateJWTnRefreshTokens = function (userDataForJWT, options, next) {
 
     if (err) {
 
-      const errMsg = i18next.t('SOMETHING_WENT_WRONG_PLEASE_TRY_AGAIN');
+      adminDebug.warn('tokens.generateJWTnRefreshTokens:waterfall_failed', {
+        userId: userDataForJWT && userDataForJWT.user_id,
+        errMessage: err && err.message,
+        errKeys: err && typeof err === 'object' ? Object.keys(err) : []
+      });
 
       return next(err);
     }
+
+    adminDebug.log('tokens.generateJWTnRefreshTokens:complete', {
+      userId: userDataForJWT && userDataForJWT.user_id,
+      jwtLength: finalResultObj.jwtToken && finalResultObj.jwtToken.length,
+      rsid: finalResultObj.redisRefreshTokenObj && finalResultObj.redisRefreshTokenObj.rsid,
+      encryptedRTLength: finalResultObj.encryptedRT && finalResultObj.encryptedRT.length
+    });
 
     next(null, finalResultObj);
   });

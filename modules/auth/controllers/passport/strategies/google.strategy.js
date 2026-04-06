@@ -5,6 +5,7 @@ var config = require('../../../../../config/config');
 var versionConfig = require('../../../../version');
 var AuthDbo = require('../../../dbo/auth.dbo');
 const { createId } =  require('@paralleldrive/cuid2');
+const adminDebug = require('../../../utils/adminDebugStdout');
 
 
 module.exports = function () {
@@ -27,9 +28,34 @@ module.exports = function () {
 
           if(err) {
 
+            adminDebug.warn('google.strategy:provider_lookup_error', {
+              message: err.message,
+              subTail: userDataFromGoogle.user_id_from_provider
+                ? String(userDataFromGoogle.user_id_from_provider).slice(-8)
+                : null
+            });
+            console.log('[admin-oauth] google.strategy:provider_lookup_error ' + JSON.stringify({
+              message: err.message,
+              sub: userDataFromGoogle.user_id_from_provider
+            }));
             return done(err);
           }
-          
+
+          adminDebug.log('google.strategy:provider_lookup_ok', {
+            email: userDataFromGoogle.email,
+            providerRowCount: existingUserData ? existingUserData.length : 0,
+            linkedUserIds: existingUserData ? existingUserData.map(function (r) { return r.user_id; }) : [],
+            subTail: userDataFromGoogle.user_id_from_provider
+              ? String(userDataFromGoogle.user_id_from_provider).slice(-8)
+              : null
+          });
+          console.log('[admin-oauth] google.strategy:provider_lookup_ok ' + JSON.stringify({
+            sub: userDataFromGoogle.user_id_from_provider,
+            email: userDataFromGoogle.email,
+            providerRowCount: existingUserData ? existingUserData.length : 0,
+            linkedUserId: existingUserData && existingUserData[0] && existingUserData[0].user_id
+          }));
+
           return done(null, {
             userDataFromGoogle: userDataFromGoogle,
             existingUserData: existingUserData

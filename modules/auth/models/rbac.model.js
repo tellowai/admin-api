@@ -1,6 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const adminDebug = require('../utils/adminDebugStdout');
 
 // In-memory cache for user permissions
 // Format: { userId: { permissions: [...], roles: [...], expiresAt: timestamp } }
@@ -158,6 +159,11 @@ exports.getUserRolesAndPermissions = async function(userId, useCache = true) {
   if (useCache) {
     const cached = permissionCache.get(userId);
     if (cached && cached.expiresAt > Date.now()) {
+      adminDebug.log('rbac.getUserRolesAndPermissions:cache_hit', {
+        userId: userId,
+        roleCount: cached.roles ? cached.roles.length : 0,
+        permCount: cached.permissions ? cached.permissions.length : 0
+      });
       return {
         roles: cached.roles,
         permissions: cached.permissions
@@ -169,6 +175,14 @@ exports.getUserRolesAndPermissions = async function(userId, useCache = true) {
     this.getUserRoles(userId),
     this.getUserPermissions(userId, false) // Don't cache twice
   ]);
+
+  adminDebug.log('rbac.getUserRolesAndPermissions:db_load', {
+    userId: userId,
+    useCache: useCache,
+    roleCount: roles.length,
+    permCount: permissions.length,
+    roleNamesSample: roles.slice(0, 12).map(function (r) { return r.role_name; })
+  });
 
   // Cache the result
   if (useCache) {

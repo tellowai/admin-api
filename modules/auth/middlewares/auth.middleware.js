@@ -3,6 +3,20 @@ const JWT = require('jsonwebtoken');
 const config = require('../../../config/config');
 const RbacModel = require('../models/rbac.model');
 const logger = require('../../../config/lib/logger');
+const adminDebug = require('../utils/adminDebugStdout');
+
+/** Log only cookie *names* from raw header — no values (avoids leaking tokens in stdout). */
+function rawCookieHeaderNames(req) {
+  var raw = req.headers && req.headers.cookie;
+  if (!raw || typeof raw !== 'string') {
+    return { present: false, names: [] };
+  }
+  var names = raw.split(';').map(function (part) {
+    var eq = part.indexOf('=');
+    return (eq === -1 ? part : part.slice(0, eq)).trim();
+  }).filter(Boolean);
+  return { present: true, nameCount: names.length, names: names.slice(0, 40) };
+}
 
 function bearerTokenFromReq(req) {
   if (!req.headers.authorization) {
@@ -268,11 +282,26 @@ exports.isAdminUser = function (req, res, next) {
       hasCookieAccessToken: Boolean(req.cookies && req.cookies.accessToken),
       authorizationHeader: summarizeAuthHeader(req),
       tokenAttemptCount: attempts.length,
-      tokenSourcesAttempted: attempts.map(function (a) { return a.source; })
+      tokenSourcesAttempted: attempts.map(function (a) { return a.source; }),
+      origin: req.headers && req.headers.origin,
+      host: req.headers && req.headers.host,
+      refererTail: req.headers && req.headers.referer
+        ? String(req.headers.referer).slice(-120)
+        : null,
+      cookieParserKeys: Object.keys(req.cookies || {}).sort(),
+      rawCookieHeaderNames: rawCookieHeaderNames(req),
+      cookieDomainEnv: config.cookieDomain || ''
     };
+
+    adminDebug.log('isAdminUser:incoming', baseCtx);
 
     if (candidates.length === 0) {
       logger.warn('isAdminUser: no access token candidates (UNAUTHORIZED)', baseCtx);
+      try {
+        console.warn('[admin-auth-middleware] isAdminUser: no access token candidates', JSON.stringify(baseCtx));
+      } catch (e) {
+        console.warn('[admin-auth-middleware] isAdminUser: no access token candidates (ctx stringify failed)');
+      }
       const errMsg = req.t('UNAUTHORIZED');
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
     }
@@ -280,17 +309,24 @@ exports.isAdminUser = function (req, res, next) {
     var decodeResult = tryDecodeAccessAttempts(attempts, config.jwt.secret);
     var decoded = decodeResult.decoded;
     if (!decoded || !decoded.userId) {
-      logger.warn('isAdminUser: JWT verify failed or missing userId (UNAUTHORIZED)', Object.assign({}, baseCtx, {
+      var jwtFailCtx = Object.assign({}, baseCtx, {
         jwtUsedSource: decodeResult.usedSource,
         jwtUsedIndex: decodeResult.usedIndex,
         jwtVerifyErrors: decodeResult.jwtErrors,
         decodedHadUserId: Boolean(decoded && decoded.userId)
-      }));
+      });
+      logger.warn('isAdminUser: JWT verify failed or missing userId (UNAUTHORIZED)', jwtFailCtx);
+      try {
+        console.warn('[admin-auth-middleware] isAdminUser: jwt_verify_failed', JSON.stringify(jwtFailCtx));
+      } catch (e) {
+        console.warn('[admin-auth-middleware] isAdminUser: jwt_verify_failed (ctx stringify failed)');
+      }
       const errMsg = req.t('UNAUTHORIZED');
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
     }
 
     var allowed = jwtClaimsIndicateAdmin(decoded);
+    var adminGrantedViaRbac = false;
     var rbacCtx = {
       jwtUsedSource: decodeResult.usedSource,
       jwtUsedIndex: decodeResult.usedIndex,
@@ -298,6 +334,13 @@ exports.isAdminUser = function (req, res, next) {
       jwtHadPriorVerifyErrors: decodeResult.jwtErrors.length > 0,
       priorJwtErrors: decodeResult.jwtErrors
     };
+
+    adminDebug.log('isAdminUser:jwt_decoded', {
+      path: baseCtx.path,
+      userId: decoded.userId,
+      jwtIndicatesAdmin: allowed,
+      usedSource: decodeResult.usedSource
+    });
 
     if (!allowed) {
       try {
@@ -310,10 +353,22 @@ exports.isAdminUser = function (req, res, next) {
           : [];
         if (rbac.roles && rbac.roles.length > 0) {
           allowed = true;
+          adminGrantedViaRbac = true;
           decoded = Object.assign({}, decoded, {
             isAdmin: true,
             roles: rbac.roles.map(function (r) { return r.role_name; }),
             permissions: rbac.permissions.map(function (p) { return p.permission_code; })
+          });
+          adminDebug.log('isAdminUser:rbac_recovered_admin', {
+            path: baseCtx.path,
+            userId: decoded.userId,
+            rbacRoleCount: rbacCtx.rbacRoleCount,
+            rbacRoleNames: rbacCtx.rbacRoleNames
+          });
+        } else {
+          adminDebug.log('isAdminUser:rbac_empty_roles', {
+            path: baseCtx.path,
+            userId: decoded.userId
           });
         }
       } catch (rbacErr) {
@@ -321,14 +376,26 @@ exports.isAdminUser = function (req, res, next) {
         rbacCtx.rbacErrorName = rbacErr.name;
         rbacCtx.rbacErrorMessage = rbacErr.message;
         logger.error('isAdminUser: RBAC lookup threw', Object.assign({}, baseCtx, rbacCtx));
+        adminDebug.warn('isAdminUser:rbac_lookup_threw', {
+          path: baseCtx.path,
+          userId: decoded.userId,
+          errName: rbacErr.name,
+          errMessage: rbacErr.message
+        });
       }
     }
 
     if (!allowed) {
-      logger.warn('isAdminUser: NOT_AN_ADMIN — JWT has no admin signals and DB has no roles (or RBAC failed)', Object.assign({}, baseCtx, rbacCtx, {
+      var notAdminCtx = Object.assign({}, baseCtx, rbacCtx, {
         outcome: 'NOT_AN_ADMIN',
         hint: 'Check: stale JWT without roles; user not in admin_user_role; cookie vs Bearer mismatch; token expired (see jwtClaimsSummary.expDeltaSec)'
-      }));
+      });
+      logger.warn('isAdminUser: NOT_AN_ADMIN — JWT has no admin signals and DB has no roles (or RBAC failed)', notAdminCtx);
+      try {
+        console.warn('[admin-auth-middleware] isAdminUser: NOT_AN_ADMIN', JSON.stringify(notAdminCtx));
+      } catch (e) {
+        console.warn('[admin-auth-middleware] isAdminUser: NOT_AN_ADMIN (ctx stringify failed)');
+      }
       return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({
         message: req.t('user:NOT_AN_ADMIN'),
         code: 'NOT_AN_ADMIN'
@@ -336,6 +403,12 @@ exports.isAdminUser = function (req, res, next) {
     }
 
     req.user = decoded;
+    adminDebug.log('isAdminUser:OK', {
+      path: baseCtx.path,
+      userId: decoded.userId,
+      tokenSource: decodeResult.usedSource,
+      adminGrantedViaRbac: adminGrantedViaRbac
+    });
     return next(null);
   })().catch(function (err) {
     logger.error('isAdminUser: unexpected error', {
@@ -343,6 +416,11 @@ exports.isAdminUser = function (req, res, next) {
       errName: err.name,
       errMessage: err.message,
       path: req.originalUrl || req.url
+    });
+    adminDebug.warn('isAdminUser:unexpected_throw', {
+      path: req.originalUrl || req.url,
+      errName: err.name,
+      errMessage: err.message
     });
     return next(err);
   });

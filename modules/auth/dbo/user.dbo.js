@@ -1,5 +1,6 @@
 var masterConnection = require("../../../config/lib/mysql").masterConn;
 var slaveConnection = require("../../../config/lib/mysql").slaveConn;
+var adminDebug = require('../utils/adminDebugStdout');
 var HTTP_STATUS_CODES =
   require("../../core/controllers/httpcodes.server.controller").CODES;
 var CUSTOM_ERROR_CODES =
@@ -52,6 +53,14 @@ exports.registerUser = function (userDataObj, next) {
 
 exports.registerUserProvider = function (providerDataObj, next) {
 
+  adminDebug.log('user.dbo.registerUserProvider:attempt', {
+    provider_type: providerDataObj && providerDataObj.provider_type,
+    user_id: providerDataObj && providerDataObj.user_id,
+    user_id_from_provider_tail: providerDataObj && providerDataObj.user_id_from_provider
+      ? String(providerDataObj.user_id_from_provider).slice(-8)
+      : null
+  });
+
   masterConnection.getConnection(function (connErr, connection) {
 
     if (connErr) {
@@ -65,6 +74,7 @@ exports.registerUserProvider = function (providerDataObj, next) {
         connection.release();
       }
 
+      adminDebug.warn('user.dbo.registerUserProvider:conn_err', { message: connErr.message });
       return next(finalErrObj);
     }
 
@@ -78,10 +88,20 @@ exports.registerUserProvider = function (providerDataObj, next) {
           
           var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
 
+          adminDebug.warn('user.dbo.registerUserProvider:insert_err', {
+            customErrCode: finalErrObj.customErrCode,
+            message: finalErrObj.message,
+            originalMessage: finalErrObj.originalMessage
+          });
+
           return next(finalErrObj);
         }
 
         connection.release();
+
+        adminDebug.log('user.dbo.registerUserProvider:insert_ok', {
+          user_id: providerDataObj && providerDataObj.user_id
+        });
 
         return next(null, rows);
       }
@@ -113,10 +133,17 @@ exports.updateGoogleProviderUserIdBySub = function (googleSub, userId, next) {
           console.error(chalk.red(err));
           connection.release();
           var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
+          adminDebug.warn('user.dbo.updateGoogleProviderUserIdBySub:query_err', { message: finalErrObj.message });
           return next(finalErrObj);
         }
 
         connection.release();
+        adminDebug.log('user.dbo.updateGoogleProviderUserIdBySub:ok', {
+          userId: userId,
+          subTail: safeSub.slice(-8),
+          affectedRows: result && result.affectedRows,
+          changedRows: result && result.changedRows
+        });
         return next(null, result);
       }
     );
@@ -141,6 +168,11 @@ exports.registerSecondaryEmail = function (userDataObj, next) {
       return next(finalErrObj);
     }
 
+    adminDebug.log('user.dbo.registerSecondaryEmail:attempt', {
+      user_id: userDataObj && userDataObj.user_id,
+      email: userDataObj && userDataObj.email
+    });
+
     connection.query(
         "INSERT INTO user_secondary_email SET ?", userDataObj, function (err, rows) {
 
@@ -151,10 +183,21 @@ exports.registerSecondaryEmail = function (userDataObj, next) {
           
           var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
 
+          adminDebug.warn('user.dbo.registerSecondaryEmail:insert_err', {
+            email: userDataObj && userDataObj.email,
+            customErrCode: finalErrObj.customErrCode,
+            originalMessage: finalErrObj.originalMessage
+          });
+
           return next(finalErrObj);
         }
 
         connection.release();
+
+        adminDebug.log('user.dbo.registerSecondaryEmail:insert_ok', {
+          email: userDataObj && userDataObj.email,
+          user_id: userDataObj && userDataObj.user_id
+        });
 
         return next(null, rows);
       }
@@ -502,6 +545,8 @@ exports.getAdminUserRoleByUserId = async function(userId, options, next) {
     };
   }
 
+  adminDebug.log('user.dbo.getAdminUserRoleByUserId:query', { userId: userId });
+
   // Use master so this gate matches RbacModel (master) and JWT claims; replica lag could wrongly deny/allow OAuth.
   masterConnection.getConnection(function (connErr, connection) {
 
@@ -516,6 +561,7 @@ exports.getAdminUserRoleByUserId = async function(userId, options, next) {
         connection.release();
       }
 
+      adminDebug.warn('user.dbo.getAdminUserRoleByUserId:conn_err', { userId: userId, message: connErr.message });
       return next(finalErrObj);
     }
 
@@ -529,15 +575,22 @@ exports.getAdminUserRoleByUserId = async function(userId, options, next) {
           
           var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
 
+          adminDebug.warn('user.dbo.getAdminUserRoleByUserId:query_err', { userId: userId, message: finalErrObj.message });
           return next(finalErrObj);
         }
 
         connection.release();
 
         if (rows.length) {
+          adminDebug.log('user.dbo.getAdminUserRoleByUserId:hit', {
+            userId: userId,
+            role_id: rows[0].role_id,
+            admin_user_role_row: true
+          });
           return next(null, rows[0]);
         }
 
+        adminDebug.log('user.dbo.getAdminUserRoleByUserId:miss', { userId: userId, rowCount: 0 });
         return next(null, null);
       }
     );

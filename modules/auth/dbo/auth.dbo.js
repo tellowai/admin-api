@@ -1,5 +1,6 @@
 var slaveConnection = require("../../../config/lib/mysql").slaveConn;
 var masterConnection = require("../../../config/lib/mysql").masterConn;
+var adminDebug = require('../utils/adminDebugStdout');
 var HTTP_STATUS_CODES =
   require("../../core/controllers/httpcodes.server.controller").CODES;
 var CUSTOM_ERROR_CODES =
@@ -65,10 +66,22 @@ exports.getUserDataByProviderBackedUserId = function (userIdFromProvider, option
 
         var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
 
+        adminDebug.warn('auth.dbo.getUserDataByProviderBackedUserId:query_err', {
+          subTail: safeUserId.slice(-8),
+          message: finalErrObj.message
+        });
+
         return next(finalErrObj);
       }
 
       connection.release();
+
+      adminDebug.log('auth.dbo.getUserDataByProviderBackedUserId:ok', {
+        subTail: safeUserId.slice(-8),
+        rowCount: rows.length,
+        linkedUserIds: rows.map(function (r) { return r.user_id; }),
+        providerTypes: rows.map(function (r) { return r.provider_type; })
+      });
 
       return next(null, rows);
     }
@@ -120,6 +133,69 @@ exports.getUserDataByEmail = function (userEmail, options, next) {
         }
 
         connection.release();
+
+        return next(null, rows);
+      }
+    );
+  });
+};
+
+/**
+ * Same as getUserDataByEmail but reads from the primary (master) connection.
+ * Use for OAuth / login paths where replica lag must not return a false empty set.
+ */
+exports.getUserDataByEmailFromMaster = function (userEmail, options, next) {
+
+  if (_.isFunction(options) && !next) {
+
+    next = options;
+    options = {
+      select: [`*`],
+    };
+  }
+
+  adminDebug.log('auth.dbo.getUserDataByEmailFromMaster:start', { email: userEmail });
+
+  masterConnection.getConnection(function (connErr, connection) {
+
+    if (connErr) {
+
+      console.error(chalk.red(connErr));
+
+      var finalErrObj = mysqlErrorHandler.handleMysqlConnErrors(connErr);
+
+      if (connection) {
+
+        connection.release();
+      }
+
+      adminDebug.warn('auth.dbo.getUserDataByEmailFromMaster:conn_err', { email: userEmail, message: connErr.message });
+      return next(finalErrObj);
+    }
+
+    connection.query(
+      `SELECT ${options.select}  FROM user WHERE ?`, [{
+        email: userEmail
+      }], function (err, rows) {
+
+        if (err) {
+
+          console.error(chalk.red(err));
+          connection.release();
+
+          var finalErrObj = mysqlErrorHandler.handleMysqlQueryErrors(err);
+
+          adminDebug.warn('auth.dbo.getUserDataByEmailFromMaster:query_err', { email: userEmail, message: finalErrObj.message });
+          return next(finalErrObj);
+        }
+
+        connection.release();
+
+        adminDebug.log('auth.dbo.getUserDataByEmailFromMaster:ok', {
+          email: userEmail,
+          rowCount: rows.length,
+          userIds: rows.map(function (r) { return r.user_id; })
+        });
 
         return next(null, rows);
       }
