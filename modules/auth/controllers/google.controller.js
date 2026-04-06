@@ -71,6 +71,58 @@ function registerOrRelinkGoogleProvider(resolvedUserId, userDataFromGoogle, next
   });
 }
 
+/**
+ * Same Google `sub` may be linked to many `user_id` rows (data duplicates). If exactly one of those
+ * users has `admin_user_role`, that is the intended admin login target — prefer this over
+ * user_secondary_email, which can point at an old non-admin consumer account.
+ *
+ * @param {string[]} userIds distinct user_ids from user_authentication_provider rows
+ * @param {function} next (err, singleAdminUserId|null) err may have httpStatusCode, message, code
+ */
+function pickExactlyOneAdminAmongUserIds(userIds, next) {
+  if (!userIds || userIds.length === 0) {
+    return next(null, null);
+  }
+  var adminHits = [];
+  async.eachSeries(userIds, function (uid, cb) {
+    UserDbo.getAdminUserRoleByUserId(uid, function (err, adminRow) {
+      if (err) {
+        return cb(err);
+      }
+      if (adminRow) {
+        adminHits.push(uid);
+      }
+      cb(null);
+    });
+  }, function (seriesErr) {
+    if (seriesErr) {
+      return next(seriesErr);
+    }
+    if (adminHits.length === 0) {
+      adminDebug.log('google.pickExactlyOneAdminAmongUserIds:none', {
+        checkedCount: userIds.length
+      });
+      return next(null, null);
+    }
+    if (adminHits.length === 1) {
+      adminDebug.log('google.pickExactlyOneAdminAmongUserIds:one', {
+        userId: adminHits[0],
+        checkedCount: userIds.length
+      });
+      return next(null, adminHits[0]);
+    }
+    adminDebug.warn('google.pickExactlyOneAdminAmongUserIds:multiple', {
+      adminUserIds: adminHits,
+      checkedCount: userIds.length
+    });
+    return next({
+      httpStatusCode: HTTP_STATUS_CODES.CONFLICT,
+      message: 'Multiple admin users are linked to this Google account. Remove duplicate provider rows or merge accounts.',
+      code: 'MULTIPLE_ADMINS_FOR_GOOGLE_SUB'
+    });
+  });
+}
+
 var ADMIN_OAUTH_LOG = '[admin-oauth]';
 
 function adminOauthLog(step, payload) {
@@ -310,44 +362,71 @@ exports.loginWithOAuthGoogle = function (req, res) {
           return runAdminJwtRedirectForUser(loggedInUserData[0].user_id, 'primary_email_on_user_table');
         }
 
-        adminOauthLog('finishAdminOAuthGoogle:primary_user_table_no_row_try_secondary_table', {
-          userEmail: userEmail,
-          providerUserId: providerUserId
+        var distinctProviderUserIds = _.uniq(userData.existingUserData.map(function (r) { return r.user_id; }));
+
+        adminOauthLog('finishAdminOAuthGoogle:try_resolve_single_admin_among_sub_linked_users', {
+          distinctCount: distinctProviderUserIds.length,
+          userIds: distinctProviderUserIds
         });
 
-        AuthDbo.getUserIdsBySecondaryEmailFromMaster(userEmail, function (secErr, secRows) {
+        pickExactlyOneAdminAmongUserIds(distinctProviderUserIds, function (pickErr, singleAdminUserId) {
 
-          if (secErr) {
-            adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_err', { message: secErr.message });
-            return res.status(secErr.httpStatusCode).json({ message: secErr.message });
-          }
-
-          adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_ok', {
-            rowCount: secRows.length,
-            userIds: secRows.map(function (r) { return r.user_id; })
-          });
-
-          if (secRows.length > 1) {
-            return res.status(HTTP_STATUS_CODES.CONFLICT).json({
-              message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
-              email: userEmail,
-              code: 'MULTIPLE_USER_IDS_FOR_SECONDARY_EMAIL'
+          if (pickErr) {
+            adminOauthLog('finishAdminOAuthGoogle:pick_admin_among_sub_linked_users_err', {
+              message: pickErr.message,
+              code: pickErr.code
+            });
+            return res.status(pickErr.httpStatusCode || HTTP_STATUS_CODES.BAD_REQUEST).json({
+              message: pickErr.message,
+              code: pickErr.code
             });
           }
 
-          if (secRows.length === 1) {
-            adminOauthLog('finishAdminOAuthGoogle:branch_resolved_via_secondary_email_table', {
-              resolvedUserId: secRows[0].user_id
+          if (singleAdminUserId) {
+            adminOauthLog('finishAdminOAuthGoogle:branch_single_admin_among_sub_linked_users', {
+              resolvedUserId: singleAdminUserId
             });
-            return runAdminJwtRedirectForUser(secRows[0].user_id, 'google_email_on_secondary_email_table');
+            return runAdminJwtRedirectForUser(singleAdminUserId, 'google_sub_linked_rows_single_admin');
           }
 
-          adminOauthLog('finishAdminOAuthGoogle:branch_secondary_email_path', {
-            providerUserId: providerUserId,
-            userEmail: userEmail
+          adminOauthLog('finishAdminOAuthGoogle:primary_user_table_no_row_try_secondary_table', {
+            userEmail: userEmail,
+            providerUserId: providerUserId
           });
 
-          async.waterfall([
+          AuthDbo.getUserIdsBySecondaryEmailFromMaster(userEmail, function (secErr, secRows) {
+
+            if (secErr) {
+              adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_err', { message: secErr.message });
+              return res.status(secErr.httpStatusCode).json({ message: secErr.message });
+            }
+
+            adminOauthLog('finishAdminOAuthGoogle:secondary_table_lookup_ok', {
+              rowCount: secRows.length,
+              userIds: secRows.map(function (r) { return r.user_id; })
+            });
+
+            if (secRows.length > 1) {
+              return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+                message: req.t('user:MULTIPLE_ACCOUNTS_REGISTERED_WITH_SAME_EMAIL'),
+                email: userEmail,
+                code: 'MULTIPLE_USER_IDS_FOR_SECONDARY_EMAIL'
+              });
+            }
+
+            if (secRows.length === 1) {
+              adminOauthLog('finishAdminOAuthGoogle:branch_resolved_via_secondary_email_table', {
+                resolvedUserId: secRows[0].user_id
+              });
+              return runAdminJwtRedirectForUser(secRows[0].user_id, 'google_email_on_secondary_email_table');
+            }
+
+            adminOauthLog('finishAdminOAuthGoogle:branch_secondary_email_path', {
+              providerUserId: providerUserId,
+              userEmail: userEmail
+            });
+
+            async.waterfall([
           function registerSecondaryEmailStep(next) {
 
             var rawDataForSecondayEmail = {
@@ -475,6 +554,7 @@ exports.loginWithOAuthGoogle = function (req, res) {
             HTTP_STATUS_CODES.OK
           ).json(tokenPayload);
         });
+          });
         });
       });
     }
