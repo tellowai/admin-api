@@ -97,14 +97,7 @@ exports.listScreens = async function({ page, limit, status, search }) {
   const p = parseInt(page) || 1;
   const l = Math.min(Math.max(parseInt(limit) || 20, 1), 500);
   const items = await SduiModel.listScreens(p, l, status, search);
-  /** Listing payloads omit body_json — clients load full document via GET /screens/:id */
-  const data = (items || []).map((row) => {
-    if (!row || typeof row !== 'object') return row;
-    const slim = { ...row };
-    delete slim.body_json;
-    return slim;
-  });
-  return { data };
+  return { data: items || [] };
 };
 
 exports.getScreenById = async function(id) {
@@ -125,7 +118,6 @@ exports.updateScreen = async function(id, data) {
   if (data.name !== undefined) updateData.name = data.name;
   if (data.description !== undefined) updateData.description = data.description;
   if (data.body_json !== undefined) updateData.body_json = data.body_json;
-  if (data.version !== undefined) updateData.version = data.version;
   if (data.status !== undefined) updateData.status = data.status;
   updateData.updated_by = data.updated_by;
   await SduiModel.updateScreen(id, updateData);
