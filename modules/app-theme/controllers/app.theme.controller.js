@@ -9,6 +9,52 @@ function parseJson(raw) {
   try { return JSON.parse(raw); } catch { return {}; }
 }
 
+const MAX_THEME_KEYS = 256;
+const MAX_THEME_KEY_LEN = 128;
+const MAX_THEME_VALUE_LEN = 8192;
+
+/**
+ * @param {object} obj
+ * @param {string} label  'light' | 'dark' (for error messages)
+ * @returns {{ ok: boolean, message?: string, data?: object }}
+ */
+function validateThemeTokensObject(obj, label) {
+  if (Array.isArray(obj)) {
+    return { ok: false, message: `${label}: tokens must be a JSON object, not an array` };
+  }
+  if (obj == null || typeof obj !== 'object') {
+    return { ok: true, data: {} };
+  }
+  const keys = Object.keys(obj);
+  if (keys.length > MAX_THEME_KEYS) {
+    return { ok: false, message: `${label}: too many tokens (max ${MAX_THEME_KEYS})` };
+  }
+  const out = {};
+  for (const k of keys) {
+    const key = String(k).trim();
+    if (!key) continue;
+    if (key.length > MAX_THEME_KEY_LEN) {
+      return { ok: false, message: `${label}: token name too long` };
+    }
+    const val = obj[k];
+    if (val == null) continue;
+    const str = typeof val === 'string' ? val : String(val);
+    let trimmed = str.trim();
+    if (/gradient\s*\(/i.test(trimmed)) {
+      trimmed = trimmed.replace(/;\s*$/, '').trim();
+    }
+    if (!trimmed) continue;
+    if (trimmed.length > MAX_THEME_VALUE_LEN) {
+      return {
+        ok: false,
+        message: `${label}: value for "${key}" exceeds ${MAX_THEME_VALUE_LEN} characters (gradients must fit in this limit)`,
+      };
+    }
+    out[key] = trimmed;
+  }
+  return { ok: true, data: out };
+}
+
 function formatRow(row) {
   if (!row) return null;
   return {
@@ -72,8 +118,18 @@ exports.saveDraft = async function (req, res, next) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'version must be a non-negative integer' });
     }
 
-    const light = body.light && typeof body.light === 'object' ? body.light : {};
-    const dark = body.dark && typeof body.dark === 'object' ? body.dark : {};
+    const rawLight = body.light && typeof body.light === 'object' ? body.light : {};
+    const rawDark = body.dark && typeof body.dark === 'object' ? body.dark : {};
+    const lightCheck = validateThemeTokensObject(rawLight, 'light');
+    if (!lightCheck.ok) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: lightCheck.message });
+    }
+    const darkCheck = validateThemeTokensObject(rawDark, 'dark');
+    if (!darkCheck.ok) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: darkCheck.message });
+    }
+    const light = lightCheck.data;
+    const dark = darkCheck.data;
     const lightJson = JSON.stringify(light);
     const darkJson = JSON.stringify(dark);
     const user = req.user?.email || req.user?.username || null;
