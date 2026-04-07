@@ -51,6 +51,49 @@ function computeAlacartePriceFromCredits(credits) {
 }
 
 /**
+ * Image templates use cf_r2_* as the cover/preview asset; thumb_frame_* must match.
+ * Video templates keep cf_r2_* as preview video and may use a separate extracted thumb_frame_*.
+ * @param {Object} templateData - Payload merged for create/update (mutated)
+ * @param {Object} [existingTemplate={}] - Existing row (PATCH); omit for create
+ */
+function syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate = {}) {
+  const outputType = templateData.template_output_type !== undefined
+    ? templateData.template_output_type
+    : existingTemplate.template_output_type;
+  if (outputType !== 'image') return;
+
+  const cfKey = templateData.cf_r2_key !== undefined
+    ? templateData.cf_r2_key
+    : existingTemplate.cf_r2_key;
+  const cfBucket = templateData.cf_r2_bucket !== undefined
+    ? templateData.cf_r2_bucket
+    : existingTemplate.cf_r2_bucket;
+
+  if (cfKey) {
+    templateData.thumb_frame_asset_key = cfKey;
+    templateData.thumb_frame_bucket = cfBucket || 'public';
+  } else {
+    templateData.thumb_frame_asset_key = null;
+    templateData.thumb_frame_bucket = null;
+  }
+}
+
+/**
+ * Align serialized template so thumb_frame matches cf_r2 for image output (fixes stale DB rows and UI drift).
+ * @param {Object} template - Template object after r2_url / thumb_frame_url enrichment
+ */
+function alignImageTemplateThumbWithCfR2ForResponse(template) {
+  if (!template || template.template_output_type !== 'image') return;
+  if (template.cf_r2_key) {
+    template.thumb_frame_asset_key = template.cf_r2_key;
+    template.thumb_frame_bucket = template.cf_r2_bucket || 'public';
+  }
+  if (template.r2_url) {
+    template.thumb_frame_url = template.r2_url;
+  }
+}
+
+/**
  * Read Bodymovin (Lottie) JSON from storage or from URL.
  * Uses StorageFactory when key is a storage key; uses axios when key is a full http(s) URL.
  * @param {Object} storage - Storage provider from StorageFactory.getProvider()
@@ -274,6 +317,204 @@ async function getTemplateTagsWithDetails(templateId) {
   }
 }
 
+/**
+ * Mutates template from getTemplateById into the same shape as GET /templates/:templateId (URLs, tags, default scenes).
+ */
+async function enrichAdminTemplateDetailForGetResponse(template) {
+  const storage = StorageFactory.getProvider();
+
+  if (template.cf_r2_key) {
+    template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+  } else {
+    template.r2_url = template.cf_r2_url;
+  }
+
+  template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
+
+  if (template.clips && template.clips.length > 0) {
+    template.clips = template.clips.map(clip => {
+      if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+        clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+      }
+      if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+        clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+      }
+      if (Array.isArray(clip.workflow)) {
+        clip.workflow = clip.workflow.map(step => {
+          if (!step || !Array.isArray(step.data)) return step;
+          step.data = step.data.map(item => {
+            const itemType = String(item?.type || '').toLowerCase();
+            if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+              item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+            }
+            return item;
+          });
+          return step;
+        });
+      }
+      return clip;
+    });
+  }
+
+  if (
+    template.image_uploads_required === undefined ||
+    template.image_uploads_required === null ||
+    Number.isNaN(Number(template.image_uploads_required))
+  ) {
+    template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
+  }
+
+  if (template.color_video_key && template.color_video_bucket) {
+    template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
+  }
+  if (template.mask_video_key && template.mask_video_bucket) {
+    template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
+  }
+  if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
+    template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
+  }
+  if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
+    template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+  }
+
+  if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+    try {
+      const isPublic = template.thumb_frame_bucket === 'public' ||
+        template.thumb_frame_bucket === storage.publicBucket ||
+        template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
+
+      if (isPublic) {
+        template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+      } else {
+        template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
+      }
+    } catch (error) {
+      logger.error('Error generating thumb_frame presigned URL:', {
+        error: error.message,
+        template_id: template.template_id,
+        thumb_frame_asset_key: template.thumb_frame_asset_key,
+        thumb_frame_bucket: template.thumb_frame_bucket
+      });
+      template.thumb_frame_url = null;
+    }
+  }
+
+  alignImageTemplateThumbWithCfR2ForResponse(template);
+
+  if (template.faces_needed && typeof template.faces_needed === 'string') {
+    try {
+      template.faces_needed = JSON.parse(template.faces_needed);
+      if (template.faces_needed) {
+        template.faces_needed = template.faces_needed.map(face => {
+          if (face.character_face_r2_key) {
+            face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+          }
+          return face;
+        });
+      }
+    } catch (err) {
+      logger.error('Error parsing faces_needed:', { error: err.message, value: template.faces_needed });
+    }
+  } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
+    template.faces_needed = template.faces_needed.map(face => {
+      if (face.character_face_r2_key) {
+        face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+      }
+      return face;
+    });
+  }
+
+  if (template.additional_data && typeof template.additional_data === 'string') {
+    try {
+      template.additional_data = JSON.parse(template.additional_data);
+    } catch (err) {
+      logger.error('Error parsing additional_data:', { error: err.message, value: template.additional_data });
+    }
+  }
+
+  if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
+    try {
+      template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
+    } catch (err) {
+      logger.error('Error parsing custom_text_input_fields:', { error: err.message, value: template.custom_text_input_fields });
+    }
+  }
+
+  if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
+    try {
+      template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
+    } catch (err) {
+      logger.error('Error parsing image_input_fields_json:', { error: err.message, value: template.image_input_fields_json });
+    }
+  }
+
+  if (Array.isArray(template.image_input_fields_json)) {
+    template.image_input_fields_json.forEach(field => {
+      if (field.reference_image && field.reference_image.asset_key) {
+        field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
+      }
+    });
+  }
+
+  template.tags = await getTemplateTagsWithDetails(template.template_id);
+  template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
+
+  if (template.template_tags && template.template_tags.length > 0) {
+    const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
+    const tagDefinitions = ttdIds.length > 0 ?
+      await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds) : [];
+    const tagDefinitionMap = new Map();
+    tagDefinitions.forEach(tagDef => {
+      tagDefinitionMap.set(tagDef.ttd_id, tagDef);
+    });
+    const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
+    const facets = facetIds.length > 0 ?
+      await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds) : [];
+    const facetMap = new Map();
+    facets.forEach(facet => {
+      facetMap.set(facet.facet_id, facet);
+    });
+    template.template_tags.forEach(tag => {
+      const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
+      if (tagDefinition) {
+        tag.tag_name = tagDefinition.tag_name;
+        tag.tag_code = tagDefinition.tag_code;
+        tag.tag_description = tagDefinition.tag_description;
+        tag.is_active = tagDefinition.is_active;
+        const facetId = tagDefinition.facet_id;
+        if (facetId) {
+          tag.facet_id = facetId;
+          const facet = facetMap.get(facetId);
+          if (facet) {
+            tag.facet_key = facet.facet_key;
+            tag.facet_display_name = facet.display_name;
+            tag.facet_cardinality = facet.cardinality;
+            tag.facet_strict = facet.strict;
+            tag.facet_required_for_publish = facet.required_for_publish;
+            tag.facet_visible = facet.visible;
+            tag.facet_allow_suggestions = facet.allow_suggestions;
+          }
+        }
+      }
+    });
+  }
+
+  if ((!template.scenes || template.scenes.length === 0) && (template.ae_rendering_engine === 'transparent_webm' || template.status === 'draft')) {
+    template.scenes = [
+      {
+        scene_name: 'Scene 1',
+        scene_order: 1,
+        layers: [
+          { layer_name: 'Layer 1', layer_type: 'solid_color', z_index: 1, layer_config: { hex: '#000000' } },
+          { layer_name: 'Layer 2', layer_type: 'user_media', z_index: 2, layer_config: {} },
+          { layer_name: 'Layer 3', layer_type: 'video_transparent_webm', z_index: 3, layer_config: {} },
+          { layer_name: 'Layer 4', layer_type: 'text', z_index: 4, layer_config: {} }
+        ]
+      }
+    ];
+  }
+}
+
 
 /**
  * @api {get} /templates List templates
@@ -430,6 +671,8 @@ exports.listTemplates = async function (req, res) {
           }
         }
 
+        alignImageTemplateThumbWithCfR2ForResponse(template);
+
         // Parse JSON fields if they are strings
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
@@ -581,238 +824,7 @@ exports.getTemplate = async function (req, res) {
       });
     }
 
-    const storage = StorageFactory.getProvider();
-
-    // Generate R2 URL for template thumbnail
-    if (template.cf_r2_key) {
-      template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
-    } else {
-      template.r2_url = template.cf_r2_url;
-    }
-
-    // Load AI clips for template
-    template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
-
-    // Generate R2 URLs for AI clip assets
-    if (template.clips && template.clips.length > 0) {
-      template.clips = template.clips.map(clip => {
-        // Generate R2 URL for template image asset
-        if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
-          clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
-        }
-
-        // Generate R2 URL for video file asset
-        if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
-          clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
-        }
-
-        // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
-        if (Array.isArray(clip.workflow)) {
-          clip.workflow = clip.workflow.map(step => {
-            if (!step || !Array.isArray(step.data)) return step;
-            step.data = step.data.map(item => {
-              const itemType = String(item?.type || '').toLowerCase();
-              if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
-                item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
-              }
-              return item;
-            });
-            return step;
-          });
-        }
-
-        return clip;
-      });
-    }
-
-    // Fallback compute of image uploads required if not present or invalid
-    if (
-      template.image_uploads_required === undefined ||
-      template.image_uploads_required === null ||
-      Number.isNaN(Number(template.image_uploads_required))
-    ) {
-      template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
-    }
-
-    // Generate R2 URLs for template assets
-    if (template.color_video_key && template.color_video_bucket) {
-      template.color_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.color_video_key}`;
-    }
-    if (template.mask_video_key && template.mask_video_bucket) {
-      template.mask_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.mask_video_key}`;
-    }
-    if (template.transparent_webm_video_key && template.transparent_webm_video_bucket) {
-      template.transparent_webm_video_r2_url = `${config.os2.r2.public.bucketUrl}/${template.transparent_webm_video_key}`;
-    }
-    if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
-      template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
-    }
-
-    // Generate presigned download URL for thumb_frame if available
-    if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
-      try {
-        const isPublic = template.thumb_frame_bucket === 'public' ||
-          template.thumb_frame_bucket === storage.publicBucket ||
-          template.thumb_frame_bucket === (config.os2?.r2?.public?.bucket);
-
-        if (isPublic) {
-          template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
-        } else {
-          template.thumb_frame_url = await storage.generatePresignedDownloadUrl(template.thumb_frame_asset_key, { expiresIn: 3600 });
-        }
-      } catch (error) {
-        logger.error('Error generating thumb_frame presigned URL:', {
-          error: error.message,
-          template_id: template.template_id,
-          thumb_frame_asset_key: template.thumb_frame_asset_key,
-          thumb_frame_bucket: template.thumb_frame_bucket
-        });
-        template.thumb_frame_url = null;
-      }
-    }
-
-    // Parse JSON fields if they are strings
-    if (template.faces_needed && typeof template.faces_needed === 'string') {
-      try {
-        template.faces_needed = JSON.parse(template.faces_needed);
-
-        // Generate R2 URLs for character faces if they exist
-        if (template.faces_needed) {
-          template.faces_needed = template.faces_needed.map(face => {
-            if (face.character_face_r2_key) {
-              face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
-            }
-            return face;
-          });
-        }
-      } catch (err) {
-        logger.error('Error parsing faces_needed:', {
-          error: err.message,
-          value: template.faces_needed
-        });
-      }
-    } else if (template.faces_needed && Array.isArray(template.faces_needed)) {
-      template.faces_needed = template.faces_needed.map(face => {
-        if (face.character_face_r2_key) {
-          face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
-        }
-        return face;
-      });
-    }
-
-    if (template.additional_data && typeof template.additional_data === 'string') {
-      try {
-        template.additional_data = JSON.parse(template.additional_data);
-      } catch (err) {
-        logger.error('Error parsing additional_data:', {
-          error: err.message,
-          value: template.additional_data
-        });
-      }
-    }
-
-    if (template.custom_text_input_fields && typeof template.custom_text_input_fields === 'string') {
-      try {
-        template.custom_text_input_fields = JSON.parse(template.custom_text_input_fields);
-      } catch (err) {
-        logger.error('Error parsing custom_text_input_fields:', {
-          error: err.message,
-          value: template.custom_text_input_fields
-        });
-      }
-    }
-
-    if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
-      try {
-        template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
-      } catch (err) {
-        logger.error('Error parsing image_input_fields_json:', {
-          error: err.message,
-          value: template.image_input_fields_json
-        });
-      }
-    }
-
-    if (Array.isArray(template.image_input_fields_json)) {
-      template.image_input_fields_json.forEach(field => {
-        if (field.reference_image && field.reference_image.asset_key) {
-          field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
-        }
-      });
-    }
-
-    // Load template tags with full details
-    template.tags = await getTemplateTagsWithDetails(template.template_id);
-    template.template_tags = await TemplateModel.getTemplateTags(template.template_id);
-
-    // Stitch facet information for template tags
-    if (template.template_tags && template.template_tags.length > 0) {
-      // Get all unique ttd_ids
-      const ttdIds = [...new Set(template.template_tags.map(tag => tag.ttd_id))];
-
-      // Get tag definitions
-      const tagDefinitions = ttdIds.length > 0 ?
-        await TemplateTagDefinitionModel.getTemplateTagDefinitionsByIds(ttdIds) : [];
-      const tagDefinitionMap = new Map();
-      tagDefinitions.forEach(tagDef => {
-        tagDefinitionMap.set(tagDef.ttd_id, tagDef);
-      });
-
-      // Get all unique facet_ids
-      const facetIds = [...new Set(tagDefinitions.map(tagDef => tagDef.facet_id))];
-      const facets = facetIds.length > 0 ?
-        await TemplateTagFacetModel.getTemplateTagFacetsByIds(facetIds) : [];
-      const facetMap = new Map();
-      facets.forEach(facet => {
-        facetMap.set(facet.facet_id, facet);
-      });
-
-      // Stitch the data together
-      template.template_tags.forEach(tag => {
-        const tagDefinition = tagDefinitionMap.get(tag.ttd_id);
-
-        if (tagDefinition) {
-          // Add tag definition data
-          tag.tag_name = tagDefinition.tag_name;
-          tag.tag_code = tagDefinition.tag_code;
-          tag.tag_description = tagDefinition.tag_description;
-          tag.is_active = tagDefinition.is_active;
-
-          // Use facet_id from tag definition (primary source)
-          const facetId = tagDefinition.facet_id;
-          if (facetId) {
-            tag.facet_id = facetId; // Ensure facet_id is present
-
-            const facet = facetMap.get(facetId);
-            if (facet) {
-              tag.facet_key = facet.facet_key;
-              tag.facet_display_name = facet.display_name;
-              tag.facet_cardinality = facet.cardinality;
-              tag.facet_strict = facet.strict;
-              tag.facet_required_for_publish = facet.required_for_publish;
-              tag.facet_visible = facet.visible;
-              tag.facet_allow_suggestions = facet.allow_suggestions;
-            }
-          }
-        }
-      });
-    }
-
-    // Auto-initialize default scenes for transparent_webm if empty
-    if ((!template.scenes || template.scenes.length === 0) && (template.ae_rendering_engine === 'transparent_webm' || template.status === 'draft')) {
-      template.scenes = [
-        {
-          scene_name: 'Scene 1',
-          scene_order: 1,
-          layers: [
-            { layer_name: 'Layer 1', layer_type: 'solid_color', z_index: 1, layer_config: { hex: '#000000' } },
-            { layer_name: 'Layer 2', layer_type: 'user_media', z_index: 2, layer_config: {} },
-            { layer_name: 'Layer 3', layer_type: 'video_transparent_webm', z_index: 3, layer_config: {} },
-            { layer_name: 'Layer 4', layer_type: 'text', z_index: 4, layer_config: {} }
-          ]
-        }
-      ];
-    }
+    await enrichAdminTemplateDetailForGetResponse(template);
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: template
@@ -1043,6 +1055,8 @@ exports.listArchivedTemplates = async function (req, res) {
           }
         }
 
+        alignImageTemplateThumbWithCfR2ForResponse(template);
+
         if (template.image_input_fields_json && typeof template.image_input_fields_json === 'string') {
           try {
             template.image_input_fields_json = JSON.parse(template.image_input_fields_json);
@@ -1263,6 +1277,8 @@ exports.searchTemplates = async function (req, res) {
             template.thumb_frame_url = null;
           }
         }
+
+        alignImageTemplateThumbWithCfR2ForResponse(template);
 
         if (template.faces_needed && typeof template.faces_needed === 'string') {
           try {
@@ -1629,6 +1645,7 @@ exports.createTemplate = async function (req, res) {
     if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
       templateData.cf_r2_bucket = 'public';
     }
+    syncThumbFrameWithCfR2ForImageTemplate(templateData, {});
 
     // Calculate aspect ratio, orientation, and total asset counts from bodymovin JSON for ALL templates
     if (templateData.bodymovin_json_key && templateData.bodymovin_json_bucket) {
@@ -1806,6 +1823,11 @@ exports.createDraftTemplate = async function (req, res) {
         ]
       }
     ];
+
+    if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
+      templateData.cf_r2_bucket = 'public';
+    }
+    syncThumbFrameWithCfR2ForImageTemplate(templateData, {});
 
     // Create template in database (minimal data)
     await TemplateModel.createTemplate(templateData, []); // Empty clips array
@@ -3151,6 +3173,7 @@ exports.updateTemplate = async function (req, res) {
     if (templateData.cf_r2_key && !templateData.cf_r2_bucket) {
       templateData.cf_r2_bucket = 'public';
     }
+    syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate);
     // If clips is undefined, don't modify faces_needed (partial update)
 
     // Credits by template_type: free = 0; paid types = payload if > 0 else 1 (else keep existing)
@@ -3408,8 +3431,12 @@ exports.updateTemplate = async function (req, res) {
       'create_admin_activity_log'
     );
 
+    const template = await TemplateModel.getTemplateById(templateId);
+    await enrichAdminTemplateDetailForGetResponse(template);
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      message: req.t('template:TEMPLATE_UPDATED')
+      message: req.t('template:TEMPLATE_UPDATED'),
+      data: template
     });
 
   } catch (error) {
