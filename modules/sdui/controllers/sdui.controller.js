@@ -152,7 +152,7 @@ exports.getRegistryEntry = async function(req, res) {
 
 exports.createRegistryEntry = async function(req, res) {
   try {
-    const { node_type, category, display_name, description, props_schema, default_props, supports_children, supported_triggers } = req.body;
+    const { node_type, category, display_name, description, props_schema, default_props, supports_children, supported_triggers, prop_sections_json } = req.body;
     if (!node_type || !category || !display_name) {
       return res.status(400).send({ message: 'node_type, category, and display_name are required' });
     }
@@ -164,7 +164,8 @@ exports.createRegistryEntry = async function(req, res) {
       props_schema,
       default_props,
       supports_children,
-      supported_triggers
+      supported_triggers,
+      prop_sections_json
     });
     return res.status(201).send({ data: entry });
   } catch (err) {
@@ -218,15 +219,28 @@ exports.getComponent = async function(req, res) {
   }
 };
 
+exports.getComponentByKey = async function(req, res) {
+  try {
+    const componentKey = req.params.key;
+    const component = await SduiService.getComponentRowByKey(componentKey);
+    if (!component) return res.status(404).send({ message: 'Component not found' });
+    return res.status(200).send(component);
+  } catch (err) {
+    console.error('SDUI getComponentByKey Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.createComponent = async function(req, res) {
   try {
-    const { component_key, name, description, node_json } = req.body;
+    const { component_key, name, description, node_json, data_contract_json } = req.body;
     if (!component_key || !name || !node_json) return res.status(400).send({ message: 'component_key, name, and node_json are required' });
     const component = await SduiService.createComponent({
       component_key,
       name,
       description,
       node_json,
+      data_contract_json,
       created_by: req.user?.email || req.user?.userId
     });
     return res.status(201).send({ data: component });
@@ -239,11 +253,12 @@ exports.createComponent = async function(req, res) {
 
 exports.updateComponent = async function(req, res) {
   try {
-    const { name, description, node_json } = req.body;
+    const { name, description, node_json, data_contract_json } = req.body;
     const component = await SduiService.updateComponent(req.params.id, {
       name,
       description,
       node_json,
+      data_contract_json,
       updated_by: req.user?.email || req.user?.userId
     });
     return res.status(200).send({ data: component });
@@ -336,7 +351,7 @@ exports.getBlockByKey = async function(req, res) {
 
 exports.createBlock = async function(req, res) {
   try {
-    const { block_key, name, description, body_json } = req.body;
+    const { block_key, name, description, body_json, data_contract_json } = req.body;
     if (!block_key || !name || !body_json) {
       return res.status(400).send({ message: 'block_key, name, and body_json are required' });
     }
@@ -345,6 +360,7 @@ exports.createBlock = async function(req, res) {
       name,
       description,
       body_json,
+      data_contract_json,
       created_by: req.user?.email || req.user?.userId,
     });
     return res.status(201).send({ data: block });
@@ -357,11 +373,12 @@ exports.createBlock = async function(req, res) {
 
 exports.updateBlock = async function(req, res) {
   try {
-    const { name, description, body_json } = req.body;
+    const { name, description, body_json, data_contract_json } = req.body;
     const block = await SduiService.updateBlock(req.params.id, {
       name,
       description,
       body_json,
+      data_contract_json,
       updated_by: req.user?.email || req.user?.userId,
     });
     return res.status(200).send({ data: block });

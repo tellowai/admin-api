@@ -3,6 +3,11 @@
 const versionConfig = require('../../version');
 const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const SduiCtrl = require('../controllers/sdui.controller');
+const SduiDataDictCtrl = require('../controllers/sdui.data-dictionary.controller');
+const SduiBffResourcesCtrl = require('../controllers/sdui.bff-resources.controller');
+const SduiPresentationRulesCtrl = require('../controllers/sdui.presentation-rules.controller');
+const SduiFormattersCtrl = require('../controllers/sdui.formatters.controller');
+const SduiDataBindingsCtrl = require('../controllers/sdui.data-bindings.controller');
 
 module.exports = function(app) {
   const prefix = versionConfig.routePrefix + '/admin/sdui';
@@ -55,6 +60,9 @@ module.exports = function(app) {
   app.route(prefix + '/components/:id/publish')
     .post(AuthMiddleware.isAdminUser, SduiCtrl.publishComponent);
 
+  app.route(prefix + '/components/by-key/:key')
+    .get(AuthMiddleware.isAdminUser, SduiCtrl.getComponentByKey);
+
   app.route(prefix + '/blocks')
     .get(AuthMiddleware.isAdminUser, SduiCtrl.listBlocks)
     .post(AuthMiddleware.isAdminUser, SduiCtrl.createBlock);
@@ -82,4 +90,47 @@ module.exports = function(app) {
   app.route(prefix + '/fonts/:id')
     .put(AuthMiddleware.isAdminUser, SduiCtrl.updateFont)
     .delete(AuthMiddleware.isAdminUser, SduiCtrl.deleteFont);
+
+  // --- Data Dictionary ---
+  app.route(prefix + '/data-dictionary')
+    .get(AuthMiddleware.isAdminUser, SduiDataDictCtrl.listDataDictionaryFields)
+    .post(AuthMiddleware.isAdminUser, SduiDataDictCtrl.createDataDictionaryField);
+  app.route(prefix + '/data-dictionary/:id')
+    .put(AuthMiddleware.isAdminUser, SduiDataDictCtrl.updateDataDictionaryField)
+    .delete(AuthMiddleware.isAdminUser, SduiDataDictCtrl.deleteDataDictionaryField);
+
+  // --- BFF Resources ---
+  app.route(prefix + '/bff-resources')
+    .get(AuthMiddleware.isAdminUser, SduiBffResourcesCtrl.listBffResources)
+    .post(AuthMiddleware.isAdminUser, SduiBffResourcesCtrl.createBffResource);
+  app.route(prefix + '/bff-resources/:id')
+    .put(AuthMiddleware.isAdminUser, SduiBffResourcesCtrl.updateBffResource)
+    .delete(AuthMiddleware.isAdminUser, SduiBffResourcesCtrl.deleteBffResource);
+
+  // --- Presentation Rules ---
+  app.route(prefix + '/presentation-rules/:resourceKey')
+    .get(AuthMiddleware.isAdminUser, SduiPresentationRulesCtrl.getPresentationRules);
+  app.route(prefix + '/presentation-rules')
+    .post(AuthMiddleware.isAdminUser, SduiPresentationRulesCtrl.createPresentationRule);
+  app.route(prefix + '/presentation-rules/:id')
+    .put(AuthMiddleware.isAdminUser, SduiPresentationRulesCtrl.updatePresentationRule)
+    .delete(AuthMiddleware.isAdminUser, SduiPresentationRulesCtrl.deletePresentationRule);
+
+  // --- Formatters ---
+  app.route(prefix + '/formatters/:resourceKey')
+    .get(AuthMiddleware.isAdminUser, SduiFormattersCtrl.getFormatters);
+  app.route(prefix + '/formatters')
+    .post(AuthMiddleware.isAdminUser, SduiFormattersCtrl.createFormatter);
+  app.route(prefix + '/formatters/:id')
+    .put(AuthMiddleware.isAdminUser, SduiFormattersCtrl.updateFormatter)
+    .delete(AuthMiddleware.isAdminUser, SduiFormattersCtrl.deleteFormatter);
+
+  // --- Data Bindings ---
+  app.route(prefix + '/data-bindings/:entityType/:entityId')
+    .get(AuthMiddleware.isAdminUser, SduiDataBindingsCtrl.getDataBindingsForEntity);
+  app.route(prefix + '/data-bindings')
+    .post(AuthMiddleware.isAdminUser, SduiDataBindingsCtrl.createDataBinding);
+  app.route(prefix + '/data-bindings/:id')
+    .put(AuthMiddleware.isAdminUser, SduiDataBindingsCtrl.updateDataBinding)
+    .delete(AuthMiddleware.isAdminUser, SduiDataBindingsCtrl.deleteDataBinding);
 };
