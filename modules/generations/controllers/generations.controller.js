@@ -193,10 +193,11 @@ exports.listGenerations = async function (req, res) {
 };
 
 /**
- * Parse output_payload (string or object). Return null if invalid.
+ * Parse a JSON column (output_payload, input_payload, etc.). Return null if invalid.
+ * @param {*} raw
+ * @returns {object|null}
  */
-function parseOutputPayload(row) {
-  let raw = row.output_payload;
+function parseJsonPayloadColumn(raw) {
   if (raw == null) return null;
   if (typeof raw === 'object') return raw;
   try {
@@ -216,9 +217,13 @@ function visitAssetRefs(obj, visit) {
     obj.forEach((item) => visitAssetRefs(item, visit));
     return;
   }
-  const bucket = obj.asset_bucket;
+  const rawBucket = obj.asset_bucket;
   const key = obj.asset_key;
-  if (typeof bucket === 'string' && typeof key === 'string') {
+  if (typeof key === 'string' && key.trim() !== '') {
+    const bucket =
+      typeof rawBucket === 'string' && rawBucket.trim() !== ''
+        ? rawBucket
+        : 'private';
     visit(obj, bucket, key);
   }
   for (const value of Object.values(obj)) {
@@ -227,19 +232,22 @@ function visitAssetRefs(obj, visit) {
 }
 
 /**
- * Collect unique (bucket, key) from all nodes' output_payload: any nested object with asset_key and asset_bucket
- * that doesn't already have a string url. Returns Map keyed by 'bucket:key' -> { bucket, key }.
+ * Collect unique (bucket, key) from each node's output_payload and input_payload: any nested object with
+ * asset_key and asset_bucket that doesn't already have a string http url.
+ * Returns Map keyed by 'bucket:key' -> { bucket, key }.
  */
-function collectOutputAssetRefs(rows) {
+function collectAssetRefsForPresign(rows) {
   const refs = new Map();
   for (const row of rows) {
-    const payload = parseOutputPayload(row);
-    if (!payload) continue;
-    visitAssetRefs(payload, (obj, bucket, key) => {
-      if (typeof obj.url === 'string' && obj.url.startsWith('http')) return;
-      const refKey = `${bucket}:${key}`;
-      if (!refs.has(refKey)) refs.set(refKey, { bucket, key });
-    });
+    for (const col of ['output_payload', 'input_payload']) {
+      const payload = parseJsonPayloadColumn(row[col]);
+      if (!payload) continue;
+      visitAssetRefs(payload, (obj, bucket, key) => {
+        if (typeof obj.url === 'string' && obj.url.startsWith('http')) return;
+        const refKey = `${bucket}:${key}`;
+        if (!refs.has(refKey)) refs.set(refKey, { bucket, key });
+      });
+    }
   }
   return refs;
 }
@@ -269,13 +277,28 @@ function nodeExecutionSortKey(row) {
  */
 function enrichOutputPayloadsWithUrls(rows, urlByRefKey) {
   for (const row of rows) {
-    const payload = parseOutputPayload(row);
+    const payload = parseJsonPayloadColumn(row.output_payload);
     if (!payload) continue;
     visitAssetRefs(payload, (obj, bucket, key) => {
       const url = urlByRefKey.get(`${bucket}:${key}`);
       if (url) obj.url = url;
     });
     row.output_payload = payload;
+  }
+}
+
+/**
+ * Same as output enrichment for input_payload (e.g. AE user_images with asset_key/asset_bucket after normalization).
+ */
+function enrichInputPayloadsWithUrls(rows, urlByRefKey) {
+  for (const row of rows) {
+    const payload = parseJsonPayloadColumn(row.input_payload);
+    if (!payload) continue;
+    visitAssetRefs(payload, (obj, bucket, key) => {
+      const url = urlByRefKey.get(`${bucket}:${key}`);
+      if (url) obj.url = url;
+    });
+    row.input_payload = payload;
   }
 }
 
@@ -318,7 +341,7 @@ exports.getNodeExecutions = async function (req, res) {
       generationNodeExecutionsModel.getMediaGenerationTimestamps(mediaGenerationId)
     ]);
 
-    const refs = collectOutputAssetRefs(rows);
+    const refs = collectAssetRefsForPresign(rows);
     if (refs.size > 0) {
       const storage = StorageFactory.getProvider();
       const opts = { expiresIn: 3600 };
@@ -334,6 +357,15 @@ exports.getNodeExecutions = async function (req, res) {
         })
       );
       enrichOutputPayloadsWithUrls(rows, urlByRefKey);
+      enrichInputPayloadsWithUrls(rows, urlByRefKey);
+    }
+
+    // Ensure payloads are parsed objects in the JSON response (MySQL may return JSON columns as strings).
+    for (const row of rows) {
+      const ip = parseJsonPayloadColumn(row.input_payload);
+      if (ip != null) row.input_payload = ip;
+      const op = parseJsonPayloadColumn(row.output_payload);
+      if (op != null) row.output_payload = op;
     }
 
     rows.sort((a, b) => {
