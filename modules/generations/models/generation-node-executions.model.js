@@ -30,23 +30,41 @@ exports.getByMediaGenerationId = async function (mediaGenerationId) {
       updated_at
     FROM generation_node_executions
     WHERE media_generation_id = ?
-    ORDER BY created_at ASC
+    ORDER BY created_at ASC, node_execution_id ASC
   `;
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [mediaGenerationId]);
   return rows || [];
 };
 
 /**
- * Get created_at, started_at, completed_at, failed_at from media_generations for a given media_generation_id.
+ * Get timeline context from media_generations for a given media_generation_id.
  * @param {string} mediaGenerationId
- * @returns {Promise<Object|null>} { created_at, started_at, completed_at, failed_at } or null
+ * @returns {Promise<Object|null>} { created_at, started_at, completed_at, failed_at, template_id } or null
  */
 exports.getMediaGenerationTimestamps = async function (mediaGenerationId) {
   const query = `
-    SELECT created_at, started_at, completed_at, failed_at
+    SELECT created_at, started_at, completed_at, failed_at, template_id
     FROM media_generations
     WHERE media_generation_id = ?
   `;
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [mediaGenerationId]);
   return rows && rows[0] ? rows[0] : null;
+};
+
+/**
+ * AI clip rows for a template (clip_index order). No joins.
+ * @param {string} templateId
+ * @returns {Promise<Array<{ clip_index: number, wf_id: number|null, asset_type: string|null }>>}
+ */
+exports.listTemplateAiClipsByTemplateId = async function (templateId) {
+  if (!templateId) return [];
+  const query = `
+    SELECT clip_index, wf_id, asset_type
+    FROM template_ai_clips
+    WHERE template_id = ?
+      AND deleted_at IS NULL
+    ORDER BY clip_index ASC
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  return rows || [];
 };

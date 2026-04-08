@@ -14,6 +14,7 @@ const { v4: uuidv4 } = require('uuid');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
 const logger = require('../../../config/lib/logger');
+const TemplateRedisService = require('../../templates/services/template.redis.service');
 
 /**
  * List workflows with pagination
@@ -82,6 +83,29 @@ function parseJsonField(value) {
   } catch (e) {
     return value;
   }
+}
+
+/**
+ * Refresh template_generation_meta in Redis for templates affected by a workflow change.
+ * Best-effort: failures are logged; save response still succeeds.
+ */
+async function refreshTemplateGenerationMetaForTemplateIds(templateIds) {
+  const ids = [...new Set((templateIds || []).filter(Boolean))];
+  for (const templateId of ids) {
+    try {
+      await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+    } catch (err) {
+      logger.warn('Workflow save: failed to refresh template Redis cache', {
+        templateId,
+        error: err.message
+      });
+    }
+  }
+}
+
+async function refreshTemplateGenerationMetaForWorkflowId(workflowId) {
+  const ids = await WorkflowModel.getTemplateIdsByWorkflowId(workflowId);
+  await refreshTemplateGenerationMetaForTemplateIds(ids);
 }
 
 /**
@@ -469,6 +493,11 @@ exports.autoSaveWorkflowByTacId = async function (req, res) {
       change_hash: newHash
     });
 
+    const tacAfterSave = await WorkflowModel.getTacRow(resolvedTacId);
+    if (tacAfterSave?.template_id) {
+      await refreshTemplateGenerationMetaForTemplateIds([tacAfterSave.template_id]);
+    }
+
     await publishNewAdminActivityLog({
       adminUserId: userId,
       entityType: 'WORKFLOW',
@@ -551,6 +580,11 @@ exports.saveWorkflowByTacId = async function (req, res) {
       viewport,
       change_hash: newHash
     });
+
+    const tacAfterSave = await WorkflowModel.getTacRow(resolvedTacId);
+    if (tacAfterSave?.template_id) {
+      await refreshTemplateGenerationMetaForTemplateIds([tacAfterSave.template_id]);
+    }
 
     await publishNewAdminActivityLog({
       adminUserId: userId,
@@ -672,6 +706,8 @@ exports.autoSaveWorkflow = async function (req, res) {
       change_hash: newHash
     });
 
+    await refreshTemplateGenerationMetaForWorkflowId(workflowId);
+
     await publishNewAdminActivityLog({
       adminUserId: userId,
       entityType: 'WORKFLOW',
@@ -725,6 +761,8 @@ exports.saveWorkflow = async function (req, res) {
       viewport,
       change_hash: newHash
     });
+
+    await refreshTemplateGenerationMetaForWorkflowId(workflowId);
 
     await publishNewAdminActivityLog({
       adminUserId: userId,

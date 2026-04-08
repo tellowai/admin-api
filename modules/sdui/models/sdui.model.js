@@ -314,16 +314,17 @@ exports.createRegistryEntry = async function(data) {
   const propsSchema = typeof data.props_schema === 'string' ? data.props_schema : JSON.stringify(data.props_schema || {});
   const defaultProps = data.default_props ? (typeof data.default_props === 'string' ? data.default_props : JSON.stringify(data.default_props)) : null;
   const supportedTriggers = data.supported_triggers ? (typeof data.supported_triggers === 'string' ? data.supported_triggers : JSON.stringify(data.supported_triggers)) : null;
+  const propSectionsJson = data.prop_sections_json ? (typeof data.prop_sections_json === 'string' ? data.prop_sections_json : JSON.stringify(data.prop_sections_json)) : null;
   await mysqlQueryRunner.runQueryInMaster(
-    `INSERT INTO sdui_node_registry (id, node_type, category, display_name, description, props_schema, default_props, supports_children, supported_triggers)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, data.node_type, data.category, data.display_name, data.description || null, propsSchema, defaultProps, data.supports_children ? 1 : 0, supportedTriggers]
+    `INSERT INTO sdui_node_registry (id, node_type, category, display_name, description, props_schema, default_props, supports_children, supported_triggers, prop_sections_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, data.node_type, data.category, data.display_name, data.description || null, propsSchema, defaultProps, data.supports_children ? 1 : 0, supportedTriggers, propSectionsJson]
   );
   return id;
 };
 
 exports.updateRegistryEntry = async function(id, updateData) {
-  const allowedKeys = ['display_name', 'description', 'props_schema', 'default_props', 'supports_children', 'supported_triggers', 'is_deprecated'];
+  const allowedKeys = ['display_name', 'description', 'props_schema', 'default_props', 'supports_children', 'supported_triggers', 'is_deprecated', 'prop_sections_json'];
   const filtered = {};
   for (const k of allowedKeys) {
     if (updateData[k] !== undefined) filtered[k] = updateData[k];
@@ -331,6 +332,7 @@ exports.updateRegistryEntry = async function(id, updateData) {
   if (filtered.props_schema && typeof filtered.props_schema !== 'string') filtered.props_schema = JSON.stringify(filtered.props_schema);
   if (filtered.default_props && typeof filtered.default_props !== 'string') filtered.default_props = JSON.stringify(filtered.default_props);
   if (filtered.supported_triggers && typeof filtered.supported_triggers !== 'string') filtered.supported_triggers = JSON.stringify(filtered.supported_triggers);
+  if (filtered.prop_sections_json && typeof filtered.prop_sections_json !== 'string') filtered.prop_sections_json = JSON.stringify(filtered.prop_sections_json);
   const keys = Object.keys(filtered);
   if (keys.length === 0) return;
   const setString = keys.map(k => `${k} = ?`).join(', ');
@@ -407,11 +409,12 @@ exports.getComponentVersionJsonByNumber = async function(componentId, versionNum
 exports.createComponent = async function(data) {
   const id = crypto.randomUUID();
   const nodeJson = typeof data.node_json === 'string' ? data.node_json : JSON.stringify(data.node_json);
+  const dataContractJson = data.data_contract_json ? (typeof data.data_contract_json === 'string' ? data.data_contract_json : JSON.stringify(data.data_contract_json)) : null;
   const startVer = 1;
   await mysqlQueryRunner.runQueryInMaster(
-    `INSERT INTO sdui_components (id, component_key, name, description, status, version, node_json, published_version)
-     VALUES (?, ?, ?, ?, 'draft', ?, ?, NULL)`,
-    [id, data.component_key, data.name, data.description || null, startVer, nodeJson]
+    `INSERT INTO sdui_components (id, component_key, name, description, status, version, node_json, data_contract_json, published_version)
+     VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, NULL)`,
+    [id, data.component_key, data.name, data.description || null, startVer, nodeJson, dataContractJson]
   );
   return id;
 };
@@ -433,7 +436,15 @@ exports.updateComponent = async function(id, updateData) {
       : JSON.stringify(updateData.node_json);
   }
 
-  if (!hasNode) {
+  const hasContract = updateData.data_contract_json !== undefined;
+  let contractJsonStr = null;
+  if (hasContract) {
+    contractJsonStr = typeof updateData.data_contract_json === 'string'
+      ? updateData.data_contract_json
+      : JSON.stringify(updateData.data_contract_json);
+  }
+
+  if (!hasNode && !hasContract) {
     const sets = [];
     const params = [];
     if (updateData.name !== undefined) {
@@ -452,7 +463,9 @@ exports.updateComponent = async function(id, updateData) {
 
   const oldNode =
     typeof comp.node_json === 'string' ? comp.node_json : JSON.stringify(comp.node_json);
-  if (nodeJsonStr === oldNode) {
+  const oldContract = comp.data_contract_json ? (typeof comp.data_contract_json === 'string' ? comp.data_contract_json : JSON.stringify(comp.data_contract_json)) : null;
+
+  if (nodeJsonStr === oldNode && (!hasContract || contractJsonStr === oldContract)) {
     const sets = [];
     const params = [];
     if (updateData.name !== undefined) {
@@ -482,8 +495,18 @@ exports.updateComponent = async function(id, updateData) {
     newVersion = Math.max(maxHist, draftVer, pub) + 1;
   }
 
-  const sets = ['node_json = ?', 'version = ?', `status = 'draft'`];
-  const params = [nodeJsonStr, newVersion];
+  const sets = ['version = ?', `status = 'draft'`];
+  const params = [newVersion];
+  
+  if (hasNode) {
+    sets.push('node_json = ?');
+    params.push(nodeJsonStr);
+  }
+  if (hasContract) {
+    sets.push('data_contract_json = ?');
+    params.push(contractJsonStr);
+  }
+  
   if (updateData.name !== undefined) {
     sets.push('name = ?');
     params.push(updateData.name);
@@ -624,11 +647,12 @@ exports.getBlockVersionJsonByNumber = async function(blockId, versionNumber) {
 exports.createBlock = async function(data) {
   const id = crypto.randomUUID();
   const bodyJson = typeof data.body_json === 'string' ? data.body_json : JSON.stringify(data.body_json);
+  const dataContractJson = data.data_contract_json ? (typeof data.data_contract_json === 'string' ? data.data_contract_json : JSON.stringify(data.data_contract_json)) : null;
   const startVer = 1;
   await mysqlQueryRunner.runQueryInMaster(
-    `INSERT INTO sdui_blocks (id, block_key, name, description, status, version, body_json, published_version)
-     VALUES (?, ?, ?, ?, 'draft', ?, ?, NULL)`,
-    [id, data.block_key, data.name, data.description || null, startVer, bodyJson]
+    `INSERT INTO sdui_blocks (id, block_key, name, description, status, version, body_json, data_contract_json, published_version)
+     VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, NULL)`,
+    [id, data.block_key, data.name, data.description || null, startVer, bodyJson, dataContractJson]
   );
   return id;
 };
@@ -648,7 +672,15 @@ exports.updateBlock = async function(id, updateData) {
       typeof updateData.body_json === 'string' ? updateData.body_json : JSON.stringify(updateData.body_json);
   }
 
-  if (!hasBody) {
+  const hasContract = updateData.data_contract_json !== undefined;
+  let contractJsonStr = null;
+  if (hasContract) {
+    contractJsonStr = typeof updateData.data_contract_json === 'string'
+      ? updateData.data_contract_json
+      : JSON.stringify(updateData.data_contract_json);
+  }
+
+  if (!hasBody && !hasContract) {
     const sets = [];
     const params = [];
     if (updateData.name !== undefined) {
@@ -667,7 +699,9 @@ exports.updateBlock = async function(id, updateData) {
 
   const oldBody =
     typeof row.body_json === 'string' ? row.body_json : JSON.stringify(row.body_json);
-  if (bodyJsonStr === oldBody) {
+  const oldContract = row.data_contract_json ? (typeof row.data_contract_json === 'string' ? row.data_contract_json : JSON.stringify(row.data_contract_json)) : null;
+
+  if (bodyJsonStr === oldBody && (!hasContract || contractJsonStr === oldContract)) {
     const sets = [];
     const params = [];
     if (updateData.name !== undefined) {
@@ -697,8 +731,18 @@ exports.updateBlock = async function(id, updateData) {
     newVersion = Math.max(maxHist, draftVer, pub) + 1;
   }
 
-  const sets = ['body_json = ?', 'version = ?', `status = 'draft'`];
-  const params = [bodyJsonStr, newVersion];
+  const sets = ['version = ?', `status = 'draft'`];
+  const params = [newVersion];
+
+  if (hasBody) {
+    sets.push('body_json = ?');
+    params.push(bodyJsonStr);
+  }
+  if (hasContract) {
+    sets.push('data_contract_json = ?');
+    params.push(contractJsonStr);
+  }
+
   if (updateData.name !== undefined) {
     sets.push('name = ?');
     params.push(updateData.name);
