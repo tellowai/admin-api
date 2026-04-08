@@ -285,9 +285,27 @@ function parseWorkflowNodeClientId(nodeClientId) {
 }
 
 /**
- * Human-readable workflow node title: canvas label → registry model name (AI_MODEL) → custom_label → type slugs.
- * @param {object|null} nodeRow workflow_nodes row (amr_id, type, system_node_type, ui_metadata, config_values)
- * @param {Map<number, { amr_id: number, name: string, platform_model_id: string }>} [amrMap]
+ * Resolve ai_model_registry row; amr_id from MySQL / JSON may be number or string — Map keys must match.
+ */
+function registryRowByAmrId(amrMap, amrId) {
+  if (amrId == null || !amrMap || amrMap.size === 0) return null;
+  return (
+    amrMap.get(amrId) ||
+    amrMap.get(Number(amrId)) ||
+    amrMap.get(String(amrId)) ||
+    null
+  );
+}
+
+/**
+ * Human-readable workflow node title:
+ * 1) Canvas ui_metadata.label
+ * 2) config_values.custom_label
+ * 3) ai_model_registry.name when node is AI_MODEL and amr_id resolves (registry is source of truth vs generic "AI MODEL")
+ * 4) system_node_type / type as last resort ("STATIC ASSET", "AI MODEL", …)
+ *
+ * Nodes with a custom canvas title (e.g. "Kling 2.6 pro") keep that title. Nodes without a label use registry name when
+ * available; otherwise you see the workflow node kind (e.g. "AI MODEL").
  */
 function pickWorkflowNodeDisplayName(nodeRow, amrMap) {
   if (!nodeRow) return null;
@@ -303,7 +321,7 @@ function pickWorkflowNodeDisplayName(nodeRow, amrMap) {
     String(nodeRow.type || '').toUpperCase() === 'AI_MODEL' ||
     String(nodeRow.system_node_type || '').toUpperCase() === 'AI_MODEL';
   if (isAiModel && nodeRow.amr_id != null && amrMap && amrMap.size) {
-    const reg = amrMap.get(nodeRow.amr_id);
+    const reg = registryRowByAmrId(amrMap, nodeRow.amr_id);
     if (reg && typeof reg.name === 'string' && reg.name.trim()) {
       return reg.name.trim();
     }
@@ -446,7 +464,15 @@ exports.getNodeExecutions = async function (req, res) {
     } catch (e) {
       console.error('getByAmrIds (node executions timeline) failed:', e.message);
     }
-    const amrMap = new Map(amrRows.map((r) => [r.amr_id, r]));
+    const amrMap = new Map();
+    for (const r of amrRows) {
+      if (r && r.amr_id != null) {
+        amrMap.set(r.amr_id, r);
+        const n = Number(r.amr_id);
+        if (!Number.isNaN(n)) amrMap.set(n, r);
+        amrMap.set(String(r.amr_id), r);
+      }
+    }
 
     for (const row of rows) {
       const parsed = parseWorkflowNodeClientId(row.node_client_id);
@@ -460,7 +486,7 @@ exports.getNodeExecutions = async function (req, res) {
       } else if (parsed.wfnId != null) {
         const wfn = wfnMap.get(parsed.wfnId);
         if (wfn && wfn.amr_id != null) {
-          const reg = amrMap.get(wfn.amr_id);
+          const reg = registryRowByAmrId(amrMap, wfn.amr_id);
           if (reg) {
             row.ai_model_registry_name = reg.name || null;
             row.ai_model_registry_platform_model_id = reg.platform_model_id || null;
