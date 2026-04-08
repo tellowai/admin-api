@@ -3,6 +3,7 @@
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
 const workflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
+const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-registry.model');
 const BoothAdminModel = require('../../photo-booths/models/photo-booth.admin.model');
 const SupportModel = require('../../support/models/support.model');
 const moment = require('moment');
@@ -283,7 +284,12 @@ function parseWorkflowNodeClientId(nodeClientId) {
   };
 }
 
-function pickWorkflowNodeDisplayName(nodeRow) {
+/**
+ * Human-readable workflow node title: canvas label → registry model name (AI_MODEL) → custom_label → type slugs.
+ * @param {object|null} nodeRow workflow_nodes row (amr_id, type, system_node_type, ui_metadata, config_values)
+ * @param {Map<number, { amr_id: number, name: string, platform_model_id: string }>} [amrMap]
+ */
+function pickWorkflowNodeDisplayName(nodeRow, amrMap) {
   if (!nodeRow) return null;
   const meta = nodeRow.ui_metadata;
   if (meta && typeof meta === 'object' && typeof meta.label === 'string' && meta.label.trim()) {
@@ -292,6 +298,15 @@ function pickWorkflowNodeDisplayName(nodeRow) {
   const cv = nodeRow.config_values;
   if (cv && typeof cv === 'object' && typeof cv.custom_label === 'string' && cv.custom_label.trim()) {
     return cv.custom_label.trim();
+  }
+  const isAiModel =
+    String(nodeRow.type || '').toUpperCase() === 'AI_MODEL' ||
+    String(nodeRow.system_node_type || '').toUpperCase() === 'AI_MODEL';
+  if (isAiModel && nodeRow.amr_id != null && amrMap && amrMap.size) {
+    const reg = amrMap.get(nodeRow.amr_id);
+    if (reg && typeof reg.name === 'string' && reg.name.trim()) {
+      return reg.name.trim();
+    }
   }
   if (nodeRow.system_node_type) {
     return String(nodeRow.system_node_type).replace(/_/g, ' ');
@@ -424,16 +439,35 @@ exports.getNodeExecutions = async function (req, res) {
     }
     const wfnMap = new Map(wfnRows.map((n) => [n.wfn_id, n]));
 
+    const amrIds = [...new Set(wfnRows.map((n) => n.amr_id).filter((id) => id != null))];
+    let amrRows = [];
+    try {
+      amrRows = await AiModelRegistryModel.getByAmrIds(amrIds);
+    } catch (e) {
+      console.error('getByAmrIds (node executions timeline) failed:', e.message);
+    }
+    const amrMap = new Map(amrRows.map((r) => [r.amr_id, r]));
+
     for (const row of rows) {
       const parsed = parseWorkflowNodeClientId(row.node_client_id);
       row.timeline_clip_index = parsed.clipIndex;
       row.timeline_wfn_id = parsed.wfnId;
       row.timeline_system_type = parsed.systemType;
+      row.ai_model_registry_name = null;
+      row.ai_model_registry_platform_model_id = null;
       if (parsed.isAe) {
         row.workflow_node_display_name = 'After Effects render';
       } else if (parsed.wfnId != null) {
+        const wfn = wfnMap.get(parsed.wfnId);
+        if (wfn && wfn.amr_id != null) {
+          const reg = amrMap.get(wfn.amr_id);
+          if (reg) {
+            row.ai_model_registry_name = reg.name || null;
+            row.ai_model_registry_platform_model_id = reg.platform_model_id || null;
+          }
+        }
         row.workflow_node_display_name =
-          pickWorkflowNodeDisplayName(wfnMap.get(parsed.wfnId)) ||
+          pickWorkflowNodeDisplayName(wfn, amrMap) ||
           (parsed.systemType ? String(parsed.systemType).replace(/_/g, ' ') : null);
       } else {
         row.workflow_node_display_name = null;
