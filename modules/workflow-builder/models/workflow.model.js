@@ -417,6 +417,23 @@ exports.getTacRow = async function (tacId) {
 };
 
 /**
+ * Distinct template_id values linked to this workflow (template_ai_clips.wf_id). No joins.
+ * @param {number} workflowId wf_id
+ * @returns {Promise<string[]>}
+ */
+exports.getTemplateIdsByWorkflowId = async function (workflowId) {
+  if (workflowId == null) return [];
+  const query = `
+    SELECT DISTINCT template_id
+    FROM template_ai_clips
+    WHERE wf_id = ?
+      AND deleted_at IS NULL
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [workflowId]);
+  return (rows || []).map((r) => r.template_id).filter(Boolean);
+};
+
+/**
  * Link a workflow to a template_ai_clip (tac_id).
  */
 exports.setWfIdForTacId = async function (tacId, wfId) {

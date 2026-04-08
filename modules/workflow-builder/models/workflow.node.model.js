@@ -44,6 +44,52 @@ exports.getNodesByWorkflowIds = async function (workflowIds) {
 };
 
 /**
+ * Batch load workflow_nodes by primary key wfn_id (no joins).
+ * @param {Array<number|string>} wfnIds
+ * @returns {Promise<Array>}
+ */
+exports.getNodesByWfnIds = async function (wfnIds) {
+  if (!wfnIds || wfnIds.length === 0) return [];
+  const nums = [...new Set(wfnIds.map((id) => parseInt(id, 10)).filter((n) => !Number.isNaN(n)))];
+  if (nums.length === 0) return [];
+  const placeholders = nums.map(() => '?').join(',');
+  const query = `
+    SELECT
+      wfn_id,
+      uuid,
+      wf_id,
+      type,
+      amr_id,
+      system_node_type,
+      position_x as x,
+      position_y as y,
+      width,
+      height,
+      config_values,
+      ui_metadata
+    FROM workflow_nodes
+    WHERE wfn_id IN (${placeholders})
+  `;
+  const results = await mysqlQueryRunner.runQueryInSlave(query, nums);
+  return results.map((node) => {
+    if (node.config_values && typeof node.config_values === 'string') {
+      try {
+        node.config_values = JSON.parse(node.config_values);
+      } catch (e) { /* keep string */ }
+    }
+    if (node.ui_metadata && typeof node.ui_metadata === 'string') {
+      try {
+        node.ui_metadata = JSON.parse(node.ui_metadata);
+      } catch (e) { /* keep string */ }
+    }
+    return {
+      ...node,
+      position: { x: node.x, y: node.y }
+    };
+  });
+};
+
+/**
  * Get nodes by workflow ID
  */
 exports.getNodesByWorkflowId = async function (workflowId) {

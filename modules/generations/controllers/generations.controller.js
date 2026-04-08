@@ -2,6 +2,7 @@
 
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
+const workflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
 const BoothAdminModel = require('../../photo-booths/models/photo-booth.admin.model');
 const SupportModel = require('../../support/models/support.model');
 const moment = require('moment');
@@ -253,22 +254,52 @@ function collectAssetRefsForPresign(rows) {
 }
 
 /**
- * Sort key for DAG order: node_client_id format "clipIndex_type#systemType#wfnId" (e.g. 1_SYSTEM_NODE#USER_INPUT_IMAGE#536).
- * Order: User input first, then AI model, then End. Legacy ids (ae, etc.) last.
+ * Parse node_client_id from workflow v2: "{clipIndex}_{nodeType}#{systemType}#{wfnId}" (e.g. 1_SYSTEM_NODE#AI_MODEL#536).
  */
-function nodeExecutionSortKey(row) {
-  const id = row.node_client_id || '';
-  if (id === 'ae') return [999, 99, 999];
-  const firstHash = id.indexOf('#');
-  if (firstHash === -1) return [0, 1, 0];
-  const clipNum = parseInt(id.slice(0, firstHash).split('_')[0], 10) || 0;
-  const afterFirst = id.slice(firstHash + 1);
-  const parts = afterFirst.split('#');
-  const systemType = parts[0] || '';
-  const wfnId = parseInt(parts[1], 10) || 0;
-  const typeOrder = { USER_INPUT_IMAGE: 0, AI_MODEL: 1, END: 2 }[systemType];
-  const order = typeOrder !== undefined ? typeOrder : 1;
-  return [clipNum, order, wfnId];
+function parseWorkflowNodeClientId(nodeClientId) {
+  if (!nodeClientId || typeof nodeClientId !== 'string') {
+    return { isAe: false, clipIndex: null, wfnId: null, systemType: null, nodeKind: null };
+  }
+  if (nodeClientId === 'ae') {
+    return { isAe: true, clipIndex: null, wfnId: null, systemType: null, nodeKind: 'ae' };
+  }
+  const parts = nodeClientId.split('#');
+  if (parts.length < 3) {
+    return { isAe: false, clipIndex: null, wfnId: null, systemType: null, nodeKind: null };
+  }
+  const wfnId = parseInt(parts[2], 10);
+  const systemType = parts[1] || null;
+  const prefix = parts[0];
+  const us = prefix.indexOf('_');
+  const clipPart = us > 0 ? prefix.slice(0, us) : '';
+  const clipIndex = us > 0 ? parseInt(clipPart, 10) : NaN;
+  const nodeKind = us > 0 ? prefix.slice(us + 1) : prefix;
+  return {
+    isAe: false,
+    clipIndex: Number.isNaN(clipIndex) ? null : clipIndex,
+    wfnId: Number.isNaN(wfnId) ? null : wfnId,
+    systemType,
+    nodeKind: nodeKind || null
+  };
+}
+
+function pickWorkflowNodeDisplayName(nodeRow) {
+  if (!nodeRow) return null;
+  const meta = nodeRow.ui_metadata;
+  if (meta && typeof meta === 'object' && typeof meta.label === 'string' && meta.label.trim()) {
+    return meta.label.trim();
+  }
+  const cv = nodeRow.config_values;
+  if (cv && typeof cv === 'object' && typeof cv.custom_label === 'string' && cv.custom_label.trim()) {
+    return cv.custom_label.trim();
+  }
+  if (nodeRow.system_node_type) {
+    return String(nodeRow.system_node_type).replace(/_/g, ' ');
+  }
+  if (nodeRow.type) {
+    return String(nodeRow.type).replace(/_/g, ' ');
+  }
+  return null;
 }
 
 /**
@@ -368,15 +399,52 @@ exports.getNodeExecutions = async function (req, res) {
       if (op != null) row.output_payload = op;
     }
 
-    rows.sort((a, b) => {
-      const ka = nodeExecutionSortKey(a);
-      const kb = nodeExecutionSortKey(b);
-      if (ka[0] !== kb[0]) return ka[0] - kb[0];
-      if (ka[1] !== kb[1]) return ka[1] - kb[1];
-      return ka[2] - kb[2];
-    });
+    // Keep DB order (created_at ASC): matches worker insertion order (per-clip DAG execution order, then AE).
 
-    res.json({ data: rows, mediaGeneration: mediaGeneration || null });
+    let templateAiClips = [];
+    const templateId = mediaGeneration && mediaGeneration.template_id;
+    if (templateId) {
+      try {
+        templateAiClips = await generationNodeExecutionsModel.listTemplateAiClipsByTemplateId(templateId);
+      } catch (e) {
+        console.error('listTemplateAiClipsByTemplateId failed:', e.message);
+      }
+    }
+
+    const wfnIds = [];
+    for (const row of rows) {
+      const p = parseWorkflowNodeClientId(row.node_client_id);
+      if (p.wfnId != null) wfnIds.push(p.wfnId);
+    }
+    let wfnRows = [];
+    try {
+      wfnRows = await workflowNodeModel.getNodesByWfnIds(wfnIds);
+    } catch (e) {
+      console.error('getNodesByWfnIds failed:', e.message);
+    }
+    const wfnMap = new Map(wfnRows.map((n) => [n.wfn_id, n]));
+
+    for (const row of rows) {
+      const parsed = parseWorkflowNodeClientId(row.node_client_id);
+      row.timeline_clip_index = parsed.clipIndex;
+      row.timeline_wfn_id = parsed.wfnId;
+      row.timeline_system_type = parsed.systemType;
+      if (parsed.isAe) {
+        row.workflow_node_display_name = 'After Effects render';
+      } else if (parsed.wfnId != null) {
+        row.workflow_node_display_name =
+          pickWorkflowNodeDisplayName(wfnMap.get(parsed.wfnId)) ||
+          (parsed.systemType ? String(parsed.systemType).replace(/_/g, ' ') : null);
+      } else {
+        row.workflow_node_display_name = null;
+      }
+    }
+
+    res.json({
+      data: rows,
+      mediaGeneration: mediaGeneration || null,
+      templateAiClips
+    });
   } catch (err) {
     console.error('Error fetching generation node executions:', err);
     return res.status(500).send({
