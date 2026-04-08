@@ -37,8 +37,11 @@ describe('SDUI BFF Resources Model', () => {
       await sduiBffResourcesModel.createBffResource({
         resource_key: 'credits_history',
         display_name: 'Credits History',
-        domain_service: 'credits',
-        service_method: 'getHistory'
+        api_url: '/credits/transactions',
+        http_method: 'GET',
+        sample_payload_json: { items: [], page: 1, limit: 10, hasMore: false, view: 'simplified' },
+        use_sample_when_empty: true,
+        use_sample_on_error: false
       });
       expect(mysqlQueryRunnerMock.runQueryInMaster.calledOnce).to.be.true;
     });
