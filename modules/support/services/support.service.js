@@ -5,6 +5,7 @@ const TemplateModel = require('../../templates/models/template.model');
 const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const CreditsModel = require('../../credits/models/credits.model');
+const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 // A helper to enrich tickets without performing SQL JOINs
 async function enrichTicketsWithUsers(tickets) {
@@ -273,6 +274,14 @@ exports.getTicketDetails = async function(ticketId) {
   if (finalTicket.user_id) {
     const balanceData = await SupportModel.getUserBalance(finalTicket.user_id);
     finalTicket.user_credits = balanceData;
+    try {
+      finalTicket.template_slots_remaining_total = await EntitlementsModel.sumTemplateSlotsRemainingByUserId(
+        finalTicket.user_id
+      );
+    } catch (e) {
+      console.error('Failed to load entitlement slots total for ticket', e);
+      finalTicket.template_slots_remaining_total = 0;
+    }
   }
 
   return finalTicket;

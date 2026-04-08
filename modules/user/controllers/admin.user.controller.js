@@ -15,6 +15,7 @@ const RbacModel = require('../../auth/models/rbac.model');
 const CreditsModel = require('../../credits/models/credits.model');
 const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
+const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
 
@@ -471,6 +472,79 @@ exports.getUserOrders = async function (req, res) {
     console.error('getUserOrders error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
       message: req.t('user:USER_ORDERS_FAILED') || 'Failed to retrieve user orders'
+    });
+  }
+};
+
+/**
+ * Entitlements for an end-user (not admin user): total remaining template slots + paginated rows with linked orders.
+ */
+exports.getUserEntitlements = async function (req, res) {
+  try {
+    const userId = req.params.userId;
+    const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
+    const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
+    const offset = (page - 1) * limit;
+
+    const [templateSlotsRemainingTotal, entitlementRows] = await Promise.all([
+      EntitlementsModel.sumTemplateSlotsRemainingByUserId(userId),
+      EntitlementsModel.listByUserId(userId, limit, offset)
+    ]);
+
+    const orderIds = [...new Set(entitlementRows.map((row) => row.order_id).filter((id) => id != null))];
+    const orders = orderIds.length ? await OrdersModel.getByOrderIds(orderIds) : [];
+    const orderMap = {};
+    for (const o of orders) {
+      orderMap[o.order_id] = o;
+    }
+
+    const planIds = [...new Set(orders.map((o) => o.payment_plan_id).filter(Boolean))];
+    const plans = planIds.length ? await PaymentPlansModel.getPlansByIds(planIds) : [];
+    const planMap = {};
+    for (const p of plans) planMap[p.pp_id] = p;
+
+    const entitlements = entitlementRows.map((row) => {
+      const order = row.order_id != null ? orderMap[row.order_id] : null;
+      const plan = order && order.payment_plan_id ? planMap[order.payment_plan_id] : null;
+      return {
+        entitlement_id: row.entitlement_id,
+        user_id: row.user_id,
+        order_id: row.order_id,
+        template_id: row.template_id,
+        tier_plan_type: row.tier_plan_type,
+        template_slots_remaining: row.template_slots_remaining,
+        max_creations_per_template: row.max_creations_per_template,
+        status: row.status,
+        is_expired: row.is_expired,
+        valid_from: row.valid_from,
+        valid_until: row.valid_until,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        order: order
+          ? {
+              order_id: order.order_id,
+              status: order.status,
+              amount_paid: order.amount_paid,
+              currency: order.currency,
+              payment_gateway: order.payment_gateway,
+              pg_order_id: order.pg_order_id,
+              created_at: order.created_at,
+              plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null
+            }
+          : null
+      };
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        template_slots_remaining_total: templateSlotsRemainingTotal,
+        entitlements
+      }
+    });
+  } catch (err) {
+    console.error('getUserEntitlements error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: req.t('user:USER_ENTITLEMENTS_FAILED') || 'Failed to retrieve user entitlements'
     });
   }
 };

@@ -87,4 +87,12 @@ module.exports = function (app) {
     AuthMiddleware.isAdminUser,
     AdminUserCtrl.getUserOrders
   );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/users/:userId/entitlements"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getUserEntitlements
+  );
 };

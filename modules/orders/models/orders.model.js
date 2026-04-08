@@ -116,3 +116,21 @@ exports.getByUserId = async function (userId, limit, offset) {
   `;
   return await MysqlQueryRunner.runQueryInSlave(query, [userId, limit, offset]);
 };
+
+/**
+ * Batch fetch orders by internal order_id (for stitching entitlement rows).
+ * @param {number[]} orderIds
+ * @returns {Promise<Array>}
+ */
+exports.getByOrderIds = async function (orderIds) {
+  if (!orderIds || orderIds.length === 0) return [];
+  const placeholders = orderIds.map(() => '?').join(',');
+  const query = `
+    SELECT order_id, user_id, payment_gateway, pg_order_id, payment_plan_id,
+           amount_paid, currency, payment_method, status,
+           created_at, completed_at, failed_at, refunded_at
+    FROM orders
+    WHERE order_id IN (${placeholders})
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, orderIds);
+};
