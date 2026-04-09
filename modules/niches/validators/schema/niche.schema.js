@@ -57,7 +57,10 @@ const matchCustomTextInputFieldsSchema = Joi.object().keys({
       default_text: Joi.string().required(),
       input_field_type: Joi.string().valid('text', 'short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
       linked_layer_names: Joi.array().items(Joi.string()).optional(),
-      user_input_field_name: Joi.string().required()
+      user_input_field_name: Joi.string().required(),
+      text_casing: Joi.string()
+        .valid('none', 'uppercase', 'lowercase', 'capitalize_first', 'title_case', 'sentence_case')
+        .optional()
     })
   ).min(1).required()
 });

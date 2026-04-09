@@ -57,6 +57,10 @@ const customTextInputFieldSchema = Joi.object({
   rendering_date_format: Joi.string().allow(null, '').optional(),
   nfd_field_code: Joi.string().allow(null).optional(), // Matched field code from niche data field definitions
   variable_name: Joi.string().allow(null, '').optional(),
+  /** How to transform user text for render (short/long text only in workers). */
+  text_casing: Joi.string()
+    .valid('none', 'uppercase', 'lowercase', 'capitalize_first', 'title_case', 'sentence_case')
+    .optional(),
   is_optional: Joi.boolean().optional(),
   new_field: Joi.object({
     field_code: Joi.string().required(),
