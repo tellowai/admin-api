@@ -6,6 +6,7 @@ const RedisNicheModel = require('../dbo/redis.niche.model');
 const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const logger = require('../../../config/lib/logger');
+const { sortMatchedTextFieldsForDisplay } = require('../constants/weddingNfdFieldOrder');
 
 /**
  * Match custom text input fields with niche field definitions using LLM
@@ -135,7 +136,9 @@ Your task:
    - "user_input_field_name": meaningful English; no placeholder patterns; remove stray numbers when matching to a label.
    - If input is already correct, omit correction fields.
 
-You must respond with a valid JSON object containing an array called "results".`
+You must respond with a valid JSON object containing an array called "results".
+
+DISPLAY ORDER: The server sorts returned fields for the admin UI in canonical wedding order (by matched field_code: family name, bride, groom, extended family, parents, wedding date, venue). Use input_index on each result for correctness; array order of "results" does not control final order.`
     };
 
     const userMessage = {
@@ -168,7 +171,9 @@ Return JSON:
       "corrected_user_input_field_name": "bride name"
     }
   ]
-}`
+}
+
+The API will reorder the saved field list for display by canonical wedding field_code order; focus on accurate matching and duplicate linking.`
     };
 
     // Define response format schema
@@ -296,25 +301,28 @@ Return JSON:
     const fieldCodeToDefinition = new Map(
       activeFieldDefinitions.map((fd) => [fd.field_code, fd])
     );
-    const standardizedFields = enrichedFields.map((field) => {
+    const standardizedFields = enrichedFields.map((field, index) => {
       const code = field.nfd_field_code;
       if (!code) {
-        return field;
+        return { ...field, _match_input_index: index };
       }
       const def = fieldCodeToDefinition.get(code);
       if (!def) {
-        return field;
+        return { ...field, _match_input_index: index };
       }
       const label = def.field_label != null ? String(def.field_label).trim() : '';
       return {
         ...field,
         user_input_field_name: label || field.user_input_field_name,
-        input_field_type: def.field_data_type || field.input_field_type
+        input_field_type: def.field_data_type || field.input_field_type,
+        _match_input_index: index
       };
     });
 
+    const orderedFields = sortMatchedTextFieldsForDisplay(standardizedFields);
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: standardizedFields
+      data: orderedFields
     });
 
   } catch (error) {
