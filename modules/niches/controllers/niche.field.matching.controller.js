@@ -16,8 +16,10 @@ const logger = require('../../../config/lib/logger');
  * @apiPermission JWT
  *
  * @apiDescription Matches custom text input fields with existing niche field definitions using AI.
- * For fields that match existing definitions, adds nfd_field_code.
- * For new fields not in definitions, generates field_code, field_label, and field_data_type.
+ * Only existing niche field definitions are used: sets nfd_field_code when a semantic match exists.
+ * If no definition fits, the field is left without nfd_field_code (admins must create definitions in the niche first).
+ * When nfd_field_code is set, user_input_field_name and input_field_type are overwritten from the DB definition
+ * (field_label, field_data_type) so labels and types stay consistent with the niche catalog.
  *
  * @apiHeader {String} Authorization JWT token
  *
@@ -29,13 +31,8 @@ const logger = require('../../../config/lib/logger');
  * @apiBody {Array} [custom_text_input_fields[].linked_layer_names] Linked layer names
  * @apiBody {String} custom_text_input_fields[].user_input_field_name User input field name
  *
- * @apiSuccess {Array} data Enriched input fields with nfd_field_code and new field definitions
- * @apiSuccess {Object} data[].matched_field Field matching information
- * @apiSuccess {String} [data[].matched_field.nfd_field_code] Matched field code (if match found)
- * @apiSuccess {Object} [data[].matched_field.new_field] New field definition (if no match found)
- * @apiSuccess {String} [data[].matched_field.new_field.field_code] Generated field code
- * @apiSuccess {String} [data[].matched_field.new_field.field_label] Generated field label
- * @apiSuccess {String} [data[].matched_field.new_field.field_data_type] Generated field data type
+ * @apiSuccess {Array} data Enriched input fields with nfd_field_code when matched
+ * @apiSuccess {String} [data[].nfd_field_code] Matched field code (if match found)
  *
  * @apiSuccessExample {json} Success-Response:
  *     HTTP/1.1 200 OK
@@ -50,16 +47,11 @@ const logger = require('../../../config/lib/logger');
  *           "nfd_field_code": "bride_name"
  *         },
  *         {
- *           "layer_name": "New Field",
- *           "default_text": "New Field",
+ *           "layer_name": "Unknown layer",
+ *           "default_text": "",
  *           "input_field_type": "text",
  *           "linked_layer_names": [],
- *           "user_input_field_name": "New field",
- *           "new_field": {
- *             "field_code": "new_field",
- *             "field_label": "New Field",
- *             "field_data_type": "short_text"
- *           }
+ *           "user_input_field_name": "unknown"
  *         }
  *       ]
  *     }
@@ -114,14 +106,16 @@ exports.matchCustomTextInputFields = async function(req, res) {
       field_data_type: fd.field_data_type
     }));
 
-    // Step 4: Call LLM to match fields and generate new ones
+    // Step 4: Call LLM to match fields to existing definitions only (no new_field generation)
     const llmProvider = await LLMProviderFactory.createProvider('openai');
     
     const systemMessage = {
       role: 'system',
-      content: `You are an expert at SEMANTIC MATCHING of text input fields with existing field definitions.
+      content: `You are an expert at SEMANTIC MATCHING of text input fields to EXISTING niche field definitions only.
 
-CORE PRINCIPLE: ALWAYS match to existing fields using SEMANTIC SIMILARITY. Treat synonyms, variations, and related concepts as MATCHES.
+CRITICAL: You MUST NOT invent new niche fields. Never output "new_field". If no existing definition fits, omit "nfd_field_code" for that input. Admins create missing definitions elsewhere; you only map to what already exists.
+
+CORE PRINCIPLE: Match using SEMANTIC SIMILARITY. Treat synonyms, variations, and related concepts as matches when they align with an existing field_code.
 
 Examples of semantic matches (these ARE the same field):
 - "family_name" = "family_surname" = "Family's" = "Family Name" (all refer to surname)
@@ -130,100 +124,48 @@ Examples of semantic matches (these ARE the same field):
 - "bride_name" = "Bride Name 2" = "bride name" (ignore numbers, match to existing)
 
 Your task:
-1. For each input, find the SEMANTICALLY CLOSEST existing field definition. If ANY existing field has similar meaning, USE IT.
-2. Return "nfd_field_code" with the existing field's code if a semantic match exists.
-3. ONLY create "new_field" if there is absolutely NO existing field with similar meaning.
-4. LINK DUPLICATE FIELDS - If multiple input fields match to the same field_code or represent the same data:
-   - Find the FIRST occurrence of that field (earliest input_index)
-   - For all subsequent occurrences, add the first field's "layer_name" to their "linked_layer_names" array
-   - Example: If "Bride Name" (index 2) and "Bride Name 2" (index 3) both match "bride_name", then "Bride Name 2" should have "linked_layer_names": ["Bride Name"]
-   - This allows users to enter data once and reuse it for duplicate fields
-5. VALIDATE and CORRECT input data if needed:
-   - Check "input_field_type" - must be one of: short_text, long_text, date, time, datetime, photo, video. If incorrect, provide corrected value.
-   - Check "user_input_field_name" - MUST be a meaningful English description, NOT placeholder text. Rules:
-     * NEVER use placeholder patterns like "Xth", "Xxxx", "XX", "20xx", "xxxx" - these are NOT valid
-     * NEVER include numbers - remove all numbers (e.g., "Bride name 2" → "bride name", "Groom name 3" → "groom name")
-     * If field matches to existing definition, use the field_label or create a descriptive name based on what it represents
-     * For date/time fields: use "wedding date", "ceremony time", "event date" etc. (not "Xth xxxx 20xx")
-     * For venue/address: use "venue address", "event location", "ceremony venue" etc. (not "Xxxxx xxxxxxxxxx")
-     * Should be niche-specific, self-explanatory, lowercase with spaces, in plain English words, NO NUMBERS
-     * Examples: "bride name", "groom name", "wedding date", "venue address", "bride father name"
-   - If the input data is already correct and meaningful (not placeholder text), do NOT include correction fields (omit them).
-
-RULES FOR NEW FIELDS (only when no match exists):
-- Field data types: short_text, long_text, date, time, datetime, photo, video
-- Field codes: lowercase with underscores, NO NUMBERS (e.g., "bride_father_name", NOT "father_name_3")
-- For family members in wedding context: use "bride_" or "groom_" prefix based on position/context
-- Ignore numbers in input (e.g., "Father Name 3" → determine bride/groom side from context)
+1. For each input, find the SEMANTICALLY CLOSEST existing field definition from the list provided. If a match exists, set "nfd_field_code" to that field's code.
+2. If NO existing definition is a reasonable semantic fit, do NOT set "nfd_field_code" (leave it unset). Do NOT propose or create new field definitions.
+3. LINK DUPLICATE FIELDS - If multiple input fields match the same field_code or represent the same data:
+   - Find the FIRST occurrence (earliest input_index)
+   - For subsequent occurrences, add the first field's "layer_name" to their "linked_layer_names" array
+   - Example: "Bride Name" (index 2) and "Bride Name 2" (index 3) both match "bride_name" → index 3 has "linked_layer_names": ["Bride Name"]
+4. VALIDATE and CORRECT input data if needed:
+   - "input_field_type" must be one of: short_text, long_text, date, time, datetime, photo, video. If incorrect, use corrected_input_field_type.
+   - "user_input_field_name": meaningful English; no placeholder patterns; remove stray numbers when matching to a label.
+   - If input is already correct, omit correction fields.
 
 You must respond with a valid JSON object containing an array called "results".`
     };
 
     const userMessage = {
       role: 'user',
-      content: `Match each input field to the SEMANTICALLY CLOSEST existing field definition.
+      content: `Match each input field to the SEMANTICALLY CLOSEST EXISTING field definition below. Do not invent new field definitions.
 
 NICHE CONTEXT: ${niche.niche_name} (slug: ${niche_slug})
 
-EXISTING FIELD DEFINITIONS (use these field_codes when matching):
+EXISTING FIELD DEFINITIONS (ONLY these field_codes may be used for nfd_field_code):
 ${JSON.stringify(fieldDefinitionsForLLM, null, 2)}
 
 INPUT FIELDS TO MATCH:
 ${JSON.stringify(custom_text_input_fields, null, 2)}
 
 MATCHING RULES:
-1. USE SEMANTIC SIMILARITY - synonyms and variations ARE matches:
-   - "Family Name" / "Family's" → match to "family_surname" if it exists (they mean the same thing)
-   - Any address/location/venue text → match to "venue" if it exists
-   - Any date/time text → match to "wedding_date" or similar if it exists
-   - "Bride Name 2" → match to "bride_name" (ignore numbers)
-
-2. Only create new_field when NO existing field has similar meaning
-
-3. LINK DUPLICATE FIELDS - If multiple fields match the same field_code or represent the same data:
-   - Find the FIRST occurrence (lowest input_index) of that field
-   - For all subsequent occurrences, add the first field's "layer_name" to "linked_layer_names"
-   - Examples:
-     * "Bride Name" (index 2) and "Bride Name 2" (index 3) both match "bride_name" → "Bride Name 2" should have "linked_layer_names": ["Bride Name"]
-     * "Groom Name" (index 1) and "Groom Name 2" (index 6) both match "groom_name" → "Groom Name 2" should have "linked_layer_names": ["Groom Name"]
-     * Two date fields both match "wedding_date" → second one should link to first one's layer_name
-   - This allows users to enter data once and reuse it
-
-4. For new fields (when truly no match):
-   - NO numbers in codes/labels
-   - For parents: use "bride_father_name", "groom_mother_name" etc. based on context/position
-
-5. VALIDATE INPUT DATA - Check and correct if needed (only include if correction is needed):
-   - "input_field_type": Must be one of: short_text, long_text, date, time, datetime, photo, video
-   - "user_input_field_name": CRITICAL - Must be meaningful English words, NEVER placeholder text or numbers:
-     * NEVER use: "Xth", "Xxxx", "XX", "20xx", "xxxx", "Xxxxx" or any placeholder patterns
-     * NEVER include numbers - remove ALL numbers (e.g., "Bride name 2" → "bride name", "Groom name 3" → "groom name", "Name 5" → "name")
-     * If field matches existing definition: use field_label or descriptive name (e.g., if matches "wedding_date" → use "wedding date")
-     * For date/time fields: "wedding date", "ceremony time", "event date" (NOT "Xth xxxx 20xx xxxx am")
-     * For venue/address: "venue address", "event location", "ceremony venue" (NOT "Xxxxx xxxxxxxxxx")
-     * For names: "bride name", "groom name", "bride father name" (NOT "Smt mother name" - remove honorifics, NOT "name 2" - remove numbers)
-     * Should be niche-specific, lowercase with spaces, plain English words that clearly describe the field, NO NUMBERS
-     * Examples for "${niche.niche_name}" niche: "bride name", "groom name", "wedding date", "venue address"
-   - If input is already meaningful English (not placeholder text) and self-explanatory, omit correction fields
+1. USE SEMANTIC SIMILARITY. If no definition fits, omit "nfd_field_code" for that input_index (do not output new_field).
+2. LINK DUPLICATE FIELDS when multiple inputs match the same field_code:
+   - First occurrence: set nfd_field_code only (no extra links).
+   - Later occurrences: set nfd_field_code and linked_layer_names to include the first field's layer_name.
+3. VALIDATE INPUT (only include corrections when needed): corrected_input_field_type, corrected_user_input_field_name.
 
 Return JSON:
 {
   "results": [
     {
       "input_index": 0,
-      "nfd_field_code": "existing_field_code", // USE THIS if semantic match found
-      "linked_layer_names": ["First Layer Name"], // Array of layer_names to link to (if this is a duplicate field)
-      "corrected_input_field_type": "long_text", // ONLY include if correction needed
-      "corrected_user_input_field_name": "bride name" // ONLY include if correction needed
-    },
-    {
-      "input_index": 1,
-      "new_field": { // ONLY if no semantic match exists
-        "field_code": "new_code",
-        "field_label": "New Label", 
-        "field_data_type": "short_text"
-      },
-      "linked_layer_names": ["First Layer Name"] // If this new field is a duplicate of another new field
+      "nfd_field_code": "existing_code_or_omit_if_no_match",
+      "linked_layer_names": ["First Layer Name"],
+      "corrected_input_field_type": "long_text",
+      "corrected_user_input_field_name": "bride name"
     }
   ]
 }`
@@ -262,26 +204,6 @@ Return JSON:
                     type: 'string'
                   },
                   description: 'Array of layer_names that this field should link to (if this is a duplicate of another field). Include the layer_name of the first occurrence of the same field. Omit if this is the first occurrence or not a duplicate.'
-                },
-                new_field: {
-                  type: 'object',
-                  properties: {
-                    field_code: {
-                      type: 'string',
-                      description: 'Generated field code for new field'
-                    },
-                    field_label: {
-                      type: 'string',
-                      description: 'Generated field label for new field'
-                    },
-                    field_data_type: {
-                      type: 'string',
-                      enum: ['short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video'],
-                      description: 'Field data type for new field'
-                    }
-                  },
-                  required: ['field_code', 'field_label', 'field_data_type'],
-                  description: 'New field definition if no match found'
                 }
               },
               required: ['input_index'],
@@ -345,11 +267,7 @@ Return JSON:
 
       if (result) {
         if (result.nfd_field_code) {
-          // Match found
           enrichedField.nfd_field_code = result.nfd_field_code;
-        } else if (result.new_field) {
-          // New field generated
-          enrichedField.new_field = result.new_field;
         }
 
         // Apply corrections if provided
@@ -368,11 +286,35 @@ Return JSON:
         }
       }
 
+      // Never return AI-generated new_field; niche definitions must be created manually in admin
+      delete enrichedField.new_field;
+
       return enrichedField;
     });
 
+    // Source of truth: when matched to a niche definition, use DB field_label + field_data_type (not LLM / layer text)
+    const fieldCodeToDefinition = new Map(
+      activeFieldDefinitions.map((fd) => [fd.field_code, fd])
+    );
+    const standardizedFields = enrichedFields.map((field) => {
+      const code = field.nfd_field_code;
+      if (!code) {
+        return field;
+      }
+      const def = fieldCodeToDefinition.get(code);
+      if (!def) {
+        return field;
+      }
+      const label = def.field_label != null ? String(def.field_label).trim() : '';
+      return {
+        ...field,
+        user_input_field_name: label || field.user_input_field_name,
+        input_field_type: def.field_data_type || field.input_field_type
+      };
+    });
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: enrichedFields
+      data: standardizedFields
     });
 
   } catch (error) {
