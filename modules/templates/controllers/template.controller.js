@@ -1719,6 +1719,11 @@ exports.createTemplate = async function (req, res) {
       }
     }
 
+    // niche_id was removed so new_field processing could use it; persist the column on create
+    if (nicheId !== undefined) {
+      templateData.niche_id = nicheId;
+    }
+
     await TemplateModel.createTemplate(templateData, clips);
 
     // Create template tags if provided
@@ -3385,6 +3390,11 @@ exports.updateTemplate = async function (req, res) {
           }
         });
       }
+    }
+
+    // niche_id was removed so new_field processing could use it; persist the column on update
+    if (nicheId !== undefined) {
+      templateData.niche_id = nicheId;
     }
 
     let updated;
