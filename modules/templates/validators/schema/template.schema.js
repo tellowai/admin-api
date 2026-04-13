@@ -69,6 +69,14 @@ const customTextInputFieldSchema = Joi.object({
   }).allow(null).optional() // New field definition (will be removed before storing)
 });
 
+/** Typography fit groups: layers in a group share one post-fit font size (render policy). Stored under additional_data.text_fit_groups; also accepted top-level on PATCH for merge. */
+const textFitGroupSchema = Joi.object({
+  id: Joi.string().max(128).required(),
+  label: Joi.string().allow('', null).max(200).optional(),
+  layer_names: Joi.array().items(Joi.string().max(512)).min(2).required(),
+  policy: Joi.string().valid('min_of_members').default('min_of_members')
+});
+
 // Template tag schema
 
 const layerSchema = Joi.object({
@@ -144,6 +152,7 @@ const createTemplateSchema = Joi.object().keys({
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
+  text_fit_groups: Joi.array().items(textFitGroupSchema).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_json: Joi.array().items(
@@ -241,6 +250,7 @@ const updateTemplateSchema = Joi.object().keys({
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   additional_data: Joi.object().allow(null).optional(),
+  text_fit_groups: Joi.array().items(textFitGroupSchema).allow(null).optional(),
   android_status: Joi.string().valid('active', 'inactive').optional(),
   ios_status: Joi.string().valid('active', 'inactive').optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),

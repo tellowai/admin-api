@@ -79,6 +79,31 @@ function syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate =
 }
 
 /**
+ * Parse additional_data and merge text_fit_groups for persistence on templates.additional_data.
+ * @param {*} rawAdditional - Existing additional_data (object or JSON string)
+ * @param {*} textFitGroupsPayload - From validated PATCH body (array or null)
+ * @returns {{ merged: Object, text_fit_groups: Array }}
+ */
+function mergeAdditionalDataWithTextFitGroups(rawAdditional, textFitGroupsPayload) {
+  const normalizedGroups = textFitGroupsPayload === null
+    ? []
+    : (Array.isArray(textFitGroupsPayload) ? textFitGroupsPayload : []);
+  let ad = rawAdditional;
+  if (typeof ad === 'string') {
+    try {
+      ad = JSON.parse(ad);
+    } catch (_) {
+      ad = null;
+    }
+  }
+  if (!ad || typeof ad !== 'object' || Array.isArray(ad)) {
+    ad = {};
+  }
+  const merged = { ...ad, text_fit_groups: normalizedGroups };
+  return { merged, text_fit_groups: normalizedGroups };
+}
+
+/**
  * Align serialized template so thumb_frame matches cf_r2 for image output (fixes stale DB rows and UI drift).
  * @param {Object} template - Template object after r2_url / thumb_frame_url enrichment
  */
@@ -1722,6 +1747,12 @@ exports.createTemplate = async function (req, res) {
     // niche_id was removed so new_field processing could use it; persist the column on create
     if (nicheId !== undefined) {
       templateData.niche_id = nicheId;
+    }
+
+    if (templateData.text_fit_groups !== undefined) {
+      const { merged } = mergeAdditionalDataWithTextFitGroups(templateData.additional_data, templateData.text_fit_groups);
+      templateData.additional_data = merged;
+      delete templateData.text_fit_groups;
     }
 
     await TemplateModel.createTemplate(templateData, clips);
@@ -3395,6 +3426,12 @@ exports.updateTemplate = async function (req, res) {
     // niche_id was removed so new_field processing could use it; persist the column on update
     if (nicheId !== undefined) {
       templateData.niche_id = nicheId;
+    }
+
+    if (templateData.text_fit_groups !== undefined) {
+      const { merged } = mergeAdditionalDataWithTextFitGroups(existingTemplate.additional_data, templateData.text_fit_groups);
+      templateData.additional_data = merged;
+      delete templateData.text_fit_groups;
     }
 
     let updated;
