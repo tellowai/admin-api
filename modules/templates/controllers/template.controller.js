@@ -553,12 +553,20 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
  */
 exports.listTemplates = async function (req, res) {
   try {
+    const billing =
+      req.query.billing === 'free' || req.query.billing === 'paid' ? req.query.billing : undefined;
+    const wf = req.query.template_workflow_type;
+    const templateWorkflowType =
+      wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
+
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
       status: req.query.status || undefined,
       language_code: req.query.language_code || undefined,
       template_output_type: req.query.template_output_type || undefined,
-      platform: req.query.platform || undefined
+      platform: req.query.platform || undefined,
+      billing,
+      template_workflow_type: templateWorkflowType
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
@@ -981,7 +989,12 @@ exports.deleteTemplateClip = async function (req, res) {
 exports.listArchivedTemplates = async function (req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
-    const templates = await TemplateModel.listArchivedTemplates(paginationParams);
+    const qRaw = req.query.q;
+    const q = typeof qRaw === 'string' ? qRaw.trim() : '';
+    const templates = await TemplateModel.listArchivedTemplates({
+      ...paginationParams,
+      ...(q ? { q } : {})
+    });
 
     // Batch fetch related data (no queries in loop); stitch in controller
     if (templates.length) {
@@ -1196,6 +1209,11 @@ exports.searchTemplates = async function (req, res) {
     const language_code = req.query.language_code || null;
     const template_output_type = req.query.template_output_type || null;
     const platform = req.query.platform || null;
+    const billing =
+      req.query.billing === 'free' || req.query.billing === 'paid' ? req.query.billing : null;
+    const wf = req.query.template_workflow_type;
+    const template_workflow_type_param =
+      wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : null;
     const templates = await TemplateModel.searchTemplates(
       q,
       paginationParams.page,
@@ -1203,7 +1221,9 @@ exports.searchTemplates = async function (req, res) {
       status,
       language_code,
       template_output_type,
-      platform
+      platform,
+      billing,
+      template_workflow_type_param
     );
 
     // Batch fetch related data (no queries in loop); stitch in controller

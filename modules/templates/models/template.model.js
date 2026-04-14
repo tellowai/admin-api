@@ -9,6 +9,7 @@ const TemplateScenesModel = require('./template.scenes.model');
 const TemplateLayersModel = require('./template.layers.model');
 
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
+const TEMPLATE_WORKFLOW_TYPE_ENUM = ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'];
 
 exports.listTemplates = async function (pagination) {
   const conditions = ['archived_at IS NULL'];
@@ -30,6 +31,17 @@ exports.listTemplates = async function (pagination) {
   if (pagination.template_output_type) {
     conditions.push('template_output_type = ?');
     params.push(pagination.template_output_type);
+  }
+
+  if (pagination.billing === 'free') {
+    conditions.push("template_type = 'free'");
+  } else if (pagination.billing === 'paid') {
+    conditions.push("(template_type IS NOT NULL AND template_type <> 'free')");
+  }
+
+  if (pagination.template_workflow_type && TEMPLATE_WORKFLOW_TYPE_ENUM.includes(pagination.template_workflow_type)) {
+    conditions.push('template_workflow_type = ?');
+    params.push(pagination.template_workflow_type);
   }
 
   if (pagination.platform) {
@@ -178,6 +190,17 @@ exports.getTemplatesByIdsForAnalytics = async function (templateIds) {
 };
 
 exports.listArchivedTemplates = async function (pagination) {
+  const conditions = ['archived_at IS NOT NULL'];
+  const bindParams = [];
+
+  if (pagination.q) {
+    const like = `%${pagination.q}%`;
+    conditions.push(
+      '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))'
+    );
+    bindParams.push(like, like, like);
+  }
+
   const query = `
     SELECT 
       template_id,
@@ -220,15 +243,14 @@ exports.listArchivedTemplates = async function (pagination) {
       created_at,
       archived_at
     FROM templates
-    WHERE archived_at IS NOT NULL
+    WHERE ${conditions.join(' AND ')}
     ORDER BY archived_at DESC, template_id DESC
     LIMIT ? OFFSET ?
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(
-    query,
-    [pagination.limit, pagination.offset]
-  );
+  bindParams.push(pagination.limit, pagination.offset);
+
+  return await mysqlQueryRunner.runQueryInSlave(query, bindParams);
 };
 
 exports.getTemplatePrompt = async function (templateId) {
@@ -259,7 +281,7 @@ exports.getTemplatePrompt = async function (templateId) {
   return template;
 };
 
-exports.searchTemplates = async function (searchQuery, page, limit, status = null, language_code = null, template_output_type = null, platform = null) {
+exports.searchTemplates = async function (searchQuery, page, limit, status = null, language_code = null, template_output_type = null, platform = null, billing = null, template_workflow_type = null) {
   const offset = (page - 1) * limit;
   const conditions = [
     '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))',
@@ -283,6 +305,17 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
   if (template_output_type) {
     conditions.push('template_output_type = ?');
     params.push(template_output_type);
+  }
+
+  if (billing === 'free') {
+    conditions.push("template_type = 'free'");
+  } else if (billing === 'paid') {
+    conditions.push("(template_type IS NOT NULL AND template_type <> 'free')");
+  }
+
+  if (template_workflow_type && TEMPLATE_WORKFLOW_TYPE_ENUM.includes(template_workflow_type)) {
+    conditions.push('template_workflow_type = ?');
+    params.push(template_workflow_type);
   }
 
   if (platform) {
