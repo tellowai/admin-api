@@ -2,8 +2,11 @@
 
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+/** Column ref for filters; values come from X-Device-OS at order creation */
+const CLIENT_PLATFORM_COL = 'o.client_platform';
+
 /**
- * @param {{ status?: string, productType?: string, search?: string }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
  * @returns {{ whereSql: string, params: any[] }}
  */
 function buildAdminOrdersWhere(filters) {
@@ -12,6 +15,7 @@ function buildAdminOrdersWhere(filters) {
   const status = filters.status && String(filters.status).trim();
   const productType = filters.productType && String(filters.productType).trim();
   const search = filters.search && String(filters.search).trim();
+  const client_platform = filters.client_platform && String(filters.client_platform).trim().toLowerCase();
 
   if (status && ['created', 'completed', 'failed'].includes(status)) {
     where.push('o.status = ?');
@@ -35,6 +39,11 @@ function buildAdminOrdersWhere(filters) {
     params.push(term, term);
   }
 
+  if (client_platform === 'android' || client_platform === 'ios' || client_platform === 'web') {
+    where.push(`${CLIENT_PLATFORM_COL} = ?`);
+    params.push(client_platform);
+  }
+
   return { whereSql: where.join(' AND '), params };
 }
 
@@ -43,6 +52,7 @@ const ORDERS_ADMIN_SELECT = `
     o.order_id,
     o.user_id,
     o.payment_gateway,
+    o.client_platform,
     o.pg_order_id,
     o.quantity,
     o.pg_payment_id,
@@ -64,8 +74,8 @@ const ORDERS_ADMIN_SELECT = `
 `;
 
 /**
- * Admin list: orders with plan metadata; filters by status, product bucket, search (user id or order id).
- * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string }} filters
+ * Admin list: orders with plan metadata; filters by status, product bucket, search, client_platform.
+ * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string }} filters
  * @returns {Promise<Array>}
  */
 exports.listOrdersAdmin = async function (filters) {
@@ -81,7 +91,7 @@ exports.listOrdersAdmin = async function (filters) {
 };
 
 /**
- * @param {{ status?: string, productType?: string, search?: string }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
  * @returns {Promise<number>}
  */
 exports.countOrdersAdmin = async function (filters) {
