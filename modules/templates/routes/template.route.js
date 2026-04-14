@@ -20,6 +20,14 @@ module.exports = function (app) {
     TemplateCtrl.listArchivedTemplates
   );
 
+  // Must be registered before `/templates/:templateId` or Express matches "search" as an id.
+  app.route(
+    versionConfig.routePrefix + '/templates/search'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.searchTemplates
+  );
+
   app.route(
     versionConfig.routePrefix + '/templates'
   ).post(
@@ -96,13 +104,6 @@ module.exports = function (app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateBulkUpdateTemplatesStatusData,
     TemplateCtrl.bulkUpdateTemplatesStatus
-  );
-
-  app.route(
-    versionConfig.routePrefix + '/templates/search'
-  ).get(
-    AuthMiddleware.isAuthorizedJWT,
-    TemplateCtrl.searchTemplates
   );
 
   app.route(
