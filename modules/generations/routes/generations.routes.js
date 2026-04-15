@@ -9,6 +9,9 @@ module.exports = function (app) {
   app.route('/admin/generations')
     .get(AuthMiddleware.isAdminUser, generationsController.listGenerations);
 
+  app.route('/admin/generations/batch-status')
+    .post(AuthMiddleware.isAdminUser, generationsController.batchGenerationStatus);
+
   app.route('/admin/generations/:mediaGenerationId/credit-transactions')
     .get(AuthMiddleware.isAdminUser, generationsController.getGenerationCreditTransactions);
 

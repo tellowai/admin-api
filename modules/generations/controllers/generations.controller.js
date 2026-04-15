@@ -15,6 +15,66 @@ const BOOTH_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{
 /** Fixed page size for list generations; UI sends only page=1,2,3... */
 const PER_PAGE = 10;
 
+/** Max IDs per batch-status request (single poll round-trip). */
+const BATCH_STATUS_MAX_IDS = 50;
+
+exports.batchGenerationStatus = async function (req, res) {
+  try {
+    const raw = req.body && req.body.generation_ids;
+    const ids = Array.isArray(raw) ? raw.map((id) => String(id).trim()).filter(Boolean) : [];
+    if (!ids.length) {
+      return res.status(400).send({ message: 'generation_ids must be a non-empty array' });
+    }
+    const unique = [...new Set(ids)];
+    if (unique.length > BATCH_STATUS_MAX_IDS) {
+      return res.status(400).send({
+        message: `At most ${BATCH_STATUS_MAX_IDS} generation IDs allowed per request`
+      });
+    }
+
+    const rows = await generationsModel.getMediaGenerationsByIds(unique);
+    const storage = StorageFactory.getProvider();
+    const statuses = {};
+
+    for (const row of rows) {
+      const id = row.media_generation_id;
+      if (!id) continue;
+      const uiStatus = generationsModel.mapMysqlJobStatusToUi(row.job_status);
+      const entry = {
+        job_status: uiStatus,
+        media_type: row.media_type || null,
+        error_message: row.error_message || null
+      };
+      if (row.job_status === 'completed' && row.output_media_asset_key) {
+        try {
+          if (row.output_media_bucket && row.output_media_bucket.includes('ephemeral')) {
+            entry.media_url = await storage.generateEphemeralPresignedDownloadUrl(
+              row.output_media_asset_key,
+              { expiresIn: 3600 }
+            );
+          } else {
+            entry.media_url = await storage.generatePresignedDownloadUrl(
+              row.output_media_asset_key,
+              { expiresIn: 3600 }
+            );
+          }
+        } catch (e) {
+          console.error(`batch-status presign failed for ${id}:`, e.message);
+          entry.media_url = null;
+        }
+      }
+      statuses[id] = entry;
+    }
+
+    res.json({ statuses });
+  } catch (err) {
+    console.error('Error in batchGenerationStatus:', err);
+    return res.status(500).send({
+      message: 'Internal server error while fetching generation statuses'
+    });
+  }
+};
+
 exports.listGenerations = async function (req, res) {
   try {
     const { start_date, end_date, tz } = req.query;
