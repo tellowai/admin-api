@@ -34,7 +34,7 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
 
-  /** Optional filters on resource_generations (template and/or user), then terminal events by ID. */
+  /** Optional filters on resource_generations (template and/or user), merge terminal CH + MySQL in-flight. */
   if (filters.template_id || filters.user_id) {
     const idRows = await exports.listResourceGenerationIdsByCreatedRangeFilters(
       startDate,
@@ -45,42 +45,75 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     );
     const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
     if (!orderedIds.length) return [];
-    const events = await exports.getTerminalEventsForMediaIds(orderedIds, {
-      job_status: filters.job_status,
+    const mergeJobStatus =
+      filters.job_status === 'in_progress' ? undefined : filters.job_status;
+    let rows = await exports.mergeGenerationRowsForIds(orderedIds, {
+      job_status: mergeJobStatus,
       eventStartFormatted: startFormatted,
       eventEndFormatted: endFormatted
     });
-    const byId = new Map();
-    for (const row of events) {
-      if (row.media_generation_id && !byId.has(row.media_generation_id)) {
-        byId.set(row.media_generation_id, row);
-      }
+    if (filters.job_status === 'in_progress') {
+      rows = rows.filter((r) => r.job_status === 'processing' || r.job_status === 'queued');
     }
-    const out = [];
-    for (const id of orderedIds) {
-      const row = byId.get(id);
-      if (row) out.push(row);
-    }
-    return out;
+    return rows;
   }
 
-  let conditions = [
-    `created_at >= '${startFormatted}'`,
-    `created_at <= '${endFormatted}'`
-  ];
-
-  if (filters.job_status) {
+  /** Terminal-only: Success / Failed filters keep pure ClickHouse behavior. */
+  if (filters.job_status === 'completed' || filters.job_status === 'failed') {
+    let conditions = [
+      `created_at >= '${startFormatted}'`,
+      `created_at <= '${endFormatted}'`
+    ];
     if (filters.job_status === 'completed') {
       conditions.push(`event_type = 'COMPLETED'`);
-    } else if (filters.job_status === 'failed') {
-      conditions.push(`event_type = 'FAILED'`);
     } else {
-      conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
+      conditions.push(`event_type = 'FAILED'`);
     }
-  } else {
-    conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
+    const query = `
+      SELECT 
+        resource_generation_id AS media_generation_id,
+        if(event_type = 'COMPLETED', 'completed', 'failed') AS job_status,
+        JSONExtractString(additional_data, 'output', 'asset_bucket') AS output_media_bucket,
+        JSONExtractString(additional_data, 'output', 'asset_key') AS output_media_asset_key,
+        created_at AS completed_at,
+        if(event_type = 'FAILED', JSONExtractString(additional_data, 'error', 'message'), '') AS error_message
+      FROM resource_generation_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at DESC, resource_generation_id ASC
+      LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
   }
 
+  /** In-progress only: MySQL queue rows in date range. */
+  if (filters.job_status === 'in_progress') {
+    return exports.listMysqlInProgressGenerationsByDateRange(startDate, endDate, page, limit);
+  }
+
+  /** All statuses: merge terminal events + in-progress rows by activity time (newest first). */
+  return exports.getMergedTerminalAndInProgressPage(
+    startFormatted,
+    endFormatted,
+    page,
+    limit
+  );
+};
+
+/**
+ * ClickHouse terminal events in date range, paginated (COMPLETED + FAILED).
+ * @param {string} startFormatted
+ * @param {string} endFormatted
+ * @param {number} page1-based
+ * @param {number} limit
+ */
+exports.fetchChTerminalEventsPage = async function (startFormatted, endFormatted, page, limit) {
+  const offset = (page - 1) * limit;
+  const conditions = [
+    `created_at >= '${startFormatted}'`,
+    `created_at <= '${endFormatted}'`,
+    `event_type IN ('COMPLETED', 'FAILED')`
+  ];
   const query = `
     SELECT 
       resource_generation_id AS media_generation_id,
@@ -94,9 +127,102 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     ORDER BY created_at DESC, resource_generation_id ASC
     LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}
   `;
-
   const result = await slaveClickhouse.querying(query, { dataObjects: true });
   return result.data || [];
+};
+
+/**
+ * In-flight generations from MySQL (submitted / in_progress) in activity date range.
+ */
+exports.listMysqlInProgressGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20) {
+  const offset = (page - 1) * limit;
+  const startDb = formatDateForMySQL(startDate);
+  let endDb = formatDateForMySQL(endDate);
+  if (!endDb) {
+    endDb = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+  const lim = parseInt(limit, 10);
+  const off = parseInt(offset, 10);
+  const query = `
+    SELECT 
+      media_generation_id,
+      job_status,
+      output_media_bucket,
+      output_media_asset_key,
+      error_message,
+      media_type,
+      COALESCE(submitted_at, created_at) AS activity_at
+    FROM media_generations
+    WHERE job_status IN ('submitted', 'in_progress')
+      AND COALESCE(submitted_at, created_at) >= ?
+      AND COALESCE(submitted_at, created_at) <= ?
+    ORDER BY COALESCE(submitted_at, created_at) DESC, media_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [startDb, endDb]);
+  return rows.map((mg) => ({
+    media_generation_id: mg.media_generation_id,
+    job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
+    output_media_bucket: mg.output_media_bucket,
+    output_media_asset_key: mg.output_media_asset_key,
+    completed_at: mg.activity_at,
+    error_message: mg.error_message || ''
+  }));
+};
+
+function rowActivityTimeMs(row) {
+  const raw = row.completed_at || row.activity_at;
+  if (!raw) return 0;
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+/**
+ * Merge first (offset+limit) terminal + in-progress rows from each source, sort DESC, return one page.
+ */
+exports.getMergedTerminalAndInProgressPage = async function (startFormatted, endFormatted, page, limit) {
+  const offset = (page - 1) * limit;
+  const fetchCount = offset + limit;
+  /** Need up to fetchCount from each source so merged slice is correct; cap for safety on admin-only API. */
+  const safeFetch = Math.min(Math.max(fetchCount, limit), 5000);
+
+  const [terminalRows, inProgressMysql] = await Promise.all([
+    exports.fetchChTerminalEventsPage(startFormatted, endFormatted, 1, safeFetch),
+    (async () => {
+      const startDb = startFormatted;
+      const endDb = endFormatted;
+      const q = `
+        SELECT 
+          media_generation_id,
+          job_status,
+          output_media_bucket,
+          output_media_asset_key,
+          error_message,
+          media_type,
+          COALESCE(submitted_at, created_at) AS activity_at
+        FROM media_generations
+        WHERE job_status IN ('submitted', 'in_progress')
+          AND COALESCE(submitted_at, created_at) >= ?
+          AND COALESCE(submitted_at, created_at) <= ?
+        ORDER BY COALESCE(submitted_at, created_at) DESC, media_generation_id ASC
+        LIMIT ${safeFetch} OFFSET 0
+      `;
+      const rows = await mysqlQueryRunner.runQueryInSlave(q, [startDb, endDb]);
+      return rows.map((mg) => ({
+        media_generation_id: mg.media_generation_id,
+        job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
+        output_media_bucket: mg.output_media_bucket,
+        output_media_asset_key: mg.output_media_asset_key,
+        completed_at: mg.activity_at,
+        error_message: mg.error_message || ''
+      }));
+    })()
+  ]);
+
+  const merged = [...terminalRows, ...inProgressMysql].sort(
+    (a, b) => rowActivityTimeMs(b) - rowActivityTimeMs(a)
+  );
+  return merged.slice(offset, offset + limit);
 };
 
 /**
@@ -243,13 +369,13 @@ exports.listResourceGenerationIdsByTemplateCreatedRange = async function (
 /**
  * Map MySQL media_generations.job_status to values the admin generations UI expects.
  */
-function mapMysqlJobStatusToUi(status) {
+exports.mapMysqlJobStatusToUi = function mapMysqlJobStatusToUi(status) {
   if (status == null) return status;
   const s = String(status).toLowerCase();
   if (s === 'in_progress') return 'processing';
   if (s === 'submitted' || s === 'draft') return 'queued';
   return s;
-}
+};
 
 /**
  * Terminal COMPLETED/FAILED events from ClickHouse for a fixed set of resource_generation_ids.
@@ -345,7 +471,7 @@ exports.mergeGenerationRowsForIds = async function (orderedIds, filters = {}) {
       if (!mg) continue;
       row = {
         media_generation_id: mg.media_generation_id,
-        job_status: mapMysqlJobStatusToUi(mg.job_status),
+        job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
         output_media_bucket: mg.output_media_bucket,
         output_media_asset_key: mg.output_media_asset_key,
         completed_at: mg.completed_at || mg.updated_at,

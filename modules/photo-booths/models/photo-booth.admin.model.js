@@ -238,6 +238,9 @@ function mysqlJobStatusMatchesFilter(mgJobStatus, filter) {
   if (!filter) return true;
   if (filter === 'completed') return mgJobStatus === 'completed';
   if (filter === 'failed') return mgJobStatus === 'failed' || mgJobStatus === 'cancelled';
+  if (filter === 'in_progress') {
+    return mgJobStatus === 'submitted' || mgJobStatus === 'in_progress' || mgJobStatus === 'draft';
+  }
   return true;
 }
 
