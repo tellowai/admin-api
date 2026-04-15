@@ -870,6 +870,29 @@ exports.getTemplate = async function (req, res) {
 };
 
 /**
+ * @api {post} /templates/:templateId/refresh-generation-meta Re-read template from DB (master) and refresh Redis cache
+ * Used after admin UI "Update" so workers/API always see latest template meta (e.g. field configs) even when PATCH is skipped.
+ */
+exports.refreshTemplateGenerationMeta = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+    const refreshed = await TemplateRedisService.updateTemplateGenerationMeta(templateId);
+    if (!refreshed) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('template:TEMPLATE_NOT_FOUND')
+      });
+    }
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: 'Template generation meta cache refreshed',
+      data: { template_id: templateId }
+    });
+  } catch (error) {
+    logger.error('Error refreshing template generation meta cache:', { error: error.message, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
  * Ensure template_ai_clips rows exist for the given clip definitions; create a workflow per clip
  * and attach wf_id in template_ai_clips. Use when get template returns empty clips (e.g. new/legacy template).
  * Body: { clips: [ { clip_index: number, asset_type: 'image'|'video' }, ... ] }

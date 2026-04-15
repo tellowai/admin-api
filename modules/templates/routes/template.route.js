@@ -52,6 +52,13 @@ module.exports = function (app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/:templateId/refresh-generation-meta'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.refreshTemplateGenerationMeta
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId/ensure-ai-clips'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
