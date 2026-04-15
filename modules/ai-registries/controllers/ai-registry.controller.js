@@ -103,8 +103,14 @@ exports.list = async function (req, res) {
 
     const models = await aiRegistryModel.listAiModels(searchParams, paginationParams);
 
+    // Get fallback models
+    const fallbackAmrIds = _.compact(_.uniq(models.map(m => m.fallback_amr_id)));
+    const fallbackModels = await aiRegistryModel.getAiModelsByIds(fallbackAmrIds);
+
     // Stitch Providers
-    const ampIds = _.uniq(models.map(m => m.amp_id));
+    const primaryAmpIds = models.map(m => m.amp_id);
+    const fallbackAmpIds = fallbackModels.map(m => m.amp_id);
+    const ampIds = _.uniq([...primaryAmpIds, ...fallbackAmpIds]);
     const providers = await aiRegistryModel.getProvidersByIds(ampIds);
 
     // Batch generate presigned URLs for logos
@@ -141,6 +147,8 @@ exports.list = async function (req, res) {
       };
     }), 'amp_id');
 
+    const fallbackModelsMap = _.keyBy(fallbackModels, 'amr_id');
+
     const result = models.map(model => {
       // Ensure pricing_config is returned as a proper JSON object, not a string
       let parsedPricingConfig = model.pricing_config;
@@ -158,12 +166,21 @@ exports.list = async function (req, res) {
         try { parsedFallbackMapping = JSON.parse(parsedFallbackMapping); } catch (e) { parsedFallbackMapping = null; }
       }
 
+      const fallbackModelRaw = fallbackModelsMap[model.fallback_amr_id] || null;
+      const fallback_model = fallbackModelRaw ? {
+        amr_id: fallbackModelRaw.amr_id,
+        name: fallbackModelRaw.name,
+        version: fallbackModelRaw.version,
+        provider: providersMap[fallbackModelRaw.amp_id] || null
+      } : null;
+
       return {
         ...model,
         pricing_config: parsedPricingConfig,
         parameter_schema: parsedParameterSchema,
         fallback_mapping: parsedFallbackMapping,
-        provider: providersMap[model.amp_id] || null
+        provider: providersMap[model.amp_id] || null,
+        fallback_model
       };
     });
 

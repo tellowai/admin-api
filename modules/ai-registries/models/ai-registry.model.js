@@ -106,6 +106,12 @@ exports.getAiModelById = async function (amrId) {
   return results[0] || null;
 };
 
+exports.getAiModelsByIds = async function (ids) {
+  if (!ids || ids.length === 0) return [];
+  const query = `SELECT amr_id, amp_id, name, version FROM ai_model_registry WHERE amr_id IN (?) AND archived_at IS NULL`;
+  return await mysqlQueryRunner.runQueryInSlave(query, [ids]);
+};
+
 /**
  * Update AI Model
  */
@@ -296,7 +302,7 @@ exports.deleteIoDefinition = async function (amiodId) {
 
 /**
  * Get mapping metadata for a model (inputs, parameters, outputs) for fallback mapping UI.
- * Returns only names/labels needed to build mapping dropdowns.
+ * Returns names, labels, and type info needed for type-aware mapping dropdowns.
  */
 exports.getMappingMetadataByAmrId = async function (amrId) {
   const model = await mysqlQueryRunner.runQueryInSlave(
@@ -306,23 +312,55 @@ exports.getMappingMetadataByAmrId = async function (amrId) {
   if (!model || model.length === 0) return null;
 
   const ioDefs = await mysqlQueryRunner.runQueryInSlave(
-    `SELECT name, label, direction, sort_order FROM ai_model_io_definitions WHERE amr_id = ? ORDER BY sort_order ASC`,
+    `SELECT name, label, direction, sort_order, amst_id FROM ai_model_io_definitions WHERE amr_id = ? ORDER BY sort_order ASC`,
     [amrId]
   );
 
+  const socketTypeIds = [...new Set(ioDefs.map(io => io.amst_id).filter(Boolean))];
+  let socketTypeMap = {};
+  if (socketTypeIds.length > 0) {
+    const socketTypes = await mysqlQueryRunner.runQueryInSlave(
+      `SELECT amst_id, name FROM ai_model_socket_types WHERE amst_id IN (?)`,
+      [socketTypeIds]
+    );
+    for (const st of socketTypes) {
+      socketTypeMap[st.amst_id] = st.name;
+    }
+  }
+
   const inputs = ioDefs
     .filter(io => io.direction === 'INPUT')
-    .map(io => ({ name: io.name, label: io.label || io.name }));
+    .map(io => ({ name: io.name, label: io.label || io.name, socket_type: socketTypeMap[io.amst_id] || null }));
   const outputs = ioDefs
     .filter(io => io.direction === 'OUTPUT')
-    .map(io => ({ name: io.name, label: io.label || io.name }));
+    .map(io => ({ name: io.name, label: io.label || io.name, socket_type: socketTypeMap[io.amst_id] || null }));
 
   let parameterSchema = model[0].parameter_schema;
   if (typeof parameterSchema === 'string') {
     try { parameterSchema = JSON.parse(parameterSchema); } catch (e) { parameterSchema = {}; }
   }
-  const parameters = (parameterSchema.properties && Object.keys(parameterSchema.properties)) || [];
-  const parametersList = parameters.map(name => ({ name }));
+  const properties = (parameterSchema && parameterSchema.properties) || {};
+  const parametersList = Object.keys(properties).map(name => {
+    const def = properties[name] || {};
+    let type = 'string';
+    let values = undefined;
+
+    if (Array.isArray(def.oneOf) && def.oneOf.length > 0) {
+      type = 'oneOf';
+      const v = [];
+      for (const branch of def.oneOf) { if (Array.isArray(branch.enum)) v.push(...branch.enum); }
+      if (v.length > 0) values = v;
+    } else if (def.type === 'object' && def.properties) {
+      type = 'object';
+    } else if (Array.isArray(def.enum) && def.enum.length) {
+      type = 'enum';
+      values = [...def.enum];
+    } else if (def.type) {
+      type = def.type;
+    }
+
+    return { name, title: def.title || name, type, values };
+  });
 
   return { inputs, parameters: parametersList, outputs };
 };
