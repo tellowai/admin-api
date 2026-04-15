@@ -10,10 +10,11 @@ let isConnecting = false;
 const createRedisClient = () => {
   if (!isConnecting) {
     isConnecting = true;
-    redisClient = redis.createClient({
+    const pass = config.redis.auth && config.redis.auth.pass;
+    const hasPassword = pass != null && String(pass).trim() !== '';
+    const clientOpts = {
       port: config.redis.auth.port,
       host: config.redis.auth.host,
-      password: config.redis.auth.pass,
       retry_strategy: (options) => {
         if (options.error && options.error.code === 'ECONNREFUSED') {
           console.error('Redis server refused the connection. Stopping attempts to connect.');
@@ -29,7 +30,11 @@ const createRedisClient = () => {
         // Wait for 2 seconds and then try again
         return 2000;
       }
-    });
+    };
+    if (hasPassword) {
+      clientOpts.password = pass;
+    }
+    redisClient = redis.createClient(clientOpts);
 
     redisClient.on('error', (err) => {
       console.error('Error connecting to Redis (core):', err);
