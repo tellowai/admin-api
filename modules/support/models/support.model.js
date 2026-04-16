@@ -9,8 +9,12 @@ exports.listTickets = async function(page, limit, status, assignedTo, search) {
   const params = [];
 
   if (status) {
-    query += ` AND status = ?`;
-    params.push(status);
+    if (status === 'active') {
+      query += ` AND status IN ('submitted', 'in_progress')`;
+    } else {
+      query += ` AND status = ?`;
+      params.push(status);
+    }
   }
   if (assignedTo) {
     query += ` AND assigned_to = ?`;
@@ -34,8 +38,12 @@ exports.countTickets = async function(status, assignedTo, search) {
   const params = [];
 
   if (status) {
-    query += ` AND status = ?`;
-    params.push(status);
+    if (status === 'active') {
+      query += ` AND status IN ('submitted', 'in_progress')`;
+    } else {
+      query += ` AND status = ?`;
+      params.push(status);
+    }
   }
   if (assignedTo) {
     query += ` AND assigned_to = ?`;
