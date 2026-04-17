@@ -280,7 +280,9 @@ const updateTemplateSchema = Joi.object().keys({
       clip_index: Joi.number().integer().min(0).allow(null).optional(),
       is_optional: Joi.boolean().optional(),
       step_index: Joi.number().integer().min(0).optional(),
-      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional()
+      gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
+      layer_time_start_sec: Joi.number().allow(null).optional(),
+      layer_time_end_sec: Joi.number().allow(null).optional()
     })
   ).allow(null).optional(),
   image_input_fields_json: Joi.array().items(
