@@ -4,6 +4,20 @@ const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const moment = require('moment-timezone');
 
 /**
+ * CONVERT_TZ(..., 'Region/Name') requires MySQL time_zone tables; many dev DBs lack them → NULL.
+ * Offset-based CONVERT_TZ works without those tables. India has no DST.
+ * @param {string} tz IANA (e.g. Asia/Kolkata)
+ * @returns {string} MySQL `to_timezone` argument
+ */
+function mysqlConvertTzTarget(tz) {
+  const t = String(tz || '').trim();
+  if (t === 'Asia/Kolkata' || t === 'Asia/Calcutta') {
+    return '+05:30';
+  }
+  return t;
+}
+
+/**
  * pp_id rows → numeric ids (matches orders.payment_plan_id).
  * @param {Array<{ pp_id?: unknown }>} rows
  * @returns {number[]}
@@ -28,12 +42,18 @@ function mapPpIdRows(rows) {
  */
 async function getPpIdsForProductFilter(productType) {
   const t = String(productType || '').trim();
-  if (!t) return null;
+  if (!t) {
+    return null;
+  }
 
+  // Migrations: payment_plans.billing_interval was originally ENUM('onetime') only, then added
+  // monthly/yearly/alacarte (e.g. 20260306153000, 20260313140000). Legacy single/bundle rows use
+  // 'onetime', not 'alacarte' — must match both or the filter returns [] and the API adds AND 1=0.
   if (t === 'alacarte') {
     const rows = await MysqlQueryRunner.runQueryInSlave(
       `SELECT pp_id FROM payment_plans
-       WHERE plan_type IN ('single', 'bundle') AND billing_interval = 'alacarte'`,
+       WHERE plan_type IN ('single', 'bundle')
+         AND billing_interval IN ('alacarte', 'onetime')`,
       []
     );
     return mapPpIdRows(rows);
@@ -87,20 +107,34 @@ function utcRangeForCalendarDays(startCal, endCal, tz) {
  * @returns {{ sql: string, params: any[] }}
  */
 function planFilterClause(ppIds) {
-  if (ppIds === null) return { sql: '', params: [] };
-  if (ppIds.length === 0) return { sql: ' AND 1=0 ', params: [] };
+  if (ppIds === null) {
+    return { sql: '', params: [] };
+  }
+  if (ppIds.length === 0) {
+    return { sql: ' AND 1=0 ', params: [] };
+  }
   const ph = ppIds.map(() => '?').join(',');
   return { sql: ` AND o.payment_plan_id IN (${ph}) `, params: ppIds };
 }
 
 /**
  * Format a MySQL date / Date / string as YYYY-MM-DD for API consumers.
+ * Converting a JS Date with moment.utc() alone is wrong for DATE that represents a
+ * day in a non-UTC zone: mysql2 often gives e.g. 2026-03-31T18:30:00.000Z for "2026-04-01" in IST
+ * (midnight local). Use the same IANA `tz` as the chart / CONVERT_TZ calendar semantics.
  * @param {*} v
+ * @param {string} [displayTz] IANA e.g. Asia/Kolkata
  * @returns {string}
  */
-function rowDayToIso(v) {
+function rowDayToIso(v, displayTz) {
   if (v == null) return '';
-  if (v instanceof Date) return moment.utc(v).format('YYYY-MM-DD');
+  if (v instanceof Date) {
+    const z = String(displayTz || '').trim();
+    if (z && z !== 'UTC' && z !== 'Etc/UTC' && z !== 'GMT') {
+      return moment.tz(v, z).format('YYYY-MM-DD');
+    }
+    return moment.utc(v).format('YYYY-MM-DD');
+  }
   return String(v).split('T')[0];
 }
 
@@ -113,16 +147,27 @@ function rowDayToIso(v) {
  * @param {'created'|'completed'|'failed'} kind
  */
 async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) {
+  const tzSql = mysqlConvertTzTarget(tz);
   let innerDateExpr;
   let whereExtra;
+  // Use offset (+05:30) for India so CONVERT_TZ works without mysql.time_zone_* tables; keep COALESCE to UTC DATE as safety net.
   if (kind === 'created') {
-    innerDateExpr = 'DATE(CONVERT_TZ(o.created_at, \'+00:00\', ?))';
+    innerDateExpr = `COALESCE(
+      DATE(CONVERT_TZ(o.created_at, '+00:00', ?)),
+      DATE(o.created_at)
+    )`;
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
   } else if (kind === 'completed') {
-    innerDateExpr = 'DATE(CONVERT_TZ(o.completed_at, \'+00:00\', ?))';
+    innerDateExpr = `COALESCE(
+      DATE(CONVERT_TZ(o.completed_at, '+00:00', ?)),
+      DATE(o.completed_at)
+    )`;
     whereExtra = `o.status = 'completed' AND o.completed_at IS NOT NULL AND o.completed_at >= ? AND o.completed_at <= ?`;
   } else {
-    innerDateExpr = 'DATE(CONVERT_TZ(o.failed_at, \'+00:00\', ?))';
+    innerDateExpr = `COALESCE(
+      DATE(CONVERT_TZ(o.failed_at, '+00:00', ?)),
+      DATE(o.failed_at)
+    )`;
     whereExtra = `o.status = 'failed' AND o.failed_at IS NOT NULL AND o.failed_at >= ? AND o.failed_at <= ?`;
   }
 
@@ -139,10 +184,10 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) 
     ORDER BY t.stat_date ASC
   `;
 
-  const params = [tz, rangeStartUtc, rangeEndUtc, ...planPart.params];
+  const params = [tzSql, rangeStartUtc, rangeEndUtc, ...planPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   return (rows || []).map((r) => ({
-    date: rowDayToIso(r.stat_date),
+    date: rowDayToIso(r.stat_date, tz),
     count: Number(r.count) || 0
   }));
 }
@@ -185,6 +230,7 @@ async function queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, kind) {
  */
 exports.getOrdersStatusDaily = async function (opts) {
   const { startCal, endCal, tz, productType } = opts;
+
   const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
 
   let ppIds = null;
