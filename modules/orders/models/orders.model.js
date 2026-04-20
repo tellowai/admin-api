@@ -25,7 +25,9 @@ function buildAdminOrdersWhere(filters) {
   } else if (productType === 'addon') {
     where.push(`(p.plan_type = 'addon' AND p.billing_interval = 'onetime')`);
   } else if (productType === 'onetime') {
-    where.push(`(p.plan_type = 'credits' AND p.billing_interval = 'onetime')`);
+    where.push(
+      `(p.plan_type = 'credits' AND (p.billing_interval IS NULL OR p.billing_interval NOT IN ('monthly', 'yearly')))`
+    );
   } else if (productType === 'subscription') {
     where.push(
       `(p.plan_type = 'credits' AND p.billing_interval IN ('monthly', 'yearly'))`

@@ -3,21 +3,23 @@
 const OrdersModel = require('../models/orders.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 
+function normPlanField(v) {
+  if (v == null || v === '') return '';
+  const s = typeof Buffer !== 'undefined' && Buffer.isBuffer(v) ? v.toString('utf8') : String(v);
+  return s.trim().toLowerCase();
+}
+
 /**
  * Badge bucket — payment_plans.plan_type + billing_interval (orders list JOIN).
- * subscription: credits + monthly|yearly · onetime: credits + onetime ·
+ * Credits: only monthly|yearly are subscriptions; all other credit packs (onetime, NULL, legacy rows) are one-time.
  * alacarte: single|bundle + alacarte · addon: addon + onetime
  */
 function purchaseCategoryFromPlan(planType, billingInterval) {
-  const pt = planType && String(planType);
-  const bi =
-    billingInterval != null && String(billingInterval).trim() !== ''
-      ? String(billingInterval).trim()
-      : '';
+  const pt = normPlanField(planType);
+  const bi = normPlanField(billingInterval);
   if (pt === 'credits') {
     if (bi === 'monthly' || bi === 'yearly') return 'subscription';
-    if (bi === 'onetime') return 'onetime';
-    return 'other';
+    return 'onetime';
   }
   if ((pt === 'single' || pt === 'bundle') && bi === 'alacarte') return 'alacarte';
   if (pt === 'addon' && bi === 'onetime') return 'addon';

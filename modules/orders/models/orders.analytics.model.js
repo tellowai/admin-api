@@ -19,7 +19,7 @@ function mapPpIdRows(rows) {
  *
  * Classification (aligned with product rules):
  * - subscription: credits + (monthly | yearly)
- * - onetime: credits + onetime
+ * - onetime: credits and not recurring (onetime, NULL, etc. — not monthly/yearly)
  * - alacarte: (single | bundle) + alacarte
  * - addon: addon + onetime
  *
@@ -51,7 +51,8 @@ async function getPpIdsForProductFilter(productType) {
   if (t === 'onetime') {
     const rows = await MysqlQueryRunner.runQueryInSlave(
       `SELECT pp_id FROM payment_plans
-       WHERE plan_type = 'credits' AND billing_interval = 'onetime'`,
+       WHERE plan_type = 'credits'
+         AND (billing_interval IS NULL OR billing_interval NOT IN ('monthly', 'yearly'))`,
       []
     );
     return mapPpIdRows(rows);
