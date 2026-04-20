@@ -19,14 +19,17 @@ function buildAdminOrdersWhere(filters) {
   }
 
   if (productType === 'alacarte') {
-    where.push('p.plan_type = ?');
-    params.push('single');
+    where.push(
+      `(p.plan_type IN ('single', 'bundle') AND p.billing_interval = 'alacarte')`
+    );
   } else if (productType === 'addon') {
-    where.push('p.plan_type = ?');
-    params.push('addon');
+    where.push(`(p.plan_type = 'addon' AND p.billing_interval = 'onetime')`);
+  } else if (productType === 'onetime') {
+    where.push(`(p.plan_type = 'credits' AND p.billing_interval = 'onetime')`);
   } else if (productType === 'subscription') {
-    where.push('p.plan_type IN (?, ?)');
-    params.push('bundle', 'credits');
+    where.push(
+      `(p.plan_type = 'credits' AND p.billing_interval IN ('monthly', 'yearly'))`
+    );
   }
 
   if (search) {

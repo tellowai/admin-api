@@ -3,10 +3,24 @@
 const OrdersModel = require('../models/orders.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 
-function purchaseCategoryFromPlanType(planType) {
-  if (planType === 'single') return 'alacarte';
-  if (planType === 'addon') return 'addon';
-  if (planType === 'bundle' || planType === 'credits') return 'subscription';
+/**
+ * Badge bucket — payment_plans.plan_type + billing_interval (orders list JOIN).
+ * subscription: credits + monthly|yearly · onetime: credits + onetime ·
+ * alacarte: single|bundle + alacarte · addon: addon + onetime
+ */
+function purchaseCategoryFromPlan(planType, billingInterval) {
+  const pt = planType && String(planType);
+  const bi =
+    billingInterval != null && String(billingInterval).trim() !== ''
+      ? String(billingInterval).trim()
+      : '';
+  if (pt === 'credits') {
+    if (bi === 'monthly' || bi === 'yearly') return 'subscription';
+    if (bi === 'onetime') return 'onetime';
+    return 'other';
+  }
+  if ((pt === 'single' || pt === 'bundle') && bi === 'alacarte') return 'alacarte';
+  if (pt === 'addon' && bi === 'onetime') return 'addon';
   return 'other';
 }
 
@@ -59,7 +73,7 @@ exports.listAdminOrders = async function (req, res) {
       plan_name: o.plan_name ?? null,
       plan_heading: o.plan_heading ?? null,
       billing_interval: o.billing_interval ?? null,
-      purchase_category: purchaseCategoryFromPlanType(o.plan_type),
+      purchase_category: purchaseCategoryFromPlan(o.plan_type, o.billing_interval),
       user_details: userById[o.user_id] || null
     }));
 
