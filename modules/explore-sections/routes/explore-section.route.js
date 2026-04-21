@@ -48,6 +48,14 @@ module.exports = function(app) {
 
   // Section items routes
   app.route(
+    versionConfig.routePrefix + '/explore-sections/:sectionId/items/sort-order'
+  ).patch(
+    AuthMiddleware.isAuthorizedJWT,
+    ExploreSectionItemValidator.validateUpdateSectionItemsSortOrderData,
+    ExploreSectionItemCtrl.updateSectionItemsSortOrder
+  );
+
+  app.route(
     versionConfig.routePrefix + '/explore-sections/:sectionId/items'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

@@ -121,4 +121,49 @@ exports.getCollectionTemplateIds = async function(collectionId) {
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);
+};
+
+/**
+ * Non-archived item IDs for a section (unordered; caller compares multiset).
+ */
+exports.listSectionItemIds = async function(sectionId) {
+  const query = `
+    SELECT explore_section_item_id
+    FROM explore_section_items
+    WHERE section_id = ?
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [sectionId]);
+};
+
+/**
+ * Apply sort_order by array position (0-based) for the given item IDs.
+ * @param {number|string} sectionId
+ * @param {string[]} orderedItemIds - explore_section_item_id values in display order
+ */
+exports.updateSectionItemsSortOrder = async function(sectionId, orderedItemIds) {
+  if (!orderedItemIds.length) {
+    return { affectedRows: 0 };
+  }
+
+  const caseLines = orderedItemIds.map(() => 'WHEN ? THEN ?').join('\n      ');
+  const params = [];
+  orderedItemIds.forEach((id, index) => {
+    params.push(id, index);
+  });
+  const inPlaceholders = orderedItemIds.map(() => '?').join(',');
+  params.push(sectionId, ...orderedItemIds);
+
+  const query = `
+    UPDATE explore_section_items
+    SET sort_order = CASE explore_section_item_id
+      ${caseLines}
+    END
+    WHERE section_id = ?
+    AND archived_at IS NULL
+    AND explore_section_item_id IN (${inPlaceholders})
+  `;
+
+  return await mysqlQueryRunner.runQueryInMaster(query, params);
 }; 

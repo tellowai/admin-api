@@ -27,6 +27,15 @@ const addCollectionTemplatesSchema = Joi.object().keys({
   ).required()
 });
 
+const updateSectionItemsSortOrderSchema = Joi.object().keys({
+  item_ids: Joi.array()
+    .items(Joi.string().uuid().required())
+    .min(1)
+    .unique()
+    .required()
+});
+
 exports.addSectionItemsSchema = addSectionItemsSchema;
 exports.removeSectionItemsSchema = removeSectionItemsSchema;
-exports.addCollectionTemplatesSchema = addCollectionTemplatesSchema; 
+exports.addCollectionTemplatesSchema = addCollectionTemplatesSchema;
+exports.updateSectionItemsSortOrderSchema = updateSectionItemsSortOrderSchema; 

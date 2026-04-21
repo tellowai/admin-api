@@ -243,6 +243,65 @@ exports.removeSectionItems = async function(req, res) {
 };
 
 /**
+ * @api {patch} /explore-sections/:sectionId/items/sort-order Reorder section items
+ * @apiVersion 1.0.0
+ * @apiName UpdateSectionItemsSortOrder
+ * @apiGroup ExploreSections
+ * @apiPermission JWT
+ *
+ * @apiParam {Number} sectionId Section ID
+ * @apiBody {String[]} item_ids All non-archived item IDs for this section, in desired display order
+ */
+exports.updateSectionItemsSortOrder = async function(req, res) {
+  try {
+    const { sectionId } = req.params;
+    const { item_ids: itemIds } = req.validatedBody;
+
+    const dbRows = await ExploreSectionItemModel.listSectionItemIds(sectionId);
+    const dbIds = dbRows.map((row) => row.explore_section_item_id).sort();
+    const requestSorted = [...itemIds].sort();
+
+    const sameMultiset =
+      dbIds.length === requestSorted.length &&
+      dbIds.every((id, i) => id === requestSorted[i]);
+
+    if (!sameMultiset) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: req.t('explore_section:EXPLORE_SECTION_ITEMS_SORT_ORDER_MISMATCH')
+      });
+    }
+
+    const result = await ExploreSectionItemModel.updateSectionItemsSortOrder(sectionId, itemIds);
+
+    if (!result.affectedRows) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('explore_section:EXPLORE_SECTION_ITEMS_NOT_FOUND')
+      });
+    }
+
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: {
+          admin_user_id: req.user.userId,
+          entity_type: 'EXPLORE_SECTION_ITEMS',
+          action_name: 'UPDATE_SECTION_ITEMS_SORT_ORDER',
+          entity_id: String(sectionId)
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('explore_section:EXPLORE_SECTION_ITEMS_SORT_ORDER_UPDATED')
+    });
+  } catch (error) {
+    logger.error('Error updating section items sort order:', { error: error.message, stack: error.stack });
+    ExploreSectionErrorHandler.handleExploreSectionErrors(error, res);
+  }
+};
+
+/**
  * @api {post} /explore-sections/:sectionId/collection-templates Add all templates from collection
  * @apiVersion 1.0.0
  * @apiName AddCollectionTemplates

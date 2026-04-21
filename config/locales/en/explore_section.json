@@ -12,5 +12,7 @@
   "EXPLORE_SECTION_ITEMS_REMOVED": "Items removed from explore section successfully",
   "EXPLORE_SECTION_ITEMS_NOT_FOUND": "One or more explore section items not found",
   "EXPLORE_SECTION_ITEMS_REQUIRED": "Please provide at least one item ID to remove",
+  "EXPLORE_SECTION_ITEMS_SORT_ORDER_UPDATED": "Section item order updated successfully",
+  "EXPLORE_SECTION_ITEMS_SORT_ORDER_MISMATCH": "Item list is out of date — refresh and try again",
   "COLLECTION_HAS_NO_TEMPLATES": "The selected collection has no templates"
 } 
