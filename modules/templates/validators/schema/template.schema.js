@@ -66,8 +66,53 @@ const customTextInputFieldSchema = Joi.object({
     field_code: Joi.string().required(),
     field_label: Joi.string().required(),
     field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required()
-  }).allow(null).optional() // New field definition (will be removed before storing)
+  }).allow(null).optional(), // New field definition (will be removed before storing)
+  /** When true, text is supplied by clip workflow (USER_INPUT_TEXT) rather than end-user form. */
+  skip_user_input: Joi.boolean().optional()
 });
+
+const askedUserFieldSchema = Joi.object({
+  id: Joi.string().required(),
+  label: Joi.string().required(),
+  placeholder: Joi.string().allow('', null).optional(),
+  help_text: Joi.string().allow('', null).optional(),
+  kind: Joi.string().valid('text', 'image', 'video').required(),
+  input_type: Joi.string().valid('short_text', 'long_text', 'date', 'datetime', 'time').optional(),
+  date_format: Joi.string().allow('', null).optional(),
+  rendering_date_format: Joi.string().allow('', null).optional(),
+  text_casing: Joi.string()
+    .valid('none', 'uppercase', 'lowercase', 'capitalize_first', 'title_case', 'sentence_case')
+    .optional(),
+  default_text: Joi.string().allow('', null).optional(),
+  is_optional: Joi.boolean().optional(),
+  nfd_field_code: Joi.string().allow('', null).optional(),
+  reference_image: Joi.object({
+    asset_key: Joi.string().optional(),
+    bucket: Joi.string().optional()
+  }).allow(null).optional(),
+  gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
+  display_order: Joi.number().integer().min(0).required(),
+  variable_name: Joi.string().allow('', null).optional()
+}).unknown(false);
+
+const aiWorkflowBindingSchema = Joi.object({
+  clip_index: Joi.number().integer().min(0).required(),
+  variable_key: Joi.string().allow('', null).optional(),
+  node_type: Joi.string().valid('USER_INPUT_TEXT', 'USER_INPUT_IMAGE', 'USER_INPUT_VIDEO').required(),
+  step_index: Joi.number().integer().min(0).optional()
+}).unknown(false);
+
+const slotBindingSchema = Joi.object({
+  id: Joi.string().required(),
+  slot_kind: Joi.string().valid('text', 'image', 'video').required(),
+  slot_layer_name: Joi.string().required(),
+  binding_kind: Joi.string().valid('user_input', 'linked', 'ai_workflow', 'static', 'unmapped').required(),
+  user_input_field_id: Joi.string().allow(null).optional(),
+  linked_to_slot_layer_name: Joi.string().allow(null).optional(),
+  ai_workflow: aiWorkflowBindingSchema.optional(),
+  static_value: Joi.string().allow('', null).optional(),
+  display_order: Joi.number().integer().min(0).required()
+}).unknown(false);
 
 /** Typography fit groups: layers in a group share one post-fit font size (render policy). Stored under additional_data.text_fit_groups; also accepted top-level on PATCH for merge. */
 const textFitGroupSchema = Joi.object({
@@ -307,7 +352,10 @@ const updateTemplateSchema = Joi.object().keys({
     Joi.array().items(updateTemplateClipsItemSchema).min(1),
     Joi.array().items(clipSchema)
   ).optional(),
-  scenes: Joi.array().items(sceneSchema).optional()
+  scenes: Joi.array().items(sceneSchema).optional(),
+  field_authoring_mode: Joi.string().valid('legacy', 'modeled').optional(),
+  authored_user_input_fields: Joi.array().items(askedUserFieldSchema).optional(),
+  authored_slot_bindings: Joi.array().items(slotBindingSchema).optional()
 });
 
 const bulkArchiveTemplatesSchema = Joi.object().keys({
@@ -410,3 +458,5 @@ exports.importTemplatesSchema = importTemplatesSchema;
 exports.ensureAiClipsSchema = ensureAiClipsSchema;
 exports.reorderClipsSchema = reorderClipsSchema;
 exports.addClipSchema = addClipSchema;
+exports.askedUserFieldSchema = askedUserFieldSchema;
+exports.slotBindingSchema = slotBindingSchema;

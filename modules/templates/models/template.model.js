@@ -401,7 +401,7 @@ exports.createTemplate = async function (templateData, clips = null) {
         if (value !== undefined) {
           fields.push(key);
           values.push(value === null ? null :
-            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+            (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json' || key === 'authored_user_input_fields_json' || key === 'authored_slot_bindings_json') ?
               JSON.stringify(value) : value);
           placeholders.push('?');
         }
@@ -447,7 +447,7 @@ exports.createTemplate = async function (templateData, clips = null) {
       if (value !== undefined) {
         fields.push(key);
         values.push(value === null ? null :
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json' || key === 'authored_user_input_fields_json' || key === 'authored_slot_bindings_json') ?
             JSON.stringify(value) : value);
         placeholders.push('?');
       }
@@ -480,7 +480,7 @@ exports.updateTemplate = async function (templateId, templateData) {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
       values.push(value === null ? null :
-        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+        (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json' || key === 'authored_user_input_fields_json' || key === 'authored_slot_bindings_json') ?
           JSON.stringify(value) : value);
     }
   });
@@ -559,7 +559,7 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
       if (value !== undefined) {
         setClause.push(`${key} = ?`);
         values.push(value === null ? null :
-          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json') ?
+          (key === 'faces_needed' || key === 'additional_data' || key === 'custom_text_input_fields' || key === 'image_uploads_json' || key === 'video_uploads_json' || key === 'image_input_fields_json' || key === 'authored_user_input_fields_json' || key === 'authored_slot_bindings_json') ?
             JSON.stringify(value) : value);
       }
     });
@@ -653,6 +653,9 @@ exports.getTemplateById = async function (templateId) {
       bodymovin_json_bucket,
       bodymovin_json_key,
       custom_text_input_fields,
+      authored_user_input_fields_json,
+      authored_slot_bindings_json,
+      field_authoring_mode,
       credits,
       alacarte_price,
       aspect_ratio,
@@ -980,7 +983,8 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
 
   const jsonColumns = [
     'faces_needed', 'additional_data', 'custom_text_input_fields',
-    'image_uploads_json', 'video_uploads_json', 'image_input_fields_json'
+    'image_uploads_json', 'video_uploads_json', 'image_input_fields_json',
+    'authored_user_input_fields_json', 'authored_slot_bindings_json'
   ];
   const overrideColumns = ['template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at'];
   const insertFields = [];

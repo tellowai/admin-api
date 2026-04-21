@@ -33,6 +33,8 @@ const {
   resolveWorkflowScenarioPublishErrors,
   VALID_WORKFLOW_TYPES: TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES
 } = require('../services/template.workflow.publish.validation');
+const { projectModeledToLegacy } = require('../utils/projectModeledToLegacy');
+const { loadClipWorkflowsUiGraphForProjection } = require('../utils/clipWorkflowGraphForAuthoring');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -479,6 +481,34 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
         field.reference_image.url = `${config.os2.r2.public.bucketUrl}/${field.reference_image.asset_key}`;
       }
     });
+  }
+
+  if (template.video_uploads_json && typeof template.video_uploads_json === 'string') {
+    try {
+      template.video_uploads_json = JSON.parse(template.video_uploads_json);
+    } catch (err) {
+      logger.error('Error parsing video_uploads_json:', { error: err.message, value: template.video_uploads_json });
+    }
+  }
+
+  if (template.authored_user_input_fields_json && typeof template.authored_user_input_fields_json === 'string') {
+    try {
+      template.authored_user_input_fields_json = JSON.parse(template.authored_user_input_fields_json);
+    } catch (err) {
+      logger.error('Error parsing authored_user_input_fields_json:', { error: err.message, value: template.authored_user_input_fields_json });
+    }
+  }
+
+  if (template.authored_slot_bindings_json && typeof template.authored_slot_bindings_json === 'string') {
+    try {
+      template.authored_slot_bindings_json = JSON.parse(template.authored_slot_bindings_json);
+    } catch (err) {
+      logger.error('Error parsing authored_slot_bindings_json:', { error: err.message, value: template.authored_slot_bindings_json });
+    }
+  }
+
+  if (!template.field_authoring_mode) {
+    template.field_authoring_mode = 'legacy';
   }
 
   template.tags = await getTemplateTagsWithDetails(template.template_id);
@@ -3027,6 +3057,25 @@ exports.updateTemplate = async function (req, res) {
       });
     }
 
+    const isModeledAuthoring =
+      templateData.field_authoring_mode === 'modeled' ||
+      (templateData.field_authoring_mode === undefined &&
+        String(existingTemplate.field_authoring_mode || 'legacy').toLowerCase() === 'modeled');
+
+    if (isModeledAuthoring) {
+      delete templateData.custom_text_input_fields;
+      delete templateData.image_input_fields_json;
+      delete templateData.video_uploads_json;
+    } else {
+      delete templateData.authored_user_input_fields;
+      delete templateData.authored_slot_bindings;
+      delete templateData.authored_user_input_fields_json;
+      delete templateData.authored_slot_bindings_json;
+      if (templateData.field_authoring_mode === undefined) {
+        delete templateData.field_authoring_mode;
+      }
+    }
+
     // Check if template_code is being updated and if it already exists for another template
     if (templateData.template_code && templateData.template_code !== existingTemplate.template_code) {
       const templateWithSameCode = await TemplateModel.getTemplateByCode(templateData.template_code);
@@ -3331,8 +3380,8 @@ exports.updateTemplate = async function (req, res) {
           templateData.video_uploads_json = generateVideoUploadsJsonFromBodymovin(bodymovinJson);
           */
 
-          // UPDATED LOGIC: Respect whatever client sends
-          if (templateData.image_input_fields_json) {
+          // UPDATED LOGIC: Respect whatever client sends (skipped for modeled authoring — projection sets counts)
+          if (!isModeledAuthoring && templateData.image_input_fields_json) {
             // Ensure it's stored as JSON (if passing to DB that expects JSON type, usually array/object is fine if handled by ORM, or stringify if raw)
             // Assuming Model handles it.
             // If client sent image_uploads_required, use it. If not, maybe calculate from json?
@@ -3347,7 +3396,7 @@ exports.updateTemplate = async function (req, res) {
             }
           }
 
-          if (templateData.video_uploads_json && Array.isArray(templateData.video_uploads_json)) {
+          if (!isModeledAuthoring && templateData.video_uploads_json && Array.isArray(templateData.video_uploads_json)) {
             const count = templateData.video_uploads_json.length;
             if (templateData.video_uploads_required === undefined) {
               templateData.video_uploads_required = count;
@@ -3450,6 +3499,64 @@ exports.updateTemplate = async function (req, res) {
     delete templateData.niche_id;
     delete templateData.niche_slug;
 
+    // niche_id was removed so new_field processing could use it; persist the column on update
+    if (nicheId !== undefined) {
+      templateData.niche_id = nicheId;
+    }
+
+    if (templateData.text_fit_groups !== undefined) {
+      const { merged } = mergeAdditionalDataWithTextFitGroups(existingTemplate.additional_data, templateData.text_fit_groups);
+      templateData.additional_data = merged;
+      delete templateData.text_fit_groups;
+    }
+
+    if (isModeledAuthoring) {
+      const parseJsonCol = (val, fallback) => {
+        if (val == null) return fallback;
+        if (Array.isArray(val)) return val;
+        if (typeof val === 'object') return val;
+        if (typeof val === 'string') {
+          try {
+            return JSON.parse(val);
+          } catch (_) {
+            return fallback;
+          }
+        }
+        return fallback;
+      };
+
+      const asked =
+        templateData.authored_user_input_fields !== undefined
+          ? templateData.authored_user_input_fields
+          : parseJsonCol(existingTemplate.authored_user_input_fields_json, []);
+      const slotB =
+        templateData.authored_slot_bindings !== undefined
+          ? templateData.authored_slot_bindings
+          : parseJsonCol(existingTemplate.authored_slot_bindings_json, []);
+
+      const clipWfs = await loadClipWorkflowsUiGraphForProjection(templateId);
+      const projected = projectModeledToLegacy({
+        asked_user_input_fields: asked,
+        slot_bindings: slotB,
+        clip_workflows: clipWfs,
+        existing_image_input_fields_json: parseJsonCol(existingTemplate.image_input_fields_json, []),
+        existing_video_uploads_json: parseJsonCol(existingTemplate.video_uploads_json, [])
+      });
+
+      templateData.custom_text_input_fields = projected.custom_text_input_fields;
+      templateData.image_input_fields_json = projected.image_input_fields_json;
+      templateData.video_uploads_json = projected.video_uploads_json;
+      templateData.image_uploads_required = projected.image_input_fields_json.length;
+      templateData.video_uploads_required = projected.video_uploads_json.length;
+
+      templateData.authored_user_input_fields_json = asked;
+      templateData.authored_slot_bindings_json = slotB;
+      templateData.field_authoring_mode = 'modeled';
+
+      delete templateData.authored_user_input_fields;
+      delete templateData.authored_slot_bindings;
+    }
+
     // Process custom_text_input_fields: create new_field definitions in niche, then replace with nfd_field_code
     if (templateData.custom_text_input_fields && Array.isArray(templateData.custom_text_input_fields)) {
       const hasNewField = templateData.custom_text_input_fields.some(f => f.new_field);
@@ -3464,17 +3571,6 @@ exports.updateTemplate = async function (req, res) {
           }
         });
       }
-    }
-
-    // niche_id was removed so new_field processing could use it; persist the column on update
-    if (nicheId !== undefined) {
-      templateData.niche_id = nicheId;
-    }
-
-    if (templateData.text_fit_groups !== undefined) {
-      const { merged } = mergeAdditionalDataWithTextFitGroups(existingTemplate.additional_data, templateData.text_fit_groups);
-      templateData.additional_data = merged;
-      delete templateData.text_fit_groups;
     }
 
     let updated;
