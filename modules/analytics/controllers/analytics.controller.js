@@ -1484,6 +1484,105 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  // =========================================================================
+  // Payment failures analytics
+  // Backed by payment_failures_daily_stats (ClickHouse). See
+  // photobop-api/modules/payment/constants/payment.failure.constants.js for
+  // enum semantics (failure_layer × failure_category × payment_gateway).
+  // =========================================================================
+
+  /**
+   * Build the { start_date, end_date } UTC range + the optional dimension filters
+   * that the service layer knows how to allow-list.
+   */
+  static _buildPaymentFailuresFilterArgs(queryParams) {
+    const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+    const utcFilters = TimezoneService.convertToUTC(
+      queryParams.start_date,
+      queryParams.end_date,
+      null,
+      null,
+      timezone
+    );
+    const additional = {};
+    const passthrough = [
+      'event_name',
+      'failure_layer',
+      'failure_category',
+      'payment_gateway',
+      'error_code',
+      'retryable',
+      'product_classification',
+      'plan_type',
+      'billing_interval',
+      'currency',
+      'store_country',
+      'ip_country',
+      'timezone',
+      'app_version',
+      'os_name'
+    ];
+    for (const k of passthrough) {
+      if (queryParams[k] != null && String(queryParams[k]).trim() !== '') {
+        additional[k] = String(queryParams[k]).trim();
+      }
+    }
+    return { utcFilters, additional };
+  }
+
+  static async getPaymentFailuresSummary(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const data = await AnalyticsService.getPaymentFailuresSummary(utcFilters, additional);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data });
+    } catch (error) {
+      logger.error('Error fetching payment failures summary:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getPaymentFailuresDaily(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const data = await AnalyticsService.getPaymentFailuresDaily(utcFilters, additional, q.group_by || null);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching payment failures daily:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getPaymentFailuresBreakdown(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const groupBy = q.group_by || 'failure_category';
+      const limit = q.limit || 20;
+      const data = await AnalyticsService.getPaymentFailuresBreakdown(utcFilters, additional, groupBy, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching payment failures breakdown:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getPaymentFailuresMatrix(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const rowBy = q.row_by || 'failure_layer';
+      const colBy = q.col_by || 'failure_category';
+      const limit = q.limit || 200;
+      const data = await AnalyticsService.getPaymentFailuresMatrix(utcFilters, additional, rowBy, colBy, limit);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching payment failures matrix:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

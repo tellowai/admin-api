@@ -110,6 +110,56 @@ const techHealthAnalyticsSchema = Joi.object().keys({
   limit: Joi.number().integer().min(1).max(100).optional()
 });
 
+/**
+ * payment_failures_daily_stats filters.
+ * All filter columns are LowCardinality(String) on the MV — keep Joi lenient
+ * (plain strings) so new enum values added to payment.failure.constants.js
+ * don't require an admin-api deploy.
+ */
+const ALLOWED_PAYMENT_FAILURES_GROUP_BYS = [
+  'failure_layer',
+  'failure_category',
+  'payment_gateway',
+  'error_code',
+  'retryable',
+  'product_classification',
+  'plan_type',
+  'billing_interval',
+  'currency',
+  'store_country',
+  'ip_country',
+  'app_version',
+  'os_name',
+  'event_name'
+];
+
+const paymentFailuresAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  tz: Joi.string().optional().allow(''),
+
+  event_name: Joi.string().optional().allow(''),
+  failure_layer: Joi.string().optional().allow(''),
+  failure_category: Joi.string().optional().allow(''),
+  payment_gateway: Joi.string().optional().allow(''),
+  error_code: Joi.string().optional().allow(''),
+  retryable: Joi.string().valid('', 'true', 'false').optional(),
+  product_classification: Joi.string().optional().allow(''),
+  plan_type: Joi.string().optional().allow(''),
+  billing_interval: Joi.string().optional().allow(''),
+  currency: Joi.string().optional().allow(''),
+  store_country: Joi.string().optional().allow(''),
+  ip_country: Joi.string().optional().allow(''),
+  app_version: Joi.string().optional().allow(''),
+  os_name: Joi.string().optional().allow(''),
+  timezone: Joi.string().optional().allow(''),
+
+  group_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
+  row_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
+  col_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
+  limit: Joi.number().integer().min(1).max(500).optional()
+});
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
@@ -120,3 +170,4 @@ exports.purchasesAnalyticsSchema = purchasesAnalyticsSchema;
 exports.creditsAnalyticsSchema = creditsAnalyticsSchema;
 exports.pipelineAnalyticsSchema = pipelineAnalyticsSchema;
 exports.techHealthAnalyticsSchema = techHealthAnalyticsSchema;
+exports.paymentFailuresAnalyticsSchema = paymentFailuresAnalyticsSchema;

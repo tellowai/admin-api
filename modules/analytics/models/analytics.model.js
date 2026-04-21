@@ -775,6 +775,104 @@ error_category,
     return result.data || [];
   }
 
+  // =============================================================================
+  // Payment Failures Spoke (payment_failures_daily_stats)
+  // Engine: SummingMergeTree → use sum() for SimpleAggregateFunction columns and
+  // uniqMerge() for AggregateFunction(uniq, ...) columns.
+  // Event discriminator `event_name` covers both server-side (order_failed) and
+  // client-side (purchase_failed / purchase_cancelled) funnels.
+  // =============================================================================
+
+  /** Totals for the metric strip: failures, attempts (correlations), users, devices. */
+  static async queryPaymentFailuresSummary(whereConditions) {
+    const query = `
+      SELECT
+        sum(failure_count)               AS total_failures,
+        uniqMerge(unique_users)          AS unique_users,
+        uniqMerge(unique_devices)        AS unique_devices,
+        uniqMerge(unique_correlations)   AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
+  }
+
+  /** Daily series (used for line/stacked-area chart). */
+  static async queryPaymentFailuresDaily(whereConditions) {
+    const query = `
+      SELECT
+        report_date                    AS date,
+        sum(failure_count)             AS count,
+        uniqMerge(unique_correlations) AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Daily series broken down by a LowCardinality dimension (stacked). */
+  static async queryPaymentFailuresDailyGrouped(whereConditions, groupByColumn) {
+    const query = `
+      SELECT
+        report_date        AS date,
+        ${groupByColumn}   AS group_key,
+        sum(failure_count) AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, count DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Top-N breakdown by any allowed dimension. Used for bar/pie charts
+   * (category, layer, gateway, error_code, product_classification, ...).
+   */
+  static async queryPaymentFailuresBreakdown(whereConditions, groupByColumn, limit = 20) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+    const query = `
+      SELECT
+        ${groupByColumn}               AS group_key,
+        sum(failure_count)             AS count,
+        uniqMerge(unique_users)        AS unique_users,
+        uniqMerge(unique_correlations) AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY ${groupByColumn}
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Two-dimensional breakdown (e.g. layer × category, gateway × error_code).
+   * Good for heatmap tables showing where failures concentrate.
+   */
+  static async queryPaymentFailuresMatrix(whereConditions, rowColumn, columnColumn, limit = 200) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 200), 500);
+    const query = `
+      SELECT
+        ${rowColumn}       AS row_key,
+        ${columnColumn}    AS col_key,
+        sum(failure_count) AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY ${rowColumn}, ${columnColumn}
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryTechHealthStoreVsCountry(whereConditions, limit = 50) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 100);
     const query = `

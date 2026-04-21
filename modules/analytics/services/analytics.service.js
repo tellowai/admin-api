@@ -106,6 +106,29 @@ class AnalyticsService {
     return conditions;
   }
 
+  /**
+   * WHERE conditions for payment_failures_daily_stats.
+   * Allow-list is sourced from ANALYTICS_CONSTANTS so it stays in sync
+   * with the MV column list (LowCardinality cols only → safe for WHERE).
+   */
+  static buildPaymentFailuresConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ANALYTICS_CONSTANTS.PAYMENT_FAILURES_FILTER_COLUMNS;
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
+  /** Normalize a user-provided group_by value against the MV's allowed column list. */
+  static normalizePaymentFailuresGroupBy(groupBy, fallback = 'failure_category') {
+    const g = typeof groupBy === 'string' ? groupBy.trim() : '';
+    return ANALYTICS_CONSTANTS.PAYMENT_FAILURES_GROUP_BY_COLUMNS.includes(g) ? g : fallback;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -787,6 +810,47 @@ class AnalyticsService {
     const { start_date, end_date } = filters;
     const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
     return AnalyticsModel.queryTechHealthStoreVsCountry(whereConditions, limit);
+  }
+
+  // ===========================================================================
+  // Payment failures analytics (payment_failures_daily_stats)
+  // ===========================================================================
+
+  static async getPaymentFailuresSummary(filters, additionalFilters = {}) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresConditions(start_date, end_date, additionalFilters);
+    const row = await AnalyticsModel.queryPaymentFailuresSummary(whereConditions);
+    return {
+      total_failures: Number(row?.total_failures) || 0,
+      unique_users: Number(row?.unique_users) || 0,
+      unique_devices: Number(row?.unique_devices) || 0,
+      unique_attempts: Number(row?.unique_attempts) || 0
+    };
+  }
+
+  static async getPaymentFailuresDaily(filters, additionalFilters = {}, groupBy = null) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresConditions(start_date, end_date, additionalFilters);
+    if (groupBy) {
+      const col = this.normalizePaymentFailuresGroupBy(groupBy);
+      return AnalyticsModel.queryPaymentFailuresDailyGrouped(whereConditions, col);
+    }
+    return AnalyticsModel.queryPaymentFailuresDaily(whereConditions);
+  }
+
+  static async getPaymentFailuresBreakdown(filters, additionalFilters = {}, groupBy, limit = 20) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresConditions(start_date, end_date, additionalFilters);
+    const col = this.normalizePaymentFailuresGroupBy(groupBy);
+    return AnalyticsModel.queryPaymentFailuresBreakdown(whereConditions, col, limit);
+  }
+
+  static async getPaymentFailuresMatrix(filters, additionalFilters = {}, rowBy, colBy, limit = 200) {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresConditions(start_date, end_date, additionalFilters);
+    const rowCol = this.normalizePaymentFailuresGroupBy(rowBy, 'failure_layer');
+    const colCol = this.normalizePaymentFailuresGroupBy(colBy, 'failure_category');
+    return AnalyticsModel.queryPaymentFailuresMatrix(whereConditions, rowCol, colCol, limit);
   }
 
   /**

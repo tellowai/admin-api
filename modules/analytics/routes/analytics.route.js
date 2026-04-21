@@ -358,4 +358,37 @@ module.exports = function(app) {
     AnalyticsCtrl.getTechHealthStoreVsCountry
   );
 
+  // Payment Failures Analytics (payment_failures_daily_stats spoke)
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresSummary
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/daily'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresDaily
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/breakdown'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresBreakdown
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/matrix'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresMatrix
+  );
+
 };
