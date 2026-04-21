@@ -4,20 +4,6 @@ const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const moment = require('moment-timezone');
 
 /**
- * CONVERT_TZ(..., 'Region/Name') requires MySQL time_zone tables; many dev DBs lack them → NULL.
- * Offset-based CONVERT_TZ works without those tables. India has no DST.
- * @param {string} tz IANA (e.g. Asia/Kolkata)
- * @returns {string} MySQL `to_timezone` argument
- */
-function mysqlConvertTzTarget(tz) {
-  const t = String(tz || '').trim();
-  if (t === 'Asia/Kolkata' || t === 'Asia/Calcutta') {
-    return '+05:30';
-  }
-  return t;
-}
-
-/**
  * pp_id rows → numeric ids (matches orders.payment_plan_id).
  * @param {Array<{ pp_id?: unknown }>} rows
  * @returns {number[]}
@@ -118,28 +104,28 @@ function planFilterClause(ppIds) {
 }
 
 /**
- * Format a MySQL date / Date / string as YYYY-MM-DD for API consumers.
- * Converting a JS Date with moment.utc() alone is wrong for DATE that represents a
- * day in a non-UTC zone: mysql2 often gives e.g. 2026-03-31T18:30:00.000Z for "2026-04-01" in IST
- * (midnight local). Use the same IANA `tz` as the chart / CONVERT_TZ calendar semantics.
- * @param {*} v
- * @param {string} [displayTz] IANA e.g. Asia/Kolkata
- * @returns {string}
+ * Calendar day in `tz` for one order timestamp, equivalent to
+ * DATE(CONVERT_TZ(col, '+00:00', tz)) when stored times are UTC.
+ * Done in Node so MariaDB does not need mysql.time_zone_* tables (named zones).
+ * @param {string|Date} tsVal `DATE_FORMAT` string or driver Date
+ * @param {string} tz IANA
  */
-function rowDayToIso(v, displayTz) {
-  if (v == null) return '';
-  if (v instanceof Date) {
-    const z = String(displayTz || '').trim();
-    if (z && z !== 'UTC' && z !== 'Etc/UTC' && z !== 'GMT') {
-      return moment.tz(v, z).format('YYYY-MM-DD');
-    }
-    return moment.utc(v).format('YYYY-MM-DD');
+function calendarDayInTzFromUtcWallTime(tsVal, tz) {
+  if (tsVal == null) return null;
+  let m;
+  if (tsVal instanceof Date) {
+    m = moment.utc(tsVal);
+  } else {
+    const s = String(tsVal).trim();
+    if (s === '') return null;
+    m = moment.utc(s, 'YYYY-MM-DD HH:mm:ss', true);
   }
-  return String(v).split('T')[0];
+  if (!m.isValid()) return null;
+  return m.tz(tz).format('YYYY-MM-DD');
 }
 
 /**
- * Daily buckets via derived table — compatible with sql_mode=ONLY_FULL_GROUP_BY (single grouped expression).
+ * Daily buckets: filter in SQL (UTC range), aggregate by calendar day in `tz` in Node.
  * @param {string} tz
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
@@ -147,49 +133,42 @@ function rowDayToIso(v, displayTz) {
  * @param {'created'|'completed'|'failed'} kind
  */
 async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) {
-  const tzSql = mysqlConvertTzTarget(tz);
-  let innerDateExpr;
+  let dateFormatCol;
   let whereExtra;
-  // Use offset (+05:30) for India so CONVERT_TZ works without mysql.time_zone_* tables; keep COALESCE to UTC DATE as safety net.
   if (kind === 'created') {
-    innerDateExpr = `COALESCE(
-      DATE(CONVERT_TZ(o.created_at, '+00:00', ?)),
-      DATE(o.created_at)
-    )`;
+    dateFormatCol = "DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s')";
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
   } else if (kind === 'completed') {
-    innerDateExpr = `COALESCE(
-      DATE(CONVERT_TZ(o.completed_at, '+00:00', ?)),
-      DATE(o.completed_at)
-    )`;
+    dateFormatCol = "DATE_FORMAT(o.completed_at, '%Y-%m-%d %H:%i:%s')";
     whereExtra = `o.status = 'completed' AND o.completed_at IS NOT NULL AND o.completed_at >= ? AND o.completed_at <= ?`;
   } else {
-    innerDateExpr = `COALESCE(
-      DATE(CONVERT_TZ(o.failed_at, '+00:00', ?)),
-      DATE(o.failed_at)
-    )`;
+    dateFormatCol = "DATE_FORMAT(o.failed_at, '%Y-%m-%d %H:%i:%s')";
     whereExtra = `o.status = 'failed' AND o.failed_at IS NOT NULL AND o.failed_at >= ? AND o.failed_at <= ?`;
   }
 
   const query = `
-    SELECT t.stat_date, COUNT(*) AS count
-    FROM (
-      SELECT ${innerDateExpr} AS stat_date
-      FROM orders o
-      WHERE ${whereExtra}
-      ${planPart.sql}
-    ) t
-    WHERE t.stat_date IS NOT NULL
-    GROUP BY t.stat_date
-    ORDER BY t.stat_date ASC
+    SELECT ${dateFormatCol} AS ts_utc
+    FROM orders o
+    WHERE ${whereExtra}
+    ${planPart.sql}
   `;
 
-  const params = [tzSql, rangeStartUtc, rangeEndUtc, ...planPart.params];
+  const params = [rangeStartUtc, rangeEndUtc, ...planPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
-  return (rows || []).map((r) => ({
-    date: rowDayToIso(r.stat_date, tz),
-    count: Number(r.count) || 0
-  }));
+
+  const dayCounts = new Map();
+  for (const r of rows || []) {
+    const dayKey = calendarDayInTzFromUtcWallTime(r.ts_utc, tz);
+    if (dayKey == null) continue;
+    dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
+  }
+
+  return Array.from(dayCounts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, count]) => ({
+      date,
+      count: Number(count) || 0
+    }));
 }
 
 /**
