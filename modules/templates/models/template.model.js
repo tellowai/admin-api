@@ -49,6 +49,8 @@ exports.listTemplates = async function (pagination) {
       conditions.push("android_status = 'active'");
     } else if (pagination.platform === 'ios') {
       conditions.push("ios_status = 'active'");
+    } else if (pagination.platform === 'web') {
+      conditions.push("web_status = 'active'");
     } else if (pagination.platform === 'both') {
       conditions.push("android_status = 'active'");
       conditions.push("ios_status = 'active'");

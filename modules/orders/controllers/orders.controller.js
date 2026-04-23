@@ -40,8 +40,9 @@ exports.listAdminOrders = async function (req, res) {
     const status = req.query.status ? String(req.query.status).trim() : '';
     const productType = req.query.product_type ? String(req.query.product_type).trim() : '';
     const search = req.query.search ? String(req.query.search).trim() : '';
+    const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
 
-    const filterPayload = { status, productType, search };
+    const filterPayload = { status, productType, search, client_platform };
 
     const [total, rows] = await Promise.all([
       OrdersModel.countOrdersAdmin(filterPayload),
@@ -59,6 +60,7 @@ exports.listAdminOrders = async function (req, res) {
       order_id: o.order_id,
       user_id: o.user_id,
       payment_gateway: o.payment_gateway,
+      client_platform: o.client_platform ?? null,
       pg_order_id: o.pg_order_id,
       quantity: o.quantity,
       pg_payment_id: o.pg_payment_id,

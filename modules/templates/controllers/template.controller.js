@@ -1868,6 +1868,7 @@ exports.createDraftTemplate = async function (req, res) {
     templateData.workflow_builder_version = 'v2'; // Hardcoded default for draft
     templateData.android_status = templateData.android_status ?? 'inactive';
     templateData.ios_status = templateData.ios_status ?? 'inactive';
+    templateData.web_status = templateData.web_status ?? 'inactive';
 
     // Initialize with a default scene and layers for the new architecture
     templateData.scenes = [
@@ -3667,9 +3668,11 @@ exports.updateTemplateStatus = async function (req, res) {
     if (status === 'active') {
       patchData.android_status = 'active';
       patchData.ios_status = 'active';
+      patchData.web_status = 'active';
     } else {
       patchData.android_status = 'inactive';
       patchData.ios_status = 'inactive';
+      patchData.web_status = 'inactive';
     }
 
     const updated = await TemplateModel.updateTemplate(templateId, patchData);
@@ -3716,9 +3719,11 @@ exports.bulkUpdateTemplatesStatus = async function (req, res) {
         if (status === 'active') {
           patchData.android_status = 'active';
           patchData.ios_status = 'active';
+          patchData.web_status = 'active';
         } else {
           patchData.android_status = 'inactive';
           patchData.ios_status = 'inactive';
+          patchData.web_status = 'inactive';
         }
 
         const updated = await TemplateModel.updateTemplate(templateId, patchData);
