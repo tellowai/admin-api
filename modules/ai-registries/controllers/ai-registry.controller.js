@@ -296,18 +296,27 @@ exports.create = async function (req, res) {
     const amrId = result.insertId;
 
     if (req.body.tags !== undefined) {
-      const amtdIds = Array.isArray(req.body.tags)
-        ? req.body.tags.map(t => (typeof t === 'object' && t != null && t.amtd_id != null) ? t.amtd_id : t).filter(Boolean)
-        : [];
-      await aiRegistryModel.setTagsForAmrId(amrId, amtdIds);
+      try {
+        const amtdIds = Array.isArray(req.body.tags)
+          ? req.body.tags.map(t => (typeof t === 'object' && t != null && t.amtd_id != null) ? t.amtd_id : t).filter(Boolean)
+          : [];
+        await aiRegistryModel.setTagsForAmrId(amrId, amtdIds);
+      } catch (tagErr) {
+        console.error('AI model created but tags failed (amr_id=%s):', amrId, tagErr);
+      }
     }
 
-    await publishNewAdminActivityLog({
-      adminUserId: req.user.userId,
-      entityType: 'AI_REGISTRY',
-      actionName: 'CREATE_AI_REGISTRY_MODEL',
-      entityId: amrId
-    });
+    // Do not fail the HTTP response after DB commit if Kafka / activity log is unavailable.
+    try {
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'AI_REGISTRY',
+        actionName: 'CREATE_AI_REGISTRY_MODEL',
+        entityId: amrId
+      });
+    } catch (logErr) {
+      console.error('AI model created but activity log publish failed (amr_id=%s):', amrId, logErr);
+    }
     return res.status(HTTP_STATUS_CODES.CREATED).json({ amr_id: amrId, ...newModelData });
   } catch (err) {
     console.error('Error creating AI model:', err);
@@ -724,12 +733,16 @@ exports.createIoDefinition = async function (req, res) {
       amr_id: req.params.amrId // Ensure it links to the current model
     };
     const result = await aiRegistryModel.createIoDefinition(data);
-    await publishNewAdminActivityLog({
-      adminUserId: req.user.userId,
-      entityType: 'AI_REGISTRY_IO',
-      actionName: 'CREATE_AI_REGISTRY_IO',
-      entityId: result.insertId
-    });
+    try {
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'AI_REGISTRY_IO',
+        actionName: 'CREATE_AI_REGISTRY_IO',
+        entityId: result.insertId
+      });
+    } catch (logErr) {
+      console.error('IO definition created but activity log publish failed (amiod_id=%s):', result.insertId, logErr);
+    }
     return res.status(HTTP_STATUS_CODES.CREATED).json({ amiod_id: result.insertId, ...data });
   } catch (err) {
     console.error('Error creating IO definition:', err);
