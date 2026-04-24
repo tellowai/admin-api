@@ -149,6 +149,7 @@ const createTemplateSchema = Joi.object().keys({
   user_assets_layer: Joi.string().valid('top', 'bottom').default('bottom'),
   credits: Joi.number().integer().min(1).default(1),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
@@ -247,6 +248,7 @@ const updateTemplateSchema = Joi.object().keys({
   credits: Joi.number().integer().min(1).optional(),
   max_free_generations: Joi.number().integer().min(1).allow(null).optional(),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
