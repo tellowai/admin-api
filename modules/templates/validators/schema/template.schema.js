@@ -201,6 +201,7 @@ const createDraftTemplateSchema = Joi.object().keys({
   template_code: Joi.string().max(9).required(),
   cf_r2_url: Joi.string().max(1000).required(),
   cf_r2_key: Joi.string().max(512).required(),
+  cf_r2_bucket: Joi.string().max(255).optional(),
   template_output_type: Joi.string().valid('image', 'video', 'audio').default('video'),
   template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
   status: Joi.string().valid('draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived').default('draft'),

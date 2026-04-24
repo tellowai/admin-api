@@ -955,6 +955,25 @@ async function getNextCopyTemplateName(connection, sourceTemplateName) {
   return `${base} copy (${maxN + 1})`;
 }
 
+/** Filled once per process; avoids INFORMATION_SCHEMA on every copy. */
+let templatesTableColumnNamesCache = null;
+
+async function getTemplatesTableColumnNamesCached(connection) {
+  if (templatesTableColumnNamesCache) {
+    return templatesTableColumnNamesCache;
+  }
+  const rows = await connection.query(
+    'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
+    ['templates']
+  );
+  const names = (Array.isArray(rows) ? rows : []).map((r) => r.COLUMN_NAME);
+  if (names.length === 0) {
+    throw new Error('copyTemplateInTransaction: could not resolve templates table columns');
+  }
+  templatesTableColumnNamesCache = names;
+  return names;
+}
+
 /**
  * Copy a template and all related data (templates, template_ai_clips, workflows, workflow_nodes, workflow_edges, template_tags, template_scenes, template_layers)
  * within an existing transaction. Caller must begin/commit/rollback the transaction.
@@ -980,35 +999,39 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
   const randomDigits = String(Math.floor(Math.random() * 100)).padStart(2, '0');
   const newTemplateCode = baseCode + randomDigits;
 
-  const jsonColumns = [
-    'faces_needed', 'additional_data', 'custom_text_input_fields',
-    'image_uploads_json', 'video_uploads_json', 'image_input_fields_json'
-  ];
-  const overrideColumns = ['template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at'];
-  const insertFields = [];
-  const insertValues = [];
+  // INSERT...SELECT: column list from DB schema (cached after first copy in this process).
+  const columnNames = await getTemplatesTableColumnNamesCached(connection);
+  const quoteIdent = (name) => '`' + String(name).replace(/`/g, '') + '`';
+  const quotedCols = columnNames.map(quoteIdent);
+  const overrideByCol = new Map([
+    ['template_id', newTemplateId],
+    ['template_name', newTemplateName],
+    ['template_code', newTemplateCode],
+    ['status', 'draft'],
+    ['created_at', now],
+    ['updated_at', now],
+    ['archived_at', null]
+  ]);
 
-  for (const [key, value] of Object.entries(sourceTemplate)) {
-    if (overrideColumns.includes(key)) continue;
-    insertFields.push(key);
-    if (jsonColumns.includes(key) && value != null && typeof value !== 'string') {
-      insertValues.push(JSON.stringify(value));
+  const selectFragments = [];
+  const insertParams = [];
+  for (const col of columnNames) {
+    if (overrideByCol.has(col)) {
+      selectFragments.push('?');
+      insertParams.push(overrideByCol.get(col));
     } else {
-      insertValues.push(value);
+      selectFragments.push(`t.${quoteIdent(col)}`);
     }
   }
-  // Ensure template_workflow_type is copied (in case source row lacked it e.g. pre-migration)
-  if (!insertFields.includes('template_workflow_type')) {
-    insertFields.push('template_workflow_type');
-    insertValues.push(sourceTemplate.template_workflow_type || 'AI_PLUS_AE');
-  }
-  insertFields.push('template_id', 'template_name', 'template_code', 'status', 'created_at', 'updated_at', 'archived_at');
-  insertValues.push(newTemplateId, newTemplateName, newTemplateCode, 'draft', now, now, null);
+  insertParams.push(sourceTemplateId);
 
-  const placeholders = insertValues.map(() => '?').join(', ');
   await connection.query(
-    `INSERT INTO templates (${insertFields.join(', ')}) VALUES (${placeholders})`,
-    insertValues
+    `INSERT INTO templates (${quotedCols.join(', ')})
+     SELECT ${selectFragments.join(', ')}
+     FROM templates t
+     WHERE t.template_id = ? AND t.archived_at IS NULL
+     LIMIT 1`,
+    insertParams
   );
 
   const clips = await connection.query(

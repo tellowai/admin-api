@@ -1932,8 +1932,10 @@ exports.createDraftTemplate = async function (req, res) {
     });
 
   } catch (error) {
-    logger.error('Error creating draft template:', { error: error.message, stack: error.stack });
-    TemplateErrorHandler.handleTemplateErrors(error, res);
+    TemplateErrorHandler.handleTemplateErrors(error, res, {
+      route: 'POST /templates/draft',
+      templateInsertFieldKeys: Object.keys(templateData || {}).sort()
+    });
   }
 };
 
