@@ -157,7 +157,13 @@ const paymentFailuresAnalyticsSchema = Joi.object().keys({
   group_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
   row_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
   col_by: Joi.string().valid(...ALLOWED_PAYMENT_FAILURES_GROUP_BYS).optional(),
-  limit: Joi.number().integer().min(1).max(500).optional()
+  limit: Joi.number().integer().min(1).max(500).optional(),
+
+  // Raw-event drill-downs (`/samples`, `/message-groups`).
+  // `offset` paginates samples; `search` is a substring match on
+  // `properties['error_message']` for narrowing into specific unknowns.
+  offset: Joi.number().integer().min(0).max(5000).optional(),
+  search: Joi.string().max(120).optional().allow('')
 });
 
 exports.dateRangeSchema = dateRangeSchema;

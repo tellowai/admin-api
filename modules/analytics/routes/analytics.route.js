@@ -391,4 +391,24 @@ module.exports = function(app) {
     AnalyticsCtrl.getPaymentFailuresMatrix
   );
 
+  // Raw-event drill-downs (hit analytics_events_raw directly to surface
+  // high-cardinality fields the MV drops — `error_message`, `response_code`,
+  // `correlation_id`, `order_id`, `user_id`). Primary use case: identify what
+  // is hiding inside `failure_category=unknown`.
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/message-groups'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresMessageGroups
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/payment-failures/samples'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
+    AnalyticsCtrl.getPaymentFailuresSamples
+  );
+
 };

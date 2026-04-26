@@ -1583,6 +1583,47 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  /**
+   * Top recurring (error_code, error_message) groups from analytics_events_raw.
+   * Use case: filter to `failure_category=unknown` and the bars in this table
+   * become exactly the regex patterns worth adding to `classifyPaymentError.ts`
+   * to shrink the `unknown` bucket.
+   */
+  static async getPaymentFailuresMessageGroups(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const limit = q.limit || 50;
+      const search = typeof q.search === 'string' ? q.search : '';
+      const data = await AnalyticsService.getPaymentFailuresMessageGroups(utcFilters, additional, limit, search);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching payment failures message groups:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  /**
+   * Per-event sample list from analytics_events_raw. Carries the high-cardinality
+   * fields the MV drops (`error_message`, `response_code`, `correlation_id`,
+   * `order_id`, `user_id`, `device_id`) so admins can drill from a chart bar
+   * to the actual failing requests.
+   */
+  static async getPaymentFailuresSamples(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
+      const limit = q.limit || 50;
+      const offset = q.offset || 0;
+      const search = typeof q.search === 'string' ? q.search : '';
+      const data = await AnalyticsService.getPaymentFailuresSamples(utcFilters, additional, limit, offset, search);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
+    } catch (error) {
+      logger.error('Error fetching payment failures samples:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

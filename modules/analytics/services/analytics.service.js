@@ -129,6 +129,74 @@ class AnalyticsService {
     return ANALYTICS_CONSTANTS.PAYMENT_FAILURES_GROUP_BY_COLUMNS.includes(g) ? g : fallback;
   }
 
+  /**
+   * WHERE clauses for `analytics_events_raw` when drilling into individual
+   * failure events. Same allow-list as the MV, but each filter targets the
+   * RIGHT location — top-level column for header dims (`app_version`,
+   * `os_name`, `store_country`, `country`, `timezone`) and `properties['k']`
+   * for everything that lives in the Map.
+   *
+   * Time predicate uses `timestamp` (DateTime64) and matches the MV's
+   * `(object_type='order' AND event_name='order_failed')` /
+   * `(object_type='purchase' AND event_name IN (...))` filter so we never
+   * scan unrelated events.
+   *
+   * `searchText` (optional) does a case-insensitive substring match on
+   * `properties['error_message']` so dashboards can filter "show me unknowns
+   * whose message contains 'developer error'" without a code change.
+   *
+   * Returns the array of WHERE clauses (joined with AND by the caller).
+   */
+  static buildPaymentFailuresRawConditions(start_date, end_date, additionalFilters = {}, searchText = '') {
+    const startMs = new Date(start_date).getTime();
+    const endMs = new Date(end_date).getTime();
+    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
+    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+
+    const conditions = [
+      `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`,
+      // Same predicate as payment_failures_mv. Anchored on (object_type, event_name)
+      // which is the leading prefix of the table's ORDER BY → cheap.
+      `(
+        (object_type = 'order' AND event_name = 'order_failed')
+        OR (object_type = 'purchase' AND event_name IN ('purchase_failed', 'purchase_cancelled'))
+      )`
+    ];
+
+    // Map filter key → SQL expression on `analytics_events_raw`.
+    // Header dims live as top-level columns; everything else is in properties Map.
+    const COL_MAP = {
+      event_name: 'event_name',
+      app_version: 'app_version',
+      os_name: 'os_name',
+      timezone: 'timezone',
+      store_country: 'store_country',
+      ip_country: 'country', // raw column is `country`, MV exposes it as `ip_country`
+    };
+
+    const allowed = ANALYTICS_CONSTANTS.PAYMENT_FAILURES_FILTER_COLUMNS;
+    Object.keys(additionalFilters).forEach((key) => {
+      if (!allowed.includes(key)) return;
+      const raw = additionalFilters[key];
+      if (raw == null || raw === '') return;
+      const v = String(raw).replace(/'/g, "''");
+      if (COL_MAP[key]) {
+        conditions.push(`${COL_MAP[key]} = '${v}'`);
+      } else {
+        // Map(String,String) lookup — `properties['k']` returns '' for missing keys.
+        conditions.push(`properties['${key.replace(/'/g, "''")}'] = '${v}'`);
+      }
+    });
+
+    if (typeof searchText === 'string' && searchText.trim() !== '') {
+      const needle = searchText.trim().replace(/'/g, "''");
+      conditions.push(`positionCaseInsensitive(properties['error_message'], '${needle}') > 0`);
+    }
+
+    return conditions;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -851,6 +919,51 @@ class AnalyticsService {
     const rowCol = this.normalizePaymentFailuresGroupBy(rowBy, 'failure_layer');
     const colCol = this.normalizePaymentFailuresGroupBy(colBy, 'failure_category');
     return AnalyticsModel.queryPaymentFailuresMatrix(whereConditions, rowCol, colCol, limit);
+  }
+
+  /**
+   * Group identical (error_code, error_message, gateway, category) rows in
+   * `analytics_events_raw` over the date range. This is the cheapest way
+   * to answer "what is hiding inside `failure_category=unknown`?" — the
+   * regex classifier maps un-matched SDK errors to `unknown`, but the raw
+   * provider message still gets stamped on the event. Filter the page to
+   * `failure_category=unknown` and the bars in this table become exactly
+   * the regex patterns worth adding to classifyPaymentError.ts.
+   *
+   * `error_message` is truncated to 120 chars at the mobile gateway call
+   * sites already, so direct GROUP BY is safe (LowCardinality enough).
+   */
+  static async getPaymentFailuresMessageGroups(filters, additionalFilters = {}, limit = 50, searchText = '') {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresRawConditions(
+      start_date,
+      end_date,
+      additionalFilters,
+      searchText
+    );
+    return AnalyticsModel.queryPaymentFailuresMessageGroups(whereConditions, limit);
+  }
+
+  /**
+   * Per-event drill of recent payment failures. Returns one row per raw
+   * event in `analytics_events_raw` with the high-cardinality fields the
+   * MV deliberately drops: `error_message`, `response_code`,
+   * `correlation_id`, `order_id`, `product_id`, `user_id`, `device_id`.
+   *
+   * Use cases:
+   *  - Repeated `already_owned` per user → consume-missed bug.
+   *  - Walking a `correlation_id` across multiple events to see exactly
+   *    where in the funnel a checkout died.
+   */
+  static async getPaymentFailuresSamples(filters, additionalFilters = {}, limit = 50, offset = 0, searchText = '') {
+    const { start_date, end_date } = filters;
+    const whereConditions = this.buildPaymentFailuresRawConditions(
+      start_date,
+      end_date,
+      additionalFilters,
+      searchText
+    );
+    return AnalyticsModel.queryPaymentFailuresSamples(whereConditions, limit, offset);
   }
 
   /**

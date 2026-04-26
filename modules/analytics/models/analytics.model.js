@@ -853,6 +853,100 @@ error_category,
   }
 
   /**
+   * Top recurring (error_code, error_message) groups straight out of
+   * `analytics_events_raw`. Bypasses the MV because the MV deliberately
+   * drops the high-cardinality `error_message` text — yet that text is
+   * exactly what we need to author new regex rules in
+   * `mobile-app/src/payments/utils/classifyPaymentError.ts` to pull events
+   * out of the `failure_category='unknown'` bucket.
+   */
+  static async queryPaymentFailuresMessageGroups(whereConditions, limit = 50) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 200);
+    const query = `
+      SELECT
+        event_name                                  AS event_name,
+        properties['payment_gateway']               AS payment_gateway,
+        properties['failure_layer']                 AS failure_layer,
+        properties['failure_category']              AS failure_category,
+        properties['error_code']                    AS error_code,
+        properties['response_code']                 AS response_code,
+        properties['error_message']                 AS error_message,
+        count()                                     AS count,
+        uniq(ifNull(user_id, ''))                   AS unique_users,
+        uniq(device_id)                             AS unique_devices,
+        uniq(properties['correlation_id'])          AS unique_attempts,
+        max(timestamp)                              AS last_seen,
+        min(timestamp)                              AS first_seen,
+        anyHeavy(properties['order_id'])            AS sample_order_id,
+        anyHeavy(properties['product_id'])          AS sample_product_id,
+        anyHeavy(app_version)                       AS sample_app_version,
+        anyHeavy(os_name)                           AS sample_os_name
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY
+        event_name, payment_gateway, failure_layer, failure_category,
+        error_code, response_code, error_message
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Per-event sample list from `analytics_events_raw`. Caller can paginate
+   * via limit/offset. Returned rows mirror the MV's filterable dims plus
+   * the raw text fields the MV drops, so the admin UI can show a "log
+   * tail" of failures without blowing up cardinality on the spoke.
+   */
+  static async queryPaymentFailuresSamples(whereConditions, limit = 50, offset = 0) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 200);
+    const safeOffset = Math.min(Math.max(0, parseInt(offset, 10) || 0), 5000);
+    const query = `
+      SELECT
+        timestamp                                   AS timestamp,
+        event_name                                  AS event_name,
+        ifNull(user_id, '')                         AS user_id,
+        device_id                                   AS device_id,
+        app_version                                 AS app_version,
+        os_name                                     AS os_name,
+        os_version                                  AS os_version,
+        device_brand                                AS device_brand,
+        device_model                                AS device_model,
+        store_country                               AS store_country,
+        country                                     AS ip_country,
+        timezone                                    AS timezone,
+        properties['payment_gateway']               AS payment_gateway,
+        properties['failure_layer']                 AS failure_layer,
+        properties['failure_category']              AS failure_category,
+        properties['error_code']                    AS error_code,
+        properties['response_code']                 AS response_code,
+        properties['error_message']                 AS error_message,
+        properties['retryable']                     AS retryable,
+        properties['correlation_id']                AS correlation_id,
+        properties['order_id']                      AS order_id,
+        properties['product_id']                    AS product_id,
+        properties['plan_id']                       AS plan_id,
+        properties['plan_name']                     AS plan_name,
+        properties['product_classification']        AS product_classification,
+        properties['plan_type']                     AS plan_type,
+        properties['billing_interval']              AS billing_interval,
+        properties['currency']                      AS currency,
+        properties['amount']                        AS amount,
+        properties['quantity']                      AS quantity,
+        properties['source_screen']                 AS source_screen,
+        properties['template_id']                   AS template_id
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY timestamp DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
    * Two-dimensional breakdown (e.g. layer × category, gateway × error_code).
    * Good for heatmap tables showing where failures concentrate.
    */
