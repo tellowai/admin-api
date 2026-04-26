@@ -933,7 +933,7 @@ class AnalyticsService {
    * `error_message` is truncated to 120 chars at the mobile gateway call
    * sites already, so direct GROUP BY is safe (LowCardinality enough).
    */
-  static async getPaymentFailuresMessageGroups(filters, additionalFilters = {}, limit = 50, searchText = '') {
+  static async getPaymentFailuresMessageGroups(filters, additionalFilters = {}, limit = 25, searchText = '', offset = 0) {
     const { start_date, end_date } = filters;
     const whereConditions = this.buildPaymentFailuresRawConditions(
       start_date,
@@ -941,7 +941,7 @@ class AnalyticsService {
       additionalFilters,
       searchText
     );
-    return AnalyticsModel.queryPaymentFailuresMessageGroups(whereConditions, limit);
+    return AnalyticsModel.queryPaymentFailuresMessageGroups(whereConditions, limit, offset);
   }
 
   /**

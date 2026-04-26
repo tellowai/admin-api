@@ -1594,9 +1594,10 @@ class AnalyticsController {
     try {
       const q = req.validatedQuery;
       const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
-      const limit = q.limit || 50;
+      const limit = q.limit || 25;
+      const offset = q.offset || 0;
       const search = typeof q.search === 'string' ? q.search : '';
-      const data = await AnalyticsService.getPaymentFailuresMessageGroups(utcFilters, additional, limit, search);
+      const data = await AnalyticsService.getPaymentFailuresMessageGroups(utcFilters, additional, limit, search, offset);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures message groups:', { error: error.message, query: req.validatedQuery });

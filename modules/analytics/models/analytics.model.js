@@ -859,35 +859,41 @@ error_category,
    * exactly what we need to author new regex rules in
    * `mobile-app/src/payments/utils/classifyPaymentError.ts` to pull events
    * out of the `failure_category='unknown'` bucket.
+   *
+   * Kept deliberately lean: only `count`, `uniq(user_id)`,
+   * `uniq(correlation_id)` and `max(timestamp)`. No `anyHeavy(...)` —
+   * that's a heavy-hitters approximation we were paying for without
+   * surfacing the result anywhere in the UI. Anything else (sample
+   * order_id, app_version, etc.) belongs in the per-event `samples`
+   * query, which is a much cheaper "stitchable" follow-up keyed off the
+   * same WHERE clause.
+   *
+   * Pagination is `LIMIT/OFFSET` so the UI can drive a load-more button
+   * instead of pulling every group at once.
    */
-  static async queryPaymentFailuresMessageGroups(whereConditions, limit = 50) {
-    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 200);
+  static async queryPaymentFailuresMessageGroups(whereConditions, limit = 25, offset = 0) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 25), 200);
+    const safeOffset = Math.min(Math.max(0, parseInt(offset, 10) || 0), 5000);
     const query = `
       SELECT
         event_name                                  AS event_name,
         properties['payment_gateway']               AS payment_gateway,
-        properties['failure_layer']                 AS failure_layer,
         properties['failure_category']              AS failure_category,
         properties['error_code']                    AS error_code,
         properties['response_code']                 AS response_code,
         properties['error_message']                 AS error_message,
         count()                                     AS count,
         uniq(ifNull(user_id, ''))                   AS unique_users,
-        uniq(device_id)                             AS unique_devices,
         uniq(properties['correlation_id'])          AS unique_attempts,
-        max(timestamp)                              AS last_seen,
-        min(timestamp)                              AS first_seen,
-        anyHeavy(properties['order_id'])            AS sample_order_id,
-        anyHeavy(properties['product_id'])          AS sample_product_id,
-        anyHeavy(app_version)                       AS sample_app_version,
-        anyHeavy(os_name)                           AS sample_os_name
+        max(timestamp)                              AS last_seen
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY
-        event_name, payment_gateway, failure_layer, failure_category,
+        event_name, payment_gateway, failure_category,
         error_code, response_code, error_message
       ORDER BY count DESC
       LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
