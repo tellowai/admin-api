@@ -103,6 +103,24 @@ function planFilterClause(ppIds) {
   return { sql: ` AND o.payment_plan_id IN (${ph}) `, params: ppIds };
 }
 
+/** @param {...{ sql: string, params: any[] }} parts */
+function mergeSqlParts(...parts) {
+  return {
+    sql: parts.map((p) => (p && p.sql) || '').join(''),
+    params: parts.flatMap((p) => (p && p.params) || [])
+  };
+}
+
+/**
+ * Optional gateway slice (must match `orders.payment_gateway` enum values).
+ * @param {string} [paymentGateway]
+ */
+function gatewayFilterClause(paymentGateway) {
+  const g = paymentGateway != null ? String(paymentGateway).trim() : '';
+  if (!g) return { sql: '', params: [] };
+  return { sql: ' AND o.payment_gateway = ? ', params: [g] };
+}
+
 /**
  * Calendar day in `tz` for one order timestamp, equivalent to
  * DATE(CONVERT_TZ(col, '+00:00', tz)) when stored times are UTC.
@@ -129,10 +147,10 @@ function calendarDayInTzFromUtcWallTime(tsVal, tz) {
  * @param {string} tz
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
- * @param {{ sql: string, params: any[] }} planPart
+ * @param {{ sql: string, params: any[] }} filterPart plan + optional gateway, etc.
  * @param {'created'|'completed'|'failed'} kind
  */
-async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) {
+async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind) {
   let dateFormatCol;
   let whereExtra;
   if (kind === 'created') {
@@ -150,10 +168,10 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) 
     SELECT ${dateFormatCol} AS ts_utc
     FROM orders o
     WHERE ${whereExtra}
-    ${planPart.sql}
+    ${filterPart.sql}
   `;
 
-  const params = [rangeStartUtc, rangeEndUtc, ...planPart.params];
+  const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
 
   const dayCounts = new Map();
@@ -174,10 +192,10 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, kind) 
 /**
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
- * @param {{ sql: string, params: any[] }} planPart
+ * @param {{ sql: string, params: any[] }} filterPart
  * @param {'created'|'completed'|'failed'} kind
  */
-async function queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, kind) {
+async function queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, kind) {
   let whereExtra;
   if (kind === 'created') {
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
@@ -191,10 +209,10 @@ async function queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, kind) {
     SELECT COUNT(*) AS total
     FROM orders o
     WHERE ${whereExtra}
-    ${planPart.sql}
+    ${filterPart.sql}
   `;
 
-  const params = [rangeStartUtc, rangeEndUtc, ...planPart.params];
+  const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   const n = rows && rows[0] ? Number(rows[0].total) : 0;
   return Number.isFinite(n) ? n : 0;
@@ -206,9 +224,10 @@ async function queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, kind) {
  * @param {string} opts.endCal YYYY-MM-DD
  * @param {string} opts.tz IANA timezone
  * @param {string} [opts.productType] alacarte | subscription | onetime | addon
+ * @param {string} [opts.paymentGateway] razorpay | google_play | … (optional; matches `orders.payment_gateway`)
  */
 exports.getOrdersStatusDaily = async function (opts) {
-  const { startCal, endCal, tz, productType } = opts;
+  const { startCal, endCal, tz, productType, paymentGateway } = opts;
 
   const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
 
@@ -217,10 +236,11 @@ exports.getOrdersStatusDaily = async function (opts) {
     ppIds = await getPpIdsForProductFilter(String(productType).trim());
   }
   const planPart = planFilterClause(ppIds);
+  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
 
   const [created, completed] = await Promise.all([
-    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, 'created'),
-    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, planPart, 'completed')
+    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'created'),
+    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'completed')
   ]);
 
   return { created, completed };
@@ -233,9 +253,10 @@ exports.getOrdersStatusDaily = async function (opts) {
  * @param {string} opts.endCal
  * @param {string} opts.tz
  * @param {string} [opts.productType]
+ * @param {string} [opts.paymentGateway]
  */
 exports.getOrdersStatusSummary = async function (opts) {
-  const { startCal, endCal, tz, productType } = opts;
+  const { startCal, endCal, tz, productType, paymentGateway } = opts;
   const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
 
   let ppIds = null;
@@ -243,11 +264,12 @@ exports.getOrdersStatusSummary = async function (opts) {
     ppIds = await getPpIdsForProductFilter(String(productType).trim());
   }
   const planPart = planFilterClause(ppIds);
+  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
 
   const [created_count, completed_count, failed_count] = await Promise.all([
-    queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, 'created'),
-    queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, 'completed'),
-    queryCountByKind(rangeStartUtc, rangeEndUtc, planPart, 'failed')
+    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'created'),
+    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'completed'),
+    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'failed')
   ]);
 
   const failure_rate_pct =
