@@ -350,6 +350,8 @@ exports.getMappingMetadataByAmrId = async function (amrId) {
       const v = [];
       for (const branch of def.oneOf) { if (Array.isArray(branch.enum)) v.push(...branch.enum); }
       if (v.length > 0) values = v;
+    } else if (def.type === 'array') {
+      type = 'array';
     } else if (def.type === 'object' && def.properties) {
       type = 'object';
     } else if (Array.isArray(def.enum) && def.enum.length) {

@@ -473,6 +473,22 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
     }
   }
 
+  if (template.image_uploads_json && typeof template.image_uploads_json === 'string') {
+    try {
+      template.image_uploads_json = JSON.parse(template.image_uploads_json);
+    } catch (err) {
+      logger.error('Error parsing image_uploads_json:', { error: err.message, value: template.image_uploads_json });
+    }
+  }
+
+  if (template.video_uploads_json && typeof template.video_uploads_json === 'string') {
+    try {
+      template.video_uploads_json = JSON.parse(template.video_uploads_json);
+    } catch (err) {
+      logger.error('Error parsing video_uploads_json:', { error: err.message, value: template.video_uploads_json });
+    }
+  }
+
   if (Array.isArray(template.image_input_fields_json)) {
     template.image_input_fields_json.forEach(field => {
       if (field.reference_image && field.reference_image.asset_key) {
@@ -1932,8 +1948,10 @@ exports.createDraftTemplate = async function (req, res) {
     });
 
   } catch (error) {
-    logger.error('Error creating draft template:', { error: error.message, stack: error.stack });
-    TemplateErrorHandler.handleTemplateErrors(error, res);
+    TemplateErrorHandler.handleTemplateErrors(error, res, {
+      route: 'POST /templates/draft',
+      templateInsertFieldKeys: Object.keys(templateData || {}).sort()
+    });
   }
 };
 

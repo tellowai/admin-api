@@ -8,7 +8,7 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 
 /**
- * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf structure).
+ * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf/array structure).
  * Changes only in title, description, widget config, or validation constraints do NOT trigger version bump.
  */
 function parameterSchemaVersioningRelevant(schema) {
@@ -25,6 +25,11 @@ function parameterSchemaVersioningRelevant(schema) {
       const nested = parameterSchemaVersioningRelevant({ properties: def.properties, required: def.required });
       entry.properties = nested.properties;
       if (nested.required.length) entry.requiredKeys = nested.required;
+    }
+    if (def.type === 'array' && def.items && typeof def.items === 'object') {
+      entry.items = itemsVersioningRelevant(def.items);
+      if (def.minItems != null) entry.minItems = Number(def.minItems);
+      if (def.maxItems != null) entry.maxItems = Number(def.maxItems);
     }
     if (Array.isArray(def.oneOf) && def.oneOf.length) {
       entry.oneOf = def.oneOf.map(b => {
@@ -43,6 +48,37 @@ function parameterSchemaVersioningRelevant(schema) {
     result.properties[key] = entry;
   }
   return result;
+}
+
+/**
+ * Extract versioning-relevant part of an `items` schema for an array property.
+ * Supports primitive, enum, object (nested properties), and oneOf branches.
+ */
+function itemsVersioningRelevant(items) {
+  if (!items || typeof items !== 'object') return { type: 'string' };
+  const out = { type: items.type || (Array.isArray(items.oneOf) && items.oneOf.length ? 'oneOf' : 'string') };
+  if (items.default !== undefined) out.default = items.default;
+  if (Array.isArray(items.enum)) out.enum = [...items.enum].sort();
+  if (items.type === 'object' && items.properties && typeof items.properties === 'object') {
+    const nested = parameterSchemaVersioningRelevant({ properties: items.properties, required: items.required });
+    out.properties = nested.properties;
+    if (nested.required.length) out.requiredKeys = nested.required;
+  }
+  if (Array.isArray(items.oneOf) && items.oneOf.length) {
+    out.oneOf = items.oneOf.map(b => {
+      if (!b || typeof b !== 'object') return { type: 'string' };
+      const n = { type: b.type || 'string' };
+      if (b.default !== undefined) n.default = b.default;
+      if (Array.isArray(b.enum)) n.enum = [...b.enum].sort();
+      if (b.type === 'object' && b.properties) {
+        const nested = parameterSchemaVersioningRelevant({ properties: b.properties, required: b.required });
+        n.properties = nested.properties;
+        if (nested.required.length) n.requiredKeys = nested.required;
+      }
+      return n;
+    });
+  }
+  return out;
 }
 
 /**

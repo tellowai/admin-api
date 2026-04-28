@@ -34,12 +34,15 @@ exports.getOrdersStatusDaily = async function (req, res) {
     const startCal = toCalendarDate(q.start_date);
     const endCal = toCalendarDate(q.end_date);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
+    const paymentGateway =
+      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
 
     const data = await OrdersAnalyticsModel.getOrdersStatusDaily({
       startCal,
       endCal,
       tz,
-      productType: productType || undefined
+      productType: productType || undefined,
+      paymentGateway: paymentGateway || undefined
     });
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data });
@@ -61,12 +64,15 @@ exports.getOrdersStatusSummary = async function (req, res) {
     const startCal = toCalendarDate(q.start_date);
     const endCal = toCalendarDate(q.end_date);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
+    const paymentGateway =
+      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
 
     const summary = await OrdersAnalyticsModel.getOrdersStatusSummary({
       startCal,
       endCal,
       tz,
-      productType: productType || undefined
+      productType: productType || undefined,
+      paymentGateway: paymentGateway || undefined
     });
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });
