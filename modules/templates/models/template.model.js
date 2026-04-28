@@ -667,6 +667,7 @@ exports.getTemplateById = async function (templateId) {
       status,
       android_status,
       ios_status,
+      web_status,
       workflow_builder_version,
       created_at
     FROM templates
@@ -756,6 +757,7 @@ exports.getTemplateByCode = async function (templateCode) {
       status,
       android_status,
       ios_status,
+      web_status,
       created_at
     FROM templates
     WHERE template_code = ?
