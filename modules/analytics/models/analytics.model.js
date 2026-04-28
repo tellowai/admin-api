@@ -973,6 +973,66 @@ error_category,
     return result.data || [];
   }
 
+  /**
+   * UTC timestamp predicates on analytics_events_raw.timestamp (DateTime64).
+   * Matches the pattern used for payment-failure raw queries.
+   */
+  static buildRawUtcTimestampConditions(startDate, endDate) {
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
+    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+    return [
+      `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`
+    ];
+  }
+
+  /**
+   * Sum template views in date range, grouped by template_id (hub: template_daily_stats).
+   */
+  static async getTemplateViewsSumByTemplateId(whereConditions) {
+    const query = `
+      SELECT
+        template_id,
+        sum(views) AS views
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+        AND template_id != ''
+      GROUP BY template_id
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Completed orders with template attribution from analytics_events_raw.
+   *
+   * Returns one row per (template_id, currency) so callers can compute revenue
+   * without blending currencies. Currency comparison across rows requires FX
+   * normalisation; mixing INR + USD in a single sum() would silently produce
+   * a meaningless number that's neither rupees nor dollars.
+   *
+   * Revenue uses properties.amount (stringified by insertOrderLifecycleEvent).
+   */
+  static async getOrderCompletedStatsByTemplateIdRaw(timestampConditions) {
+    const query = `
+      SELECT
+        properties['template_id'] AS template_id,
+        upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
+        count() AS purchases,
+        sum(toFloat64OrZero(properties['amount'])) AS revenue
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE object_type = 'order'
+        AND event_name = 'order_completed'
+        AND properties['template_id'] != ''
+        AND ${timestampConditions.join(' AND ')}
+      GROUP BY properties['template_id'], currency
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryTechHealthStoreVsCountry(whereConditions, limit = 50) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 100);
     const query = `

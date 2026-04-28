@@ -183,6 +183,9 @@ exports.getTemplatesByIdsForAnalytics = async function (templateIds) {
       template_code,
       template_gender,
       template_output_type,
+      alacarte_price,
+      alacarte_original_price,
+      credits,
       thumb_frame_bucket,
       thumb_frame_asset_key,
       cf_r2_url

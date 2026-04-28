@@ -345,6 +345,33 @@ class AnalyticsController {
     }
   }
 
+  /** Per-template_id views vs attributed order_completed revenue (same date window). */
+  static async getTemplateConversionMetrics(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+      const data = await AnalyticsService.getTemplateConversionMetrics({
+        ...utcFilters,
+        limit: queryParams.limit
+      });
+      return res.status(HTTP_STATUS_CODES.OK).json({ data });
+    } catch (error) {
+      logger.error('Error fetching template conversion metrics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
   static async getCharacterAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;

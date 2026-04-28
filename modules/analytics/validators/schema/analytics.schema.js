@@ -34,7 +34,9 @@ const templateAnalyticsSchema = Joi.object().keys({
   template_id: Joi.string().optional(),
   user_id: Joi.string().optional(),
   group_by: Joi.string().valid('output_type', 'aspect_ratio', 'orientation', 'generation_type').optional(),
-  tz: Joi.string().optional()
+  tz: Joi.string().optional(),
+  /** Max rows for per-template conversion table (default 200). */
+  limit: Joi.number().integer().min(1).max(500).optional()
 });
 
 const templateTopByGenerationSchema = Joi.object().keys({

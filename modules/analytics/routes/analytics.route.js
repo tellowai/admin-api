@@ -81,6 +81,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/templates/conversion-metrics'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplateAnalyticsQuery,
+    AnalyticsCtrl.getTemplateConversionMetrics
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/templates/summary'
   ).get(
     AuthMiddleware.isAuthorizedJWT,
