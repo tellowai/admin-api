@@ -167,6 +167,71 @@ class TimezoneService {
   }
 
   /**
+   * Raw HTTP `req.query` value: always a string in Express, may be an array for duplicate keys.
+   * @param {string|string[]|undefined} value
+   * @returns {string}
+   */
+  static _firstQueryString(value) {
+    if (value == null || value === '') return '';
+    if (Array.isArray(value)) {
+      return value[0] == null || value[0] === '' ? '' : String(value[0]).trim();
+    }
+    return String(value).trim();
+  }
+
+  /**
+   * Client calendar YYYY-MM-DD from the *exact* string the browser sent (same as orders `toCalendarDate`):
+   * never use a Joi-coerced `Date` here — the server TZ would not match the admin UI.
+   *
+   * @param {string|string[]|undefined} queryParam
+   * @returns {string}
+   */
+  static toCalendarYmdFromHttpParam(queryParam) {
+    const s = this._firstQueryString(queryParam);
+    if (!s) return '';
+    return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
+  }
+
+  /**
+   * YYYY-MM-DD from query string or Date (same idea as `toCalendarDate` in orders analytics).
+   * @param {string|Date} input
+   * @returns {string}
+   */
+  static toCalendarYmd(input) {
+    if (input == null || input === '') return '';
+    if (input instanceof Date) {
+      return moment(input).format('YYYY-MM-DD');
+    }
+    const s = String(input).trim();
+    if (!s) return '';
+    return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
+  }
+
+  /** IANA normalisation (e.g. Asia/Calcutta → Asia/Kolkata; matches orders SQL expectations). */
+  static normalizeTimezoneAlias(tz) {
+    const ALIASES = { 'Asia/Calcutta': 'Asia/Kolkata' };
+    const t = tz && String(tz).trim() ? String(tz).trim() : 'UTC';
+    return ALIASES[t] || t;
+  }
+
+  /**
+   * Inclusive UTC bounds for a client "calendar" date range, for `analytics_events_raw.timestamp`
+   * (DateTime64 UTC) — same semantics as orders admin `utcRangeForCalendarDays` / MySQL funnel.
+   *
+   * @param {string} startYmd YYYY-MM-DD (client calendar, first day)
+   * @param {string} endYmd YYYY-MM-DD (inclusive, last day)
+   * @param {string} tz IANA
+   * @returns {{ rangeStartUtc: string, rangeEndUtc: string }} e.g. for toDateTime64('...', 3, 'UTC')
+   */
+  static utcRangeForClientCalendar(startYmd, endYmd, tzRaw) {
+    const t = this.normalizeTimezoneAlias(tzRaw);
+    const z = moment.tz.zone(t) != null ? t : 'UTC';
+    const rangeStartUtc = moment.tz(`${startYmd} 00:00:00.000`, z).utc().format('YYYY-MM-DD HH:mm:ss.SSS');
+    const rangeEndUtc = moment.tz(`${endYmd} 23:59:59.999`, z).utc().format('YYYY-MM-DD HH:mm:ss.SSS');
+    return { rangeStartUtc, rangeEndUtc };
+  }
+
+  /**
    * Validate timezone string
    * @param {string} timezone - Timezone string to validate
    * @returns {boolean} - True if valid timezone

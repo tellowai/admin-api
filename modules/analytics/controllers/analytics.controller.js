@@ -1654,18 +1654,11 @@ class AnalyticsController {
   }
 
   /**
-   * Order funnel from analytics_events_raw (ClickHouse / Hub) — daily series.
-   * Supports app_version; product_type maps to event properties['product_classification'].
+   * Same calendar bounds as `/admin/orders/analytics/*` (client YMD + tz), not `convertToUTC`
+   * (which is optimized for MV `report_date` and can skew raw `timestamp` windows).
    */
   static _buildOrdersFunnelClickhouseArgs(queryParams) {
     const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-    const utcFilters = TimezoneService.convertToUTC(
-      queryParams.start_date,
-      queryParams.end_date,
-      null,
-      null,
-      timezone
-    );
     const additional = {};
     if (queryParams.product_type != null && String(queryParams.product_type).trim() !== '') {
       additional.product_type = String(queryParams.product_type).trim();
@@ -1676,14 +1669,21 @@ class AnalyticsController {
     if (queryParams.app_version != null && String(queryParams.app_version).trim() !== '') {
       additional.app_version = String(queryParams.app_version).trim();
     }
-    return { utcFilters, additional, timezone };
+    return { additional, timezone };
   }
 
   static async getOrdersFunnelClickhouseDaily(req, res) {
     try {
       const q = req.validatedQuery;
-      const { utcFilters, additional, timezone } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
-      const data = await AnalyticsService.getOrdersFunnelClickhouseDaily(utcFilters, additional, timezone);
+      const { additional, timezone } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
+      // Use raw query strings: Joi's `.date()` coerces to `Date` and would skew YMD in non-UI TZs.
+      const startCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.start_date);
+      const endCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.end_date);
+      const data = await AnalyticsService.getOrdersFunnelClickhouseDaily(
+        { start_date: startCal, end_date: endCal },
+        additional,
+        timezone
+      );
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || { created: [], completed: [] } });
     } catch (error) {
       logger.error('Error fetching orders funnel (ClickHouse) daily:', { error: error.message, query: req.validatedQuery });
@@ -1694,8 +1694,14 @@ class AnalyticsController {
   static async getOrdersFunnelClickhouseSummary(req, res) {
     try {
       const q = req.validatedQuery;
-      const { utcFilters, additional } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
-      const data = await AnalyticsService.getOrdersFunnelClickhouseSummary(utcFilters, additional);
+      const { additional, timezone } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
+      const startCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.start_date);
+      const endCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.end_date);
+      const data = await AnalyticsService.getOrdersFunnelClickhouseSummary(
+        { start_date: startCal, end_date: endCal },
+        additional,
+        timezone
+      );
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || {} });
     } catch (error) {
       logger.error('Error fetching orders funnel (ClickHouse) summary:', { error: error.message, query: req.validatedQuery });

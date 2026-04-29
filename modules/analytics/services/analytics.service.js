@@ -2,6 +2,7 @@
 
 const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
+const TimezoneService = require('./timezone.service');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
 /** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). Defensive: query now uses countIf to return NULL, but parser still normalizes any sentinel. */
@@ -198,37 +199,42 @@ class AnalyticsService {
   }
 
   /**
-   * WHERE for order lifecycle events in `analytics_events_raw` (order_created,
-   * order_completed, order_failed). Same timestamp window as other raw queries;
-   * optional `product_type` maps to `properties['product_classification']` (aligns
-   * with the mobile order event payload, not MySQL `payment_plans` ids).
+   * Predicate split for `analytics_events_raw` order lifecycle reads.
+   * `rangeStartUtc` / `rangeEndUtc` must be the same inclusive UTC window as the admin
+   * orders API (`utcRangeForClientCalendar` = first **client** day 00:00 through last
+   * day 23:59:59.999, expressed in UTC for `toDateTime64(..., 'UTC')`).
+   *
+   * MergeTree: ORDER BY (event_name, object_type, timestamp). Map filters in WHERE.
    */
-  static buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters = {}) {
-    const startMs = new Date(start_date).getTime();
-    const endMs = new Date(end_date).getTime();
-    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
-    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+  static buildOrderLifecycleRawSplit(rangeStartUtc, rangeEndUtc, additionalFilters = {}, eventNames = []) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(rangeStartUtc);
+    const endEsc = esc(rangeEndUtc);
+    const names = (eventNames || []).map((e) => esc(e)).filter(Boolean);
+    if (!names.length) {
+      throw new Error('buildOrderLifecycleRawSplit: eventNames must be non-empty');
+    }
+    const inList = names.map((e) => `'${e}'`).join(', ');
 
-    const conditions = [
-      `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
-      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`,
-      'object_type = \'order\''
+    const prewhere = [
+      `event_name IN (${inList})`,
+      `object_type = 'order'`,
+      `timestamp >= toDateTime64('${startEsc}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endEsc}', 3, 'UTC')`
     ];
 
+    const where = [];
     const { payment_gateway, app_version, product_type } = additionalFilters;
     if (app_version != null && String(app_version).trim() !== '') {
-      const v = String(app_version).replace(/'/g, "''");
-      conditions.push(`app_version = '${v}'`);
+      prewhere.push(`app_version = '${esc(String(app_version))}'`);
     }
     if (payment_gateway != null && String(payment_gateway).trim() !== '') {
-      const v = String(payment_gateway).replace(/'/g, "''");
-      conditions.push(`properties['payment_gateway'] = '${v}'`);
+      where.push(`properties['payment_gateway'] = '${esc(String(payment_gateway))}'`);
     }
     if (product_type != null && String(product_type).trim() !== '') {
-      const v = String(product_type).replace(/'/g, "''");
-      conditions.push(`properties['product_classification'] = '${v}'`);
+      where.push(`properties['product_classification'] = '${esc(String(product_type))}'`);
     }
-    return conditions;
+    return { prewhere, where };
   }
 
   // Build conditions for daily summary tables (single table, date range only)
@@ -1108,10 +1114,24 @@ class AnalyticsService {
    * ClickHouse tab on the payment-failures page.
    */
   static async getOrdersFunnelClickhouseDaily(filters, additionalFilters = {}, clientTimezone = 'UTC') {
-    const { start_date, end_date } = filters;
-    const whereBase = this.buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters);
-    const where = [...whereBase, `event_name IN ('order_created', 'order_completed')`];
-    const rows = await AnalyticsModel.queryOrdersFunnelClickhouseDaily(where, clientTimezone);
+    const startCal = TimezoneService.toCalendarYmd(filters.start_date);
+    const endCal = TimezoneService.toCalendarYmd(filters.end_date);
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(
+      startCal,
+      endCal,
+      clientTimezone
+    );
+    const { prewhere, where } = this.buildOrderLifecycleRawSplit(
+      rangeStartUtc,
+      rangeEndUtc,
+      additionalFilters,
+      ['order_created', 'order_completed']
+    );
+    const rows = await AnalyticsModel.queryOrdersFunnelClickhouseDaily(
+      prewhere,
+      where,
+      clientTimezone
+    );
     const created = (rows || []).map((r) => ({
       date: r.date,
       count: Number(r.created_cnt) || 0
@@ -1123,14 +1143,21 @@ class AnalyticsService {
     return { created, completed };
   }
 
-  static async getOrdersFunnelClickhouseSummary(filters, additionalFilters = {}) {
-    const { start_date, end_date } = filters;
-    const whereBase = this.buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters);
-    const where = [
-      ...whereBase,
-      `event_name IN ('order_created', 'order_completed', 'order_failed')`
-    ];
-    const row = await AnalyticsModel.queryOrdersFunnelClickhouseSummary(where);
+  static async getOrdersFunnelClickhouseSummary(filters, additionalFilters = {}, clientTimezone = 'UTC') {
+    const startCal = TimezoneService.toCalendarYmd(filters.start_date);
+    const endCal = TimezoneService.toCalendarYmd(filters.end_date);
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(
+      startCal,
+      endCal,
+      clientTimezone
+    );
+    const { prewhere, where } = this.buildOrderLifecycleRawSplit(
+      rangeStartUtc,
+      rangeEndUtc,
+      additionalFilters,
+      ['order_created', 'order_completed', 'order_failed']
+    );
+    const row = await AnalyticsModel.queryOrdersFunnelClickhouseSummary(prewhere, where);
     const created_count = Number(row?.created_count) || 0;
     const completed_count = Number(row?.completed_count) || 0;
     const failed_count = Number(row?.failed_count) || 0;

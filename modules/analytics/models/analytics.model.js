@@ -1008,14 +1008,11 @@ error_category,
   /**
    * Completed orders with template attribution from analytics_events_raw.
    *
-   * Returns one row per (template_id, currency) so callers can compute revenue
-   * without blending currencies. Currency comparison across rows requires FX
-   * normalisation; mixing INR + USD in a single sum() would silently produce
-   * a meaningless number that's neither rupees nor dollars.
-   *
-   * Revenue uses properties.amount (stringified by insertOrderLifecycleEvent).
+   * PREWHERE: event_name, object_type, timestamp — matches MergeTree ORDER BY.
+   * WHERE: Map predicate only (fewer rows read from properties).
    */
   static async getOrderCompletedStatsByTemplateIdRaw(timestampConditions) {
+    const ts = (timestampConditions || []).join(' AND ');
     const query = `
       SELECT
         properties['template_id'] AS template_id,
@@ -1023,10 +1020,10 @@ error_category,
         count() AS purchases,
         sum(toFloat64OrZero(properties['amount'])) AS revenue
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      WHERE object_type = 'order'
-        AND event_name = 'order_completed'
-        AND properties['template_id'] != ''
-        AND ${timestampConditions.join(' AND ')}
+      PREWHERE event_name = 'order_completed'
+        AND object_type = 'order'
+        AND ${ts}
+      WHERE properties['template_id'] != ''
       GROUP BY properties['template_id'], currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -1053,8 +1050,14 @@ error_category,
 
   /**
    * Per-calendar-day (client IANA tz) created vs completed from analytics_events_raw.
+   * PREWHERE: event_name, object_type, timestamp, optional app_version — aligned with
+   * MergeTree ORDER BY (event_name, object_type, timestamp). Map filters in WHERE.
    */
-  static async queryOrdersFunnelClickhouseDaily(whereConditions, clientTz) {
+  static async queryOrdersFunnelClickhouseDaily(prewhereParts, whereParts, clientTz) {
+    const pre = (prewhereParts && prewhereParts.length) ? prewhereParts.join(' AND ') : '1';
+    const whereClauses = (whereParts && whereParts.length) ? whereParts.join(' AND ') : null;
+    const whereSql = whereClauses != null && whereClauses.length ? `WHERE ${whereClauses}` : '';
+
     const tzRaw = String(clientTz || 'UTC').trim() || 'UTC';
     const tzEsc = tzRaw.replace(/'/g, "''");
     const query = `
@@ -1063,22 +1066,28 @@ error_category,
         countIf(event_name = 'order_created') AS created_cnt,
         countIf(event_name = 'order_completed') AS completed_cnt
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      WHERE ${whereConditions.join(' AND ')}
-      GROUP BY date
-      ORDER BY date ASC
+      PREWHERE ${pre}
+      ${whereSql}
+      GROUP BY 1
+      ORDER BY 1 ASC
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
 
-  static async queryOrdersFunnelClickhouseSummary(whereConditions) {
+  static async queryOrdersFunnelClickhouseSummary(prewhereParts, whereParts) {
+    const pre = (prewhereParts && prewhereParts.length) ? prewhereParts.join(' AND ') : '1';
+    const whereClauses = (whereParts && whereParts.length) ? whereParts.join(' AND ') : null;
+    const whereSql = whereClauses != null && whereClauses.length ? `WHERE ${whereClauses}` : '';
+
     const query = `
       SELECT
         countIf(event_name = 'order_created') AS created_count,
         countIf(event_name = 'order_completed') AS completed_count,
         countIf(event_name = 'order_failed') AS failed_count
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      WHERE ${whereConditions.join(' AND ')}
+      PREWHERE ${pre}
+      ${whereSql}
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0] || null;
