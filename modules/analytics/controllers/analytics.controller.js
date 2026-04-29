@@ -1652,6 +1652,56 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  /**
+   * Order funnel from analytics_events_raw (ClickHouse / Hub) — daily series.
+   * Supports app_version; product_type maps to event properties['product_classification'].
+   */
+  static _buildOrdersFunnelClickhouseArgs(queryParams) {
+    const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+    const utcFilters = TimezoneService.convertToUTC(
+      queryParams.start_date,
+      queryParams.end_date,
+      null,
+      null,
+      timezone
+    );
+    const additional = {};
+    if (queryParams.product_type != null && String(queryParams.product_type).trim() !== '') {
+      additional.product_type = String(queryParams.product_type).trim();
+    }
+    if (queryParams.payment_gateway != null && String(queryParams.payment_gateway).trim() !== '') {
+      additional.payment_gateway = String(queryParams.payment_gateway).trim();
+    }
+    if (queryParams.app_version != null && String(queryParams.app_version).trim() !== '') {
+      additional.app_version = String(queryParams.app_version).trim();
+    }
+    return { utcFilters, additional, timezone };
+  }
+
+  static async getOrdersFunnelClickhouseDaily(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional, timezone } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
+      const data = await AnalyticsService.getOrdersFunnelClickhouseDaily(utcFilters, additional, timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || { created: [], completed: [] } });
+    } catch (error) {
+      logger.error('Error fetching orders funnel (ClickHouse) daily:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getOrdersFunnelClickhouseSummary(req, res) {
+    try {
+      const q = req.validatedQuery;
+      const { utcFilters, additional } = AnalyticsController._buildOrdersFunnelClickhouseArgs(q);
+      const data = await AnalyticsService.getOrdersFunnelClickhouseSummary(utcFilters, additional);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: data || {} });
+    } catch (error) {
+      logger.error('Error fetching orders funnel (ClickHouse) summary:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;

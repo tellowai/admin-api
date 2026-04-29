@@ -419,4 +419,21 @@ module.exports = function(app) {
     AnalyticsCtrl.getPaymentFailuresSamples
   );
 
+  // Order funnel from analytics_events_raw (Hub) — payment-failures “ClickHouse” tab
+  app.route(
+    versionConfig.routePrefix + '/analytics/orders-funnel/clickhouse/daily'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateOrdersFunnelClickhouseQuery,
+    AnalyticsCtrl.getOrdersFunnelClickhouseDaily
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/orders-funnel/clickhouse/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateOrdersFunnelClickhouseQuery,
+    AnalyticsCtrl.getOrdersFunnelClickhouseSummary
+  );
+
 };

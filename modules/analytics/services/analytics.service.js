@@ -197,6 +197,40 @@ class AnalyticsService {
     return conditions;
   }
 
+  /**
+   * WHERE for order lifecycle events in `analytics_events_raw` (order_created,
+   * order_completed, order_failed). Same timestamp window as other raw queries;
+   * optional `product_type` maps to `properties['product_classification']` (aligns
+   * with the mobile order event payload, not MySQL `payment_plans` ids).
+   */
+  static buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters = {}) {
+    const startMs = new Date(start_date).getTime();
+    const endMs = new Date(end_date).getTime();
+    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
+    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+
+    const conditions = [
+      `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`,
+      'object_type = \'order\''
+    ];
+
+    const { payment_gateway, app_version, product_type } = additionalFilters;
+    if (app_version != null && String(app_version).trim() !== '') {
+      const v = String(app_version).replace(/'/g, "''");
+      conditions.push(`app_version = '${v}'`);
+    }
+    if (payment_gateway != null && String(payment_gateway).trim() !== '') {
+      const v = String(payment_gateway).replace(/'/g, "''");
+      conditions.push(`properties['payment_gateway'] = '${v}'`);
+    }
+    if (product_type != null && String(product_type).trim() !== '') {
+      const v = String(product_type).replace(/'/g, "''");
+      conditions.push(`properties['product_classification'] = '${v}'`);
+    }
+    return conditions;
+  }
+
   // Build conditions for daily summary tables (single table, date range only)
   static buildDailyTableConditions(start_date, end_date, additionalFilters = {}) {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
@@ -1066,6 +1100,48 @@ class AnalyticsService {
       searchText
     );
     return AnalyticsModel.queryPaymentFailuresSamples(whereConditions, limit, offset);
+  }
+
+  /**
+   * Order funnel from `analytics_events_raw` (Hub) — supports app_version and
+   * product_classification on events. Used when the admin UI shows the
+   * ClickHouse tab on the payment-failures page.
+   */
+  static async getOrdersFunnelClickhouseDaily(filters, additionalFilters = {}, clientTimezone = 'UTC') {
+    const { start_date, end_date } = filters;
+    const whereBase = this.buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters);
+    const where = [...whereBase, `event_name IN ('order_created', 'order_completed')`];
+    const rows = await AnalyticsModel.queryOrdersFunnelClickhouseDaily(where, clientTimezone);
+    const created = (rows || []).map((r) => ({
+      date: r.date,
+      count: Number(r.created_cnt) || 0
+    }));
+    const completed = (rows || []).map((r) => ({
+      date: r.date,
+      count: Number(r.completed_cnt) || 0
+    }));
+    return { created, completed };
+  }
+
+  static async getOrdersFunnelClickhouseSummary(filters, additionalFilters = {}) {
+    const { start_date, end_date } = filters;
+    const whereBase = this.buildOrderLifecycleRawConditions(start_date, end_date, additionalFilters);
+    const where = [
+      ...whereBase,
+      `event_name IN ('order_created', 'order_completed', 'order_failed')`
+    ];
+    const row = await AnalyticsModel.queryOrdersFunnelClickhouseSummary(where);
+    const created_count = Number(row?.created_count) || 0;
+    const completed_count = Number(row?.completed_count) || 0;
+    const failed_count = Number(row?.failed_count) || 0;
+    const failure_rate_pct =
+      created_count > 0 ? Math.round((failed_count / created_count) * 10000) / 100 : 0;
+    return {
+      created_count,
+      completed_count,
+      failed_count,
+      failure_rate_pct
+    };
   }
 
   /**

@@ -1050,6 +1050,39 @@ error_category,
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  /**
+   * Per-calendar-day (client IANA tz) created vs completed from analytics_events_raw.
+   */
+  static async queryOrdersFunnelClickhouseDaily(whereConditions, clientTz) {
+    const tzRaw = String(clientTz || 'UTC').trim() || 'UTC';
+    const tzEsc = tzRaw.replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        countIf(event_name = 'order_created') AS created_cnt,
+        countIf(event_name = 'order_completed') AS completed_cnt
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryOrdersFunnelClickhouseSummary(whereConditions) {
+    const query = `
+      SELECT
+        countIf(event_name = 'order_created') AS created_count,
+        countIf(event_name = 'order_completed') AS completed_count,
+        countIf(event_name = 'order_failed') AS failed_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
+  }
 }
 
 module.exports = AnalyticsModel;
