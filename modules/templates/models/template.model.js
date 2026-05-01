@@ -1301,7 +1301,7 @@ exports.createClipWorkflowInTransaction = async function (connection, tacId, wor
 };
 
 /**
- * Get or create a single template_ai_clip by (template_id, clip_index).
+ * Get or create a single template_ai_clip by (template_id, clip_index, asset_type).
  * API accepts 0-based clip_index; DB stores 1-based (CHECK clip_index >= 1).
  * Returns { tac_id } for use when clip might not exist yet (e.g. workflow save before template save).
  * Simple queries, no joins.
@@ -1310,9 +1310,9 @@ exports.ensureTemplateAiClip = async function (templateId, clipIndex, assetType 
   const clipIndexDb = clipIndex + 1;
   const existingQuery = `
     SELECT tac_id FROM template_ai_clips
-    WHERE template_id = ? AND clip_index = ? AND deleted_at IS NULL
+    WHERE template_id = ? AND clip_index = ? AND asset_type = ? AND deleted_at IS NULL
   `;
-  const existing = await mysqlQueryRunner.runQueryInSlave(existingQuery, [templateId, clipIndexDb]);
+  const existing = await mysqlQueryRunner.runQueryInSlave(existingQuery, [templateId, clipIndexDb, assetType]);
   if (existing.length > 0) return { tac_id: existing[0].tac_id };
 
   const tacId = uuidv7();
@@ -1345,9 +1345,14 @@ exports.ensureTemplateAiClipsWithWorkflows = async function (templateId, clips, 
  */
 exports.addTemplateClipWithWorkflow = async function (templateId, assetType = 'video', userId) {
   const clips = await this.getTemplateAiClips(templateId);
+  const sameKind = (clips || []).filter((c) =>
+    assetType === 'audio'
+      ? c.asset_type === 'audio'
+      : (c.asset_type === 'image' || c.asset_type === 'video')
+  );
   let nextIndex = 0;
-  if (clips && clips.length > 0) {
-    nextIndex = Math.max(...clips.map(c => c.clip_index || 0));
+  if (sameKind.length > 0) {
+    nextIndex = Math.max(...sameKind.map(c => c.clip_index || 0));
   }
 
   // ensureTemplateAiClip adds 1 internally so passing max clip_index creates max + 1
@@ -1380,6 +1385,7 @@ exports.getTemplateClipSummaries = async function (templateId) {
     SELECT tac_id, clip_index, wf_id
     FROM template_ai_clips
     WHERE template_id = ? AND deleted_at IS NULL
+      AND asset_type IN ('image', 'video')
     ORDER BY clip_index ASC
   `;
   return await mysqlQueryRunner.runQueryInSlave(query, [templateId]);

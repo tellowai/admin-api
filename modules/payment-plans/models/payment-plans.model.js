@@ -80,7 +80,10 @@ exports.getPlanById = async function (planId) {
  */
 exports.getPlansByIds = async function (planIds) {
   if (!planIds || planIds.length === 0) return [];
-  const query = `SELECT pp_id, plan_name, plan_heading, plan_type, tier FROM payment_plans WHERE pp_id IN (?)`;
+  const query = `
+    SELECT pp_id, plan_name, plan_heading, plan_type, tier, billing_interval
+    FROM payment_plans
+    WHERE pp_id IN (?)`;
   return await mysqlQueryRunner.runQueryInSlave(query, [planIds]);
 }
 

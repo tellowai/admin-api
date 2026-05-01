@@ -24,11 +24,15 @@ exports.listActiveModels = async function (req, res) {
   try {
     const rawQ = req.query.q;
     const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
+    const rawOt = req.query.output_type ?? req.query.outputType;
+    const outputType =
+      rawOt != null && String(rawOt).trim() !== '' ? String(rawOt).trim().toLowerCase() : null;
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const modelsRaw = await AiModelRegistryModel.listActiveModels(
       q,
       paginationParams.limit,
-      paginationParams.offset
+      paginationParams.offset,
+      outputType
     );
 
     if (modelsRaw.length === 0) {
@@ -113,11 +117,15 @@ exports.listSystemNodes = async function (req, res) {
   try {
     const rawQ = req.query.q;
     const q = rawQ != null && String(rawQ).trim() !== '' ? String(rawQ).trim() : null;
+    const rawOt = req.query.output_type ?? req.query.outputType;
+    const outputType =
+      rawOt != null && String(rawOt).trim() !== '' ? String(rawOt).trim().toLowerCase() : null;
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const nodesRaw = await AiModelRegistryModel.listSystemNodeDefinitions(
       q,
       paginationParams.limit,
-      paginationParams.offset
+      paginationParams.offset,
+      outputType
     );
 
     if (nodesRaw.length === 0) {

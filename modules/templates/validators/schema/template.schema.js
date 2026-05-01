@@ -40,7 +40,7 @@ const workflowStepSchema = Joi.object({
 // Clip schema for the new structure
 const clipSchema = Joi.object({
   clip_index: Joi.number().integer().min(1).required(),
-  asset_type: Joi.string().valid('image', 'video').default('video'),
+  asset_type: Joi.string().valid('image', 'video', 'audio').default('video'),
   audio_behavior: Joi.string().valid('muted', 'unmuted').default('muted'),
   workflow: Joi.array().items(workflowStepSchema).required().min(1)
 });
@@ -108,7 +108,7 @@ const templateTagSchema = Joi.object({
 // PATCH clips: tac_id + asset_type + optional audio_behavior per item; no extra keys
 const updateTemplateClipsItemSchema = Joi.object({
   tac_id: Joi.string().required(),
-  asset_type: Joi.string().valid('image', 'video').required(),
+  asset_type: Joi.string().valid('image', 'video', 'audio').required(),
   audio_behavior: Joi.string().valid('muted', 'unmuted').optional()
 }).unknown(false);
 
@@ -382,7 +382,7 @@ const importTemplatesSchema = Joi.object().keys({
 // Ensure AI clips: one entry per clip (creates template_ai_clips + workflow per clip)
 const ensureAiClipsClipSchema = Joi.object({
   clip_index: Joi.number().integer().min(0).required(),
-  asset_type: Joi.string().valid('image', 'video').default('video')
+  asset_type: Joi.string().valid('image', 'video', 'audio').default('video')
 });
 
 const ensureAiClipsSchema = Joi.object().keys({
@@ -399,7 +399,7 @@ const reorderClipsSchema = Joi.object().keys({
 });
 
 const addClipSchema = Joi.object({
-  asset_type: Joi.string().valid('image', 'video').default('video')
+  asset_type: Joi.string().valid('image', 'video', 'audio').default('video')
 });
 
 exports.createTemplateSchema = createTemplateSchema;
