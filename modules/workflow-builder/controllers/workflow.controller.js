@@ -171,6 +171,7 @@ async function enrichNodesWithAiModels(nodes) {
       icon: row.icon ?? row.icon_url ?? null,
       color_hex: row.color_hex || '#8b5cf6',
       parameter_schema: parseJsonField(row.parameter_schema),
+      workflow_selection_schema: parseJsonField(row.workflow_selection_schema),
       pricing_config: parseJsonField(row.pricing_config),
       inputs: ioByModel[row.amr_id]?.inputs || [],
       outputs: ioByModel[row.amr_id]?.outputs || []
@@ -263,6 +264,7 @@ async function enrichNodesWithSystemNodes(nodes) {
       icon: row.icon,
       color_hex: row.color_hex,
       config_schema: parseJsonField(row.config_schema),
+      workflow_selection_schema: parseJsonField(row.workflow_selection_schema),
       inputs: ioByNode[row.wsnd_id]?.inputs || [],
       outputs: ioByNode[row.wsnd_id]?.outputs || [],
       version: row.version

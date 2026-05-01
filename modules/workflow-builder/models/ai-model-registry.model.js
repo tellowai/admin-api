@@ -102,6 +102,7 @@ exports.listActiveModels = async function (searchQuery = null, limit = 20, offse
       description,
       icon_url,
       parameter_schema,
+      workflow_selection_schema,
       pricing_config
     FROM ai_model_registry
     WHERE status = 'active' AND archived_at IS NULL
@@ -171,6 +172,7 @@ exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
       description,
       icon_url,
       parameter_schema,
+      workflow_selection_schema,
       pricing_config
     FROM ai_model_registry
     WHERE amr_id IN (${placeholders})
@@ -242,7 +244,8 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 
       description,
       icon,
       color_hex,
-      config_schema
+      config_schema,
+      workflow_selection_schema
     FROM workflow_system_node_definitions
     WHERE status = 'active'
   `;
@@ -304,6 +307,7 @@ exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, 
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       status,
       version,
       archived_at,
@@ -343,6 +347,7 @@ exports.getSystemNodeDefinitionById = async function (wsndId) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       status,
       version,
       archived_at,
@@ -372,6 +377,7 @@ exports.getSystemNodeDefinitionsByIds = async function (wsndIds) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       version
     FROM workflow_system_node_definitions
     WHERE wsnd_id IN (${placeholders})
@@ -475,6 +481,7 @@ exports.getSystemNodeDefinitionsBySlugs = async function (slugs) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       version
     FROM workflow_system_node_definitions
     WHERE type_slug IN (${placeholders}) AND status = 'active'

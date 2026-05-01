@@ -42,6 +42,7 @@ exports.listActiveModels = async function (req, res) {
     const models = modelsRaw.map(m => ({
       ...m,
       parameter_schema: parseJsonField(m.parameter_schema),
+      workflow_selection_schema: parseJsonField(m.workflow_selection_schema),
       pricing_config: parseJsonField(m.pricing_config)
     }));
 
@@ -92,6 +93,7 @@ exports.listActiveModels = async function (req, res) {
       inputs: ioByModel[model.amr_id]?.inputs || [],
       outputs: ioByModel[model.amr_id]?.outputs || [],
       parameter_schema: model.parameter_schema,
+      workflow_selection_schema: model.workflow_selection_schema || null,
       pricing_config: model.pricing_config
     }));
 
@@ -134,7 +136,8 @@ exports.listSystemNodes = async function (req, res) {
 
     const nodes = nodesRaw.map(n => ({
       ...n,
-      config_schema: parseJsonField(n.config_schema)
+      config_schema: parseJsonField(n.config_schema),
+      workflow_selection_schema: parseJsonField(n.workflow_selection_schema)
     }));
 
     const nodeIds = nodes.map(n => n.wsnd_id);
@@ -178,6 +181,7 @@ exports.listSystemNodes = async function (req, res) {
       icon: node.icon,
       color_hex: node.color_hex,
       config_schema: node.config_schema,
+      workflow_selection_schema: node.workflow_selection_schema || null,
       inputs: ioByNode[node.wsnd_id]?.inputs || [],
       outputs: ioByNode[node.wsnd_id]?.outputs || []
     }));
@@ -212,7 +216,8 @@ exports.listSystemNodeDefinitionsAdmin = async function (req, res) {
     );
     const nodes = nodesRaw.map(n => ({
       ...n,
-      config_schema: parseJsonField(n.config_schema)
+      config_schema: parseJsonField(n.config_schema),
+      workflow_selection_schema: parseJsonField(n.workflow_selection_schema)
     }));
     return res.status(HTTP_STATUS_CODES.OK).json(nodes);
   } catch (error) {
@@ -234,7 +239,8 @@ exports.getSystemNodeDefinitionById = async function (req, res) {
 
     const node = {
       ...nodeRow,
-      config_schema: parseJsonField(nodeRow.config_schema)
+      config_schema: parseJsonField(nodeRow.config_schema),
+      workflow_selection_schema: parseJsonField(nodeRow.workflow_selection_schema)
     };
 
     const [ioRows, socketTypes] = await Promise.all([
@@ -265,6 +271,15 @@ function prepareSystemNodeDefinitionPayload(body) {
     data.config_schema = typeof body.config_schema === 'object'
       ? JSON.stringify(body.config_schema)
       : (body.config_schema || '{}');
+  }
+  if (body.workflow_selection_schema !== undefined) {
+    if (body.workflow_selection_schema === null || body.workflow_selection_schema === '') {
+      data.workflow_selection_schema = null;
+    } else {
+      data.workflow_selection_schema = typeof body.workflow_selection_schema === 'object'
+        ? JSON.stringify(body.workflow_selection_schema)
+        : String(body.workflow_selection_schema);
+    }
   }
   if (body.status !== undefined) data.status = body.status;
   if (body.version !== undefined) data.version = body.version;
@@ -307,7 +322,8 @@ exports.createSystemNodeDefinition = async function (req, res) {
     }
     const out = {
       ...created,
-      config_schema: parseJsonField(created.config_schema)
+      config_schema: parseJsonField(created.config_schema),
+      workflow_selection_schema: parseJsonField(created.workflow_selection_schema)
     };
     return res.status(HTTP_STATUS_CODES.CREATED).json(out);
   } catch (error) {
@@ -375,6 +391,25 @@ exports.updateSystemNodeDefinition = async function (req, res) {
           if (newSchemaStr !== '{}' || existingSchemaStr !== '{}') {
             needsVersioning = true;
           }
+        }
+      }
+
+      // 1b. Workflow selections catalog (creator presets)
+      if (!needsVersioning && Object.prototype.hasOwnProperty.call(nodeData, 'workflow_selection_schema')) {
+        const newWs =
+          nodeData.workflow_selection_schema == null
+            ? 'null'
+            : typeof nodeData.workflow_selection_schema === 'string'
+              ? nodeData.workflow_selection_schema
+              : JSON.stringify(nodeData.workflow_selection_schema);
+        const existingWs =
+          existingNode.workflow_selection_schema == null || existingNode.workflow_selection_schema === ''
+            ? 'null'
+            : typeof existingNode.workflow_selection_schema === 'string'
+              ? existingNode.workflow_selection_schema
+              : JSON.stringify(existingNode.workflow_selection_schema);
+        if (newWs !== existingWs) {
+          needsVersioning = true;
         }
       }
 
@@ -519,7 +554,8 @@ exports.updateSystemNodeDefinition = async function (req, res) {
       const updated = rows[0] || null;
       return res.status(HTTP_STATUS_CODES.OK).json({
         ...updated,
-        config_schema: parseJsonField(updated ? updated.config_schema : null)
+        config_schema: parseJsonField(updated ? updated.config_schema : null),
+        workflow_selection_schema: parseJsonField(updated ? updated.workflow_selection_schema : null)
       });
     }
 
