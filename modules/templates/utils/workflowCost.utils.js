@@ -29,19 +29,24 @@ const DEFAULTS = {
   input: {
     text: { per_million_tokens: 0 },
     image: { first_megapixel: 0, per_additional_megapixel: 0 },
-    video: { per_second: 0 }
+    video: { per_second: 0 },
+    audio: { per_minute: 0.01 }
   },
   output: {
     image: { first_megapixel: 0.04, per_additional_megapixel: 0.04 },
     video: { per_second_720p: 0.05, per_5s_segment: 0.25 },
-    text: { per_million_tokens: 0.01 }
+    text: { per_million_tokens: 0.01 },
+    audio: { price: 0.05, seconds: 60 }
   }
 };
 
 const ASSUMED_PER_RUN = {
   text_tokens_million: 0.001,
   image_megapixels: 1,
-  video_seconds: 5
+  video_seconds: 5,
+  audio_input_tokens_million: 0.001,
+  audio_output_tokens_million: 0.001,
+  audio_seconds: 60
 };
 
 function segmentKeyToSeconds(key) {
@@ -163,6 +168,40 @@ function getNumber(val) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function audioPricingBasis(pc) {
+  const cap = pc?.capabilities?.audio_pricing_basis;
+  if (cap === 'tokens' || cap === 'duration') return cap;
+  const outA = pc?.output?.audio;
+  const inA = pc?.input?.audio;
+  const tokenLike =
+    (outA && outA.per_million_tokens != null && outA.per_million_tokens !== '') ||
+    (inA && inA.per_million_tokens != null && inA.per_million_tokens !== '');
+  return tokenLike ? 'tokens' : 'duration';
+}
+
+function resolveAudioSecondsForEstimate(node, pc) {
+  const cv = node?.data?.config_values ?? node?.config_values ?? {};
+  const fromConfig = extractDurationSecondsFromConfig(cv);
+  if (fromConfig != null) return fromConfig;
+  const block = getNumber(pc?.output?.audio?.seconds);
+  if (block > 0) return block;
+  return ASSUMED_PER_RUN.audio_seconds;
+}
+
+function pricingDefinesOutputsForTypes(pc, outputTypes = []) {
+  const out = pc?.output;
+  if (!out || typeof out !== 'object') return false;
+  const tl = (outputTypes || []).map(t => (t || '').toLowerCase());
+  if (tl.includes('audio') && out.audio && typeof out.audio === 'object' && Object.keys(out.audio).length > 0) {
+    return true;
+  }
+  if (tl.includes('text') && out.text && typeof out.text === 'object') return true;
+  if (tl.includes('image') && out.image && typeof out.image === 'object') return true;
+  const hasVid = tl.some(s => s === 'video' || s === 'video_with_audio' || s === 'video_without_audio');
+  if (hasVid && (out.video_with_audio || out.video_without_audio)) return true;
+  return false;
+}
+
 function inputCostFromPricing(pc, node) {
   let cost = 0;
   const input = pc?.input;
@@ -179,6 +218,15 @@ function inputCostFromPricing(pc, node) {
     const vSec = resolveVideoOutputDurationSeconds(node, pc, null);
     cost += getNumber(input.video.per_second) * vSec;
   }
+  if (input.audio != null && typeof input.audio === 'object') {
+    const basis = audioPricingBasis(pc);
+    if (basis === 'tokens') {
+      cost += getNumber(input.audio.per_million_tokens) * ASSUMED_PER_RUN.audio_input_tokens_million;
+    } else {
+      const sec = resolveAudioSecondsForEstimate(node, pc);
+      cost += getNumber(input.audio.per_minute) * (sec / 60);
+    }
+  }
   return cost;
 }
 
@@ -188,11 +236,10 @@ function outputCostFromPricing(pc, outputTypes, node) {
   if (!output || typeof output !== 'object') return cost;
 
   const hasImage = (outputTypes || []).some(t => (t || '').toLowerCase() === 'image');
-  const hasVideo = (outputTypes || []).some(t => {
-    const s = (t || '').toLowerCase();
-    return s === 'video' || s === 'video_with_audio' || s === 'video_without_audio';
-  });
+  const types = (outputTypes || []).map(t => (t || '').toLowerCase());
+  const hasVideo = types.some(s => s === 'video' || s === 'video_with_audio' || s === 'video_without_audio');
   const hasText = (outputTypes || []).some(t => (t || '').toLowerCase() === 'text');
+  const hasAudio = types.includes('audio');
 
   if (hasImage && output.image != null && typeof output.image === 'object') {
     const img = output.image;
@@ -205,7 +252,6 @@ function outputCostFromPricing(pc, outputTypes, node) {
   }
 
   if (hasVideo) {
-    const types = (outputTypes || []).map(t => (t || '').toLowerCase());
     const useWithAudio = types.includes('video_with_audio');
     const useWithoutAudio = types.includes('video_without_audio');
     const useLegacyVideo = types.includes('video') && !useWithAudio && !useWithoutAudio;
@@ -236,6 +282,22 @@ function outputCostFromPricing(pc, outputTypes, node) {
     cost += getNumber(output.text.per_million_tokens) * ASSUMED_PER_RUN.text_tokens_million;
   }
 
+  if (hasAudio && output.audio != null && typeof output.audio === 'object') {
+    const basis = audioPricingBasis(pc);
+    if (basis === 'tokens') {
+      cost += getNumber(output.audio.per_million_tokens) * ASSUMED_PER_RUN.audio_output_tokens_million;
+    } else {
+      const genSec = resolveAudioSecondsForEstimate(node, pc);
+      const blockSec = getNumber(output.audio.seconds);
+      const unit = getNumber(output.audio.price);
+      if (unit > 0 && blockSec > 0) {
+        cost += unit * (genSec / blockSec);
+      } else if (unit > 0) {
+        cost += unit;
+      }
+    }
+  }
+
   return cost;
 }
 
@@ -246,7 +308,12 @@ function outputCostFromDefaults(outputTypes) {
     if (type === 'image') cost += DEFAULTS.output.image.first_megapixel;
     else if (type === 'video' || type === 'video_with_audio' || type === 'video_without_audio') {
       cost += DEFAULTS.output.video.per_5s_segment;
-    } else if (type === 'text') cost += DEFAULTS.output.text.per_million_tokens * ASSUMED_PER_RUN.text_tokens_million;
+    }     else if (type === 'text') cost += DEFAULTS.output.text.per_million_tokens * ASSUMED_PER_RUN.text_tokens_million;
+    else if (type === 'audio') {
+      const a = DEFAULTS.output.audio;
+      const block = Math.max(getNumber(a.seconds), 1);
+      cost += getNumber(a.price) * (ASSUMED_PER_RUN.audio_seconds / block);
+    }
   }
   return cost;
 }
@@ -258,6 +325,9 @@ function inputCostFromDefaults(inputTypes) {
     if (type === 'text') cost += DEFAULTS.input.text.per_million_tokens * ASSUMED_PER_RUN.text_tokens_million;
     else if (type === 'image') cost += DEFAULTS.input.image.first_megapixel;
     else if (type === 'video') cost += DEFAULTS.input.video.per_second * ASSUMED_PER_RUN.video_seconds;
+    else if (type === 'audio') {
+      cost += DEFAULTS.input.audio.per_minute * (ASSUMED_PER_RUN.audio_seconds / 60);
+    }
   }
   return cost;
 }
@@ -306,7 +376,11 @@ function computeNodeCost(node) {
   if (usePricing) {
     inputCost = inputCostFromPricing(pricing, node);
     outputCost = outputCostFromPricing(pricing, outputTypes, node);
-    if (outputTypes.length > 0 && outputCost === 0) {
+    const missingOutputEstimate =
+      outputTypes.length > 0 &&
+      outputCost === 0 &&
+      !pricingDefinesOutputsForTypes(pricing, outputTypes);
+    if (missingOutputEstimate) {
       outputCost = outputCostFromDefaults(outputTypes);
       usedFallback = true;
     }
@@ -414,6 +488,7 @@ function inferOutputTypesFromPricing(pc) {
   if (out.video_without_audio && typeof out.video_without_audio === 'object') types.push('video_without_audio');
   if (out.image && typeof out.image === 'object') types.push('image');
   if (out.text && typeof out.text === 'object') types.push('text');
+  if (out.audio && typeof out.audio === 'object') types.push('audio');
   if (types.length === 0 && (out.video || out.video_seconds)) types.push('video');
   return types;
 }
