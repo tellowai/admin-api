@@ -86,7 +86,7 @@ exports.validateAutoSave = function (req, res, next) {
     changeHash: Joi.string().allow(null),
     templateId: Joi.string().uuid().optional(),
     clipIndex: Joi.number().integer().min(0).optional(),
-    assetType: Joi.string().valid('image', 'video').optional()
+    assetType: Joi.string().valid('image', 'video', 'audio').optional()
   });
 
   const { error, value } = schema.validate(req.body);
@@ -116,7 +116,7 @@ exports.validateSaveWorkflow = function (req, res, next) {
     }).default({}),
     templateId: Joi.string().uuid().optional(),
     clipIndex: Joi.number().integer().min(0).optional(),
-    assetType: Joi.string().valid('image', 'video').optional()
+    assetType: Joi.string().valid('image', 'video', 'audio').optional()
   });
 
   const { error, value } = schema.validate(req.body);

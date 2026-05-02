@@ -6,7 +6,51 @@ const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const CLIENT_PLATFORM_COL = 'o.client_platform';
 
 /**
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
+ * Single-table: payment plan ids that match the admin "product type" bucket (for filtering orders by payment_plan_id).
+ * @param {string} productType - alacarte | addon | onetime | subscription
+ * @returns {Promise<number[]>} pp_id list (may be empty)
+ */
+exports.getPpIdsMatchingProductType = async function (productType) {
+  const pt = productType && String(productType).trim();
+  if (!pt) return [];
+  if (pt === 'alacarte') {
+    const q = `
+      SELECT pp_id FROM payment_plans
+      WHERE plan_type IN ('single', 'bundle') AND billing_interval = 'alacarte'
+    `;
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
+    return rows.map((r) => r.pp_id).filter((id) => id != null);
+  }
+  if (pt === 'addon') {
+    const q = `
+      SELECT pp_id FROM payment_plans
+      WHERE plan_type = 'addon' AND billing_interval = 'onetime'
+    `;
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
+    return rows.map((r) => r.pp_id).filter((id) => id != null);
+  }
+  if (pt === 'onetime') {
+    const q = `
+      SELECT pp_id FROM payment_plans
+      WHERE plan_type = 'credits'
+        AND (billing_interval IS NULL OR billing_interval NOT IN ('monthly', 'yearly'))
+    `;
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
+    return rows.map((r) => r.pp_id).filter((id) => id != null);
+  }
+  if (pt === 'subscription') {
+    const q = `
+      SELECT pp_id FROM payment_plans
+      WHERE plan_type = 'credits' AND billing_interval IN ('monthly', 'yearly')
+    `;
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
+    return rows.map((r) => r.pp_id).filter((id) => id != null);
+  }
+  return [];
+};
+
+/**
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, _noMatchingPlans?: boolean }} filters
  * @returns {{ whereSql: string, params: any[] }}
  */
 function buildAdminOrdersWhere(filters) {
@@ -22,20 +66,13 @@ function buildAdminOrdersWhere(filters) {
     params.push(status);
   }
 
-  if (productType === 'alacarte') {
-    where.push(
-      `(p.plan_type IN ('single', 'bundle') AND p.billing_interval = 'alacarte')`
-    );
-  } else if (productType === 'addon') {
-    where.push(`(p.plan_type = 'addon' AND p.billing_interval = 'onetime')`);
-  } else if (productType === 'onetime') {
-    where.push(
-      `(p.plan_type = 'credits' AND (p.billing_interval IS NULL OR p.billing_interval NOT IN ('monthly', 'yearly')))`
-    );
-  } else if (productType === 'subscription') {
-    where.push(
-      `(p.plan_type = 'credits' AND p.billing_interval IN ('monthly', 'yearly'))`
-    );
+  if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
+    if (filters._noMatchingPlans) {
+      where.push('0=1');
+    } else {
+      where.push('o.payment_plan_id IN (?)');
+      params.push(filters._ppIdsForProductType || []);
+    }
   }
 
   if (search) {
@@ -69,23 +106,44 @@ const ORDERS_ADMIN_SELECT = `
     o.created_at,
     o.completed_at,
     o.failed_at,
-    o.refunded_at,
-    p.plan_type AS plan_type,
-    p.plan_name AS plan_name,
-    p.plan_heading AS plan_heading,
-    p.billing_interval AS billing_interval
+    o.refunded_at
   FROM orders o
-  LEFT JOIN payment_plans p ON o.payment_plan_id = p.pp_id
 `;
 
 /**
- * Admin list: orders with plan metadata; filters by status, product bucket, search, client_platform.
+ * Resolves product-type → payment_plan ids once (avoid duplicate queries when listing + counting).
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
+ */
+async function resolveAdminFilterPayload(filters) {
+  if (filters._ppIdsResolved) return filters;
+  const productType = filters.productType && String(filters.productType).trim();
+  let _ppIdsForProductType;
+  let _noMatchingPlans = false;
+  if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
+    _ppIdsForProductType = await exports.getPpIdsMatchingProductType(productType);
+    if (_ppIdsForProductType.length === 0) {
+      _noMatchingPlans = true;
+    }
+  }
+  return {
+    ...filters,
+    _ppIdsForProductType,
+    _noMatchingPlans,
+    _ppIdsResolved: true
+  };
+}
+
+exports.prepareAdminOrdersFilters = resolveAdminFilterPayload;
+
+/**
+ * Admin list: orders only (plan columns stitched in controller). Filters by status, product bucket, search, client_platform.
  * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string }} filters
  * @returns {Promise<Array>}
  */
 exports.listOrdersAdmin = async function (filters) {
   const { limit, offset } = filters;
-  const { whereSql, params } = buildAdminOrdersWhere(filters);
+  const resolved = await resolveAdminFilterPayload(filters);
+  const { whereSql, params } = buildAdminOrdersWhere(resolved);
   const query = `
     ${ORDERS_ADMIN_SELECT}
     WHERE ${whereSql}
@@ -100,11 +158,11 @@ exports.listOrdersAdmin = async function (filters) {
  * @returns {Promise<number>}
  */
 exports.countOrdersAdmin = async function (filters) {
-  const { whereSql, params } = buildAdminOrdersWhere(filters);
+  const resolved = await resolveAdminFilterPayload(filters);
+  const { whereSql, params } = buildAdminOrdersWhere(resolved);
   const query = `
     SELECT COUNT(*) AS total
     FROM orders o
-    LEFT JOIN payment_plans p ON o.payment_plan_id = p.pp_id
     WHERE ${whereSql}
   `;
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);

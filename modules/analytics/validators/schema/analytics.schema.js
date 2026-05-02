@@ -34,7 +34,9 @@ const templateAnalyticsSchema = Joi.object().keys({
   template_id: Joi.string().optional(),
   user_id: Joi.string().optional(),
   group_by: Joi.string().valid('output_type', 'aspect_ratio', 'orientation', 'generation_type').optional(),
-  tz: Joi.string().optional()
+  tz: Joi.string().optional(),
+  /** Max rows for per-template conversion table (default 200). */
+  limit: Joi.number().integer().min(1).max(500).optional()
 });
 
 const templateTopByGenerationSchema = Joi.object().keys({
@@ -166,7 +168,24 @@ const paymentFailuresAnalyticsSchema = Joi.object().keys({
   search: Joi.string().max(120).optional().allow('')
 });
 
+/**
+ * ClickHouse / Hub order funnel (analytics_events_raw) — used by the payment-failures
+ * “ClickHouse” tab. product_type matches event properties, not MySQL plan ids.
+ */
+const ordersFunnelClickhouseSchema = Joi.object().keys({
+  start_date: Joi.date().iso().required(),
+  end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
+  tz: Joi.string().optional().allow(''),
+  product_type: Joi.string()
+    .valid('alacarte', 'subscription', 'onetime', 'addon', '')
+    .optional()
+    .allow(''),
+  payment_gateway: Joi.string().max(64).optional().allow(''),
+  app_version: Joi.string().max(64).optional().allow('')
+});
+
 exports.dateRangeSchema = dateRangeSchema;
+exports.ordersFunnelClickhouseSchema = ordersFunnelClickhouseSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
 exports.templateTopByGenerationSchema = templateTopByGenerationSchema;

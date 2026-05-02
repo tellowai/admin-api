@@ -1,6 +1,7 @@
 'use strict';
 
 const OrdersModel = require('../models/orders.model');
+const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 
 function normPlanField(v) {
@@ -10,7 +11,7 @@ function normPlanField(v) {
 }
 
 /**
- * Badge bucket — payment_plans.plan_type + billing_interval (orders list JOIN).
+ * Badge bucket — payment_plans.plan_type + billing_interval (stitched in controller from payment_plans).
  * Credits: only monthly|yearly are subscriptions; all other credit packs (onetime, NULL, legacy rows) are one-time.
  * alacarte: single|bundle + alacarte · addon: addon + onetime
  */
@@ -44,10 +45,19 @@ exports.listAdminOrders = async function (req, res) {
 
     const filterPayload = { status, productType, search, client_platform };
 
+    const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
+
     const [total, rows] = await Promise.all([
-      OrdersModel.countOrdersAdmin(filterPayload),
-      OrdersModel.listOrdersAdmin({ ...filterPayload, limit, offset })
+      OrdersModel.countOrdersAdmin(preparedFilters),
+      OrdersModel.listOrdersAdmin({ ...preparedFilters, limit, offset })
     ]);
+
+    const planIds = [...new Set(rows.map((r) => r.payment_plan_id).filter((id) => id != null))];
+    const planRows = planIds.length ? await PaymentPlansModel.getPlansByIds(planIds) : [];
+    const planById = {};
+    for (const p of planRows) {
+      planById[p.pp_id] = p;
+    }
 
     const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
     const users = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
@@ -56,30 +66,35 @@ exports.listAdminOrders = async function (req, res) {
       userById[u.user_id] = u;
     }
 
-    const orders = rows.map((o) => ({
-      order_id: o.order_id,
-      user_id: o.user_id,
-      payment_gateway: o.payment_gateway,
-      client_platform: o.client_platform ?? null,
-      pg_order_id: o.pg_order_id,
-      quantity: o.quantity,
-      pg_payment_id: o.pg_payment_id,
-      payment_plan_id: o.payment_plan_id,
-      amount_paid: o.amount_paid,
-      currency: o.currency,
-      payment_method: o.payment_method,
-      status: o.status,
-      created_at: o.created_at,
-      completed_at: o.completed_at,
-      failed_at: o.failed_at,
-      refunded_at: o.refunded_at,
-      plan_type: o.plan_type ?? null,
-      plan_name: o.plan_name ?? null,
-      plan_heading: o.plan_heading ?? null,
-      billing_interval: o.billing_interval ?? null,
-      purchase_category: purchaseCategoryFromPlan(o.plan_type, o.billing_interval),
-      user_details: userById[o.user_id] || null
-    }));
+    const orders = rows.map((o) => {
+      const plan = o.payment_plan_id != null ? planById[o.payment_plan_id] : null;
+      const planType = plan ? plan.plan_type : null;
+      const billingInterval = plan ? plan.billing_interval : null;
+      return {
+        order_id: o.order_id,
+        user_id: o.user_id,
+        payment_gateway: o.payment_gateway,
+        client_platform: o.client_platform ?? null,
+        pg_order_id: o.pg_order_id,
+        quantity: o.quantity,
+        pg_payment_id: o.pg_payment_id,
+        payment_plan_id: o.payment_plan_id,
+        amount_paid: o.amount_paid,
+        currency: o.currency,
+        payment_method: o.payment_method,
+        status: o.status,
+        created_at: o.created_at,
+        completed_at: o.completed_at,
+        failed_at: o.failed_at,
+        refunded_at: o.refunded_at,
+        plan_type: planType ?? null,
+        plan_name: plan ? plan.plan_name ?? null : null,
+        plan_heading: plan ? plan.plan_heading ?? null : null,
+        billing_interval: billingInterval ?? null,
+        purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
+        user_details: userById[o.user_id] || null
+      };
+    });
 
     return res.status(200).json({
       data: {

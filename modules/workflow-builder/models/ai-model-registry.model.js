@@ -2,6 +2,46 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+const OUTPUT_FILTER_TYPES = new Set(['image', 'video', 'audio', 'text']);
+
+/**
+ * Socket types matching output label (name/slug) — single-table.
+ */
+async function getSocketTypeIdsForOutputFilter(outputType) {
+  const ot =
+    outputType != null && String(outputType).trim() !== '' ? String(outputType).trim().toLowerCase() : null;
+  if (!ot || !OUTPUT_FILTER_TYPES.has(ot)) return null;
+  const query = `
+    SELECT amst_id FROM ai_model_socket_types
+    WHERE LOWER(name) = ? OR LOWER(IFNULL(slug, '')) = ?
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [ot, ot]);
+  const ids = rows.map((r) => r.amst_id).filter((id) => id != null);
+  return ids;
+}
+
+/** Distinct registry model ids that declare OUTPUT on given socket types (no joins). */
+async function getAmrIdsWithOutputSocketTypes(amstIds) {
+  if (!amstIds || amstIds.length === 0) return [];
+  const query = `
+    SELECT DISTINCT amr_id FROM ai_model_io_definitions
+    WHERE direction = 'OUTPUT' AND amst_id IN (?)
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [amstIds]);
+  return rows.map((r) => r.amr_id).filter((id) => id != null);
+}
+
+/** Distinct system node ids that declare OUTPUT on given socket types (no joins). */
+async function getWsndIdsWithOutputSocketTypes(amstIds) {
+  if (!amstIds || amstIds.length === 0) return [];
+  const query = `
+    SELECT DISTINCT wsnd_id FROM workflow_system_node_io_definitions
+    WHERE direction = 'OUTPUT' AND amst_id IN (?)
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [amstIds]);
+  return rows.map((r) => r.wsnd_id).filter((id) => id != null);
+}
+
 /**
  * Get I/O definitions for a single model (convenience: one query with single id)
  */
@@ -41,7 +81,18 @@ exports.getIODefinitionsByModelIds = async function (modelIds) {
 /**
  * List active AI models with pagination. Single query. Returns raw rows.
  */
-exports.listActiveModels = async function (searchQuery = null, limit = 20, offset = 0) {
+exports.listActiveModels = async function (searchQuery = null, limit = 20, offset = 0, outputType = null) {
+  const ot =
+    outputType != null && String(outputType).trim() !== '' ? String(outputType).trim().toLowerCase() : null;
+  let allowedAmrIds = null;
+  if (ot && OUTPUT_FILTER_TYPES.has(ot)) {
+    const socketIds = await getSocketTypeIdsForOutputFilter(ot);
+    allowedAmrIds = socketIds && socketIds.length ? await getAmrIdsWithOutputSocketTypes(socketIds) : [];
+    if (allowedAmrIds.length === 0) {
+      return [];
+    }
+  }
+
   let query = `
     SELECT 
       amr_id,
@@ -51,6 +102,7 @@ exports.listActiveModels = async function (searchQuery = null, limit = 20, offse
       description,
       icon_url,
       parameter_schema,
+      workflow_selection_schema,
       pricing_config
     FROM ai_model_registry
     WHERE status = 'active' AND archived_at IS NULL
@@ -61,6 +113,11 @@ exports.listActiveModels = async function (searchQuery = null, limit = 20, offse
     query += ` AND (LOWER(name) LIKE ? OR LOWER(platform_model_id) LIKE ?) `;
     const term = `%${searchQuery.toLowerCase()}%`;
     params.push(term, term);
+  }
+
+  if (allowedAmrIds !== null) {
+    query += ` AND amr_id IN (?) `;
+    params.push(allowedAmrIds);
   }
 
   query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ? `;
@@ -115,6 +172,7 @@ exports.getByAmrIdsWithParameterSchema = async function (amrIds) {
       description,
       icon_url,
       parameter_schema,
+      workflow_selection_schema,
       pricing_config
     FROM ai_model_registry
     WHERE amr_id IN (${placeholders})
@@ -164,7 +222,18 @@ exports.getCategoriesByIds = async function (ids) {
 /**
  * List active system node definitions with pagination. Single query. Returns raw rows.
  */
-exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 20, offset = 0) {
+exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 20, offset = 0, outputType = null) {
+  const ot =
+    outputType != null && String(outputType).trim() !== '' ? String(outputType).trim().toLowerCase() : null;
+  let allowedWsndIds = null;
+  if (ot && OUTPUT_FILTER_TYPES.has(ot)) {
+    const socketIds = await getSocketTypeIdsForOutputFilter(ot);
+    allowedWsndIds = socketIds && socketIds.length ? await getWsndIdsWithOutputSocketTypes(socketIds) : [];
+    if (allowedWsndIds.length === 0) {
+      return [];
+    }
+  }
+
   let query = `
     SELECT 
       wsnd_id,
@@ -175,7 +244,8 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 
       description,
       icon,
       color_hex,
-      config_schema
+      config_schema,
+      workflow_selection_schema
     FROM workflow_system_node_definitions
     WHERE status = 'active'
   `;
@@ -185,6 +255,11 @@ exports.listSystemNodeDefinitions = async function (searchQuery = null, limit = 
     query += ` AND (LOWER(name) LIKE ? OR LOWER(type_slug) LIKE ?) `;
     const term = `%${searchQuery.toLowerCase()}%`;
     params.push(term, term);
+  }
+
+  if (allowedWsndIds !== null) {
+    query += ` AND wsnd_id IN (?) `;
+    params.push(allowedWsndIds);
   }
 
   query += ` ORDER BY updated_at DESC LIMIT ? OFFSET ? `;
@@ -232,6 +307,7 @@ exports.listSystemNodeDefinitionsForAdmin = async function (searchQuery = null, 
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       status,
       version,
       archived_at,
@@ -271,6 +347,7 @@ exports.getSystemNodeDefinitionById = async function (wsndId) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       status,
       version,
       archived_at,
@@ -300,6 +377,7 @@ exports.getSystemNodeDefinitionsByIds = async function (wsndIds) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       version
     FROM workflow_system_node_definitions
     WHERE wsnd_id IN (${placeholders})
@@ -403,6 +481,7 @@ exports.getSystemNodeDefinitionsBySlugs = async function (slugs) {
       icon,
       color_hex,
       config_schema,
+      workflow_selection_schema,
       version
     FROM workflow_system_node_definitions
     WHERE type_slug IN (${placeholders}) AND status = 'active'

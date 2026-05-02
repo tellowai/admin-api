@@ -63,6 +63,7 @@ exports.listTemplateAiClipsByTemplateId = async function (templateId) {
     FROM template_ai_clips
     WHERE template_id = ?
       AND deleted_at IS NULL
+      AND asset_type IN ('image', 'video')
     ORDER BY clip_index ASC
   `;
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);

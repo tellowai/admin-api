@@ -81,6 +81,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/templates/conversion-metrics'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplateAnalyticsQuery,
+    AnalyticsCtrl.getTemplateConversionMetrics
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/templates/summary'
   ).get(
     AuthMiddleware.isAuthorizedJWT,
@@ -409,6 +417,23 @@ module.exports = function(app) {
     AuthMiddleware.isAuthorizedJWT,
     AnalyticsValidator.validatePaymentFailuresAnalyticsQuery,
     AnalyticsCtrl.getPaymentFailuresSamples
+  );
+
+  // Order funnel from analytics_events_raw (Hub) — payment-failures “ClickHouse” tab
+  app.route(
+    versionConfig.routePrefix + '/analytics/orders-funnel/clickhouse/daily'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateOrdersFunnelClickhouseQuery,
+    AnalyticsCtrl.getOrdersFunnelClickhouseDaily
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/orders-funnel/clickhouse/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateOrdersFunnelClickhouseQuery,
+    AnalyticsCtrl.getOrdersFunnelClickhouseSummary
   );
 
 };

@@ -973,6 +973,63 @@ error_category,
     return result.data || [];
   }
 
+  /**
+   * UTC timestamp predicates on analytics_events_raw.timestamp (DateTime64).
+   * Matches the pattern used for payment-failure raw queries.
+   */
+  static buildRawUtcTimestampConditions(startDate, endDate) {
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
+    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+    return [
+      `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`
+    ];
+  }
+
+  /**
+   * Sum template views in date range, grouped by template_id (hub: template_daily_stats).
+   */
+  static async getTemplateViewsSumByTemplateId(whereConditions) {
+    const query = `
+      SELECT
+        template_id,
+        sum(views) AS views
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+        AND template_id != ''
+      GROUP BY template_id
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Completed orders with template attribution from analytics_events_raw.
+   *
+   * PREWHERE: event_name, object_type, timestamp — matches MergeTree ORDER BY.
+   * WHERE: Map predicate only (fewer rows read from properties).
+   */
+  static async getOrderCompletedStatsByTemplateIdRaw(timestampConditions) {
+    const ts = (timestampConditions || []).join(' AND ');
+    const query = `
+      SELECT
+        properties['template_id'] AS template_id,
+        upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
+        count() AS purchases,
+        sum(toFloat64OrZero(properties['amount'])) AS revenue
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE event_name = 'order_completed'
+        AND object_type = 'order'
+        AND ${ts}
+      WHERE properties['template_id'] != ''
+      GROUP BY properties['template_id'], currency
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryTechHealthStoreVsCountry(whereConditions, limit = 50) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 100);
     const query = `
@@ -989,6 +1046,51 @@ error_category,
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
+  }
+
+  /**
+   * Per-calendar-day (client IANA tz) created vs completed from analytics_events_raw.
+   * PREWHERE: event_name, object_type, timestamp, optional app_version — aligned with
+   * MergeTree ORDER BY (event_name, object_type, timestamp). Map filters in WHERE.
+   */
+  static async queryOrdersFunnelClickhouseDaily(prewhereParts, whereParts, clientTz) {
+    const pre = (prewhereParts && prewhereParts.length) ? prewhereParts.join(' AND ') : '1';
+    const whereClauses = (whereParts && whereParts.length) ? whereParts.join(' AND ') : null;
+    const whereSql = whereClauses != null && whereClauses.length ? `WHERE ${whereClauses}` : '';
+
+    const tzRaw = String(clientTz || 'UTC').trim() || 'UTC';
+    const tzEsc = tzRaw.replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        countIf(event_name = 'order_created') AS created_cnt,
+        countIf(event_name = 'order_completed') AS completed_cnt
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE ${pre}
+      ${whereSql}
+      GROUP BY 1
+      ORDER BY 1 ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryOrdersFunnelClickhouseSummary(prewhereParts, whereParts) {
+    const pre = (prewhereParts && prewhereParts.length) ? prewhereParts.join(' AND ') : '1';
+    const whereClauses = (whereParts && whereParts.length) ? whereParts.join(' AND ') : null;
+    const whereSql = whereClauses != null && whereClauses.length ? `WHERE ${whereClauses}` : '';
+
+    const query = `
+      SELECT
+        countIf(event_name = 'order_created') AS created_count,
+        countIf(event_name = 'order_completed') AS completed_count,
+        countIf(event_name = 'order_failed') AS failed_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE ${pre}
+      ${whereSql}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
   }
 }
 

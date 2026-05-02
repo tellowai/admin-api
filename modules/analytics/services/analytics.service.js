@@ -2,6 +2,7 @@
 
 const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
+const TimezoneService = require('./timezone.service');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
 /** Epoch/sentinel from ClickHouse minIf/maxIf when no rows match – treat as null (year 2000 boundary). Defensive: query now uses countIf to return NULL, but parser still normalizes any sentinel. */
@@ -195,6 +196,45 @@ class AnalyticsService {
     }
 
     return conditions;
+  }
+
+  /**
+   * Predicate split for `analytics_events_raw` order lifecycle reads.
+   * `rangeStartUtc` / `rangeEndUtc` must be the same inclusive UTC window as the admin
+   * orders API (`utcRangeForClientCalendar` = first **client** day 00:00 through last
+   * day 23:59:59.999, expressed in UTC for `toDateTime64(..., 'UTC')`).
+   *
+   * MergeTree: ORDER BY (event_name, object_type, timestamp). Map filters in WHERE.
+   */
+  static buildOrderLifecycleRawSplit(rangeStartUtc, rangeEndUtc, additionalFilters = {}, eventNames = []) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(rangeStartUtc);
+    const endEsc = esc(rangeEndUtc);
+    const names = (eventNames || []).map((e) => esc(e)).filter(Boolean);
+    if (!names.length) {
+      throw new Error('buildOrderLifecycleRawSplit: eventNames must be non-empty');
+    }
+    const inList = names.map((e) => `'${e}'`).join(', ');
+
+    const prewhere = [
+      `event_name IN (${inList})`,
+      `object_type = 'order'`,
+      `timestamp >= toDateTime64('${startEsc}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endEsc}', 3, 'UTC')`
+    ];
+
+    const where = [];
+    const { payment_gateway, app_version, product_type } = additionalFilters;
+    if (app_version != null && String(app_version).trim() !== '') {
+      prewhere.push(`app_version = '${esc(String(app_version))}'`);
+    }
+    if (payment_gateway != null && String(payment_gateway).trim() !== '') {
+      where.push(`properties['payment_gateway'] = '${esc(String(payment_gateway))}'`);
+    }
+    if (product_type != null && String(product_type).trim() !== '') {
+      where.push(`properties['product_classification'] = '${esc(String(product_type))}'`);
+    }
+    return { prewhere, where };
   }
 
   // Build conditions for daily summary tables (single table, date range only)
@@ -391,6 +431,108 @@ class AnalyticsService {
         thumb_frame_bucket: t.thumb_frame_bucket ?? null,
         thumb_frame_asset_key: t.thumb_frame_asset_key ?? null,
         cf_r2_url: t.cf_r2_url ?? null
+      };
+    });
+  }
+
+  /**
+   * Per-template conversion: template_view (hub) vs order_completed with properties.template_id.
+   *
+   * Purchase/revenue rows come from raw events grouped by (template_id, currency)
+   * so we never blend currencies. We surface a single "primary" currency per
+   * template (the one with the most purchases, ties broken by revenue) along
+   * with a `currency_breakdown` for transparency. Conversion rate uses the
+   * template's total purchases across currencies (it's currency-agnostic);
+   * revenue / revenue_per_view are reported in the primary currency only —
+   * the UI can show a "+USD" style badge when `is_multi_currency` is true.
+   *
+   * Note: this is co-occurrence within the date window, not a true attribution
+   * window. Good enough for directional outlier detection at template-level
+   * pricing; a future MV spoke (template_purchases_daily_stats) will add
+   * last-view-to-purchase attribution.
+   */
+  static async getTemplateConversionMetrics(filters) {
+    const { start_date, end_date, limit: limitRaw } = filters;
+    const whereTemplate = this.buildMVTemplateConditions(start_date, end_date, {});
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+
+    const [viewRows, purchaseRows] = await Promise.all([
+      AnalyticsModel.getTemplateViewsSumByTemplateId(whereTemplate),
+      AnalyticsModel.getOrderCompletedStatsByTemplateIdRaw(tsRaw)
+    ]);
+
+    const viewsById = {};
+    (viewRows || []).forEach((r) => {
+      if (r.template_id) viewsById[r.template_id] = Number(r.views) || 0;
+    });
+
+    // Bucket by template_id, keeping per-currency rows so we can pick a primary later.
+    const purchaseById = {};
+    (purchaseRows || []).forEach((r) => {
+      if (!r.template_id) return;
+      const currency = (r.currency && String(r.currency).trim().toUpperCase()) || 'INR';
+      const purchases = Number(r.purchases) || 0;
+      const revenue = Number(r.revenue) || 0;
+      if (!purchaseById[r.template_id]) purchaseById[r.template_id] = [];
+      purchaseById[r.template_id].push({ currency, purchases, revenue });
+    });
+
+    const allIds = new Set([...Object.keys(viewsById), ...Object.keys(purchaseById)]);
+    const merged = [];
+    allIds.forEach((tid) => {
+      const views = viewsById[tid] || 0;
+      const breakdown = (purchaseById[tid] || []).slice().sort((a, b) => {
+        if (b.purchases !== a.purchases) return b.purchases - a.purchases;
+        return b.revenue - a.revenue;
+      });
+      const totalPurchases = breakdown.reduce((acc, x) => acc + x.purchases, 0);
+      const primary = breakdown[0] || { currency: 'INR', purchases: 0, revenue: 0 };
+      const conversionRate = views > 0 ? totalPurchases / views : null;
+      const revenuePerView = views > 0 ? primary.revenue / views : null;
+      merged.push({
+        template_id: tid,
+        views,
+        // Total purchases across all currencies — counts are currency-agnostic.
+        purchases: totalPurchases,
+        // Revenue and revenue/view reported in the primary currency only.
+        // For multi-currency templates, see currency_breakdown for the rest.
+        currency: primary.currency,
+        revenue: primary.revenue,
+        revenue_per_view: revenuePerView,
+        conversion_rate: conversionRate,
+        is_multi_currency: breakdown.length > 1,
+        currency_breakdown: breakdown
+      });
+    });
+
+    merged.sort((a, b) => {
+      const rv = (b.revenue_per_view || 0) - (a.revenue_per_view || 0);
+      if (rv !== 0) return rv;
+      return (b.views || 0) - (a.views || 0);
+    });
+
+    const safeLimit = Math.min(500, Math.max(1, parseInt(limitRaw, 10) || 200));
+    const sliced = merged.slice(0, safeLimit);
+
+    const templateIds = sliced.map((m) => m.template_id);
+    const templates = templateIds.length
+      ? await TemplateModel.getTemplatesByIdsForAnalytics(templateIds)
+      : [];
+    const byId = {};
+    (templates || []).forEach((t) => {
+      byId[t.template_id] = t;
+    });
+
+    return sliced.map((row) => {
+      const t = byId[row.template_id] || {};
+      return {
+        ...row,
+        template_name: t.template_name ?? null,
+        template_code: t.template_code ?? null,
+        template_output_type: t.template_output_type ?? null,
+        alacarte_price: t.alacarte_price != null ? Number(t.alacarte_price) : null,
+        alacarte_original_price: t.alacarte_original_price != null ? Number(t.alacarte_original_price) : null,
+        credits: t.credits != null ? Number(t.credits) : null
       };
     });
   }
@@ -964,6 +1106,69 @@ class AnalyticsService {
       searchText
     );
     return AnalyticsModel.queryPaymentFailuresSamples(whereConditions, limit, offset);
+  }
+
+  /**
+   * Order funnel from `analytics_events_raw` (Hub) — supports app_version and
+   * product_classification on events. Used when the admin UI shows the
+   * ClickHouse tab on the payment-failures page.
+   */
+  static async getOrdersFunnelClickhouseDaily(filters, additionalFilters = {}, clientTimezone = 'UTC') {
+    const startCal = TimezoneService.toCalendarYmd(filters.start_date);
+    const endCal = TimezoneService.toCalendarYmd(filters.end_date);
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(
+      startCal,
+      endCal,
+      clientTimezone
+    );
+    const { prewhere, where } = this.buildOrderLifecycleRawSplit(
+      rangeStartUtc,
+      rangeEndUtc,
+      additionalFilters,
+      ['order_created', 'order_completed']
+    );
+    const rows = await AnalyticsModel.queryOrdersFunnelClickhouseDaily(
+      prewhere,
+      where,
+      clientTimezone
+    );
+    const created = (rows || []).map((r) => ({
+      date: r.date,
+      count: Number(r.created_cnt) || 0
+    }));
+    const completed = (rows || []).map((r) => ({
+      date: r.date,
+      count: Number(r.completed_cnt) || 0
+    }));
+    return { created, completed };
+  }
+
+  static async getOrdersFunnelClickhouseSummary(filters, additionalFilters = {}, clientTimezone = 'UTC') {
+    const startCal = TimezoneService.toCalendarYmd(filters.start_date);
+    const endCal = TimezoneService.toCalendarYmd(filters.end_date);
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(
+      startCal,
+      endCal,
+      clientTimezone
+    );
+    const { prewhere, where } = this.buildOrderLifecycleRawSplit(
+      rangeStartUtc,
+      rangeEndUtc,
+      additionalFilters,
+      ['order_created', 'order_completed', 'order_failed']
+    );
+    const row = await AnalyticsModel.queryOrdersFunnelClickhouseSummary(prewhere, where);
+    const created_count = Number(row?.created_count) || 0;
+    const completed_count = Number(row?.completed_count) || 0;
+    const failed_count = Number(row?.failed_count) || 0;
+    const failure_rate_pct =
+      created_count > 0 ? Math.round((failed_count / created_count) * 10000) / 100 : 0;
+    return {
+      created_count,
+      completed_count,
+      failed_count,
+      failure_rate_pct
+    };
   }
 
   /**

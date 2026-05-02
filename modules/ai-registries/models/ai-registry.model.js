@@ -19,6 +19,7 @@ exports.listAiModels = async function (searchParams = {}, paginationParams = nul
       fallback_amr_id,
       fallback_mapping,
       parameter_schema,
+      workflow_selection_schema,
       pricing_config,
       icon_url,
       documentation_url,
@@ -81,6 +82,13 @@ exports.createAiModel = async function (data) {
     created_at: new Date(),
     updated_at: new Date()
   };
+  delete processedData.workflow_selection_schema;
+  if (data.workflow_selection_schema != null && data.workflow_selection_schema !== '') {
+    processedData.workflow_selection_schema =
+      typeof data.workflow_selection_schema === 'object'
+        ? JSON.stringify(data.workflow_selection_schema)
+        : data.workflow_selection_schema;
+  }
 
   const columns = Object.keys(processedData);
   const placeholders = columns.map(() => '?').join(', ');
@@ -118,7 +126,7 @@ exports.getAiModelsByIds = async function (ids) {
 exports.updateAiModel = async function (amrId, data) {
   const processedData = {};
   Object.keys(data).forEach(key => {
-    if (['parameter_schema', 'pricing_config', 'fallback_mapping'].includes(key)) {
+    if (['parameter_schema', 'workflow_selection_schema', 'pricing_config', 'fallback_mapping'].includes(key)) {
       processedData[key] = data[key] != null && typeof data[key] === 'object' ? JSON.stringify(data[key]) : data[key];
     } else {
       processedData[key] = data[key];

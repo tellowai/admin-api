@@ -197,6 +197,11 @@ exports.list = async function (req, res) {
         try { parsedParameterSchema = JSON.parse(parsedParameterSchema); } catch (e) { /* keep as-is */ }
       }
 
+      let parsedWorkflowSelectionSchema = model.workflow_selection_schema;
+      if (parsedWorkflowSelectionSchema != null && typeof parsedWorkflowSelectionSchema === 'string') {
+        try { parsedWorkflowSelectionSchema = JSON.parse(parsedWorkflowSelectionSchema); } catch (e) { parsedWorkflowSelectionSchema = null; }
+      }
+
       let parsedFallbackMapping = model.fallback_mapping;
       if (typeof parsedFallbackMapping === 'string') {
         try { parsedFallbackMapping = JSON.parse(parsedFallbackMapping); } catch (e) { parsedFallbackMapping = null; }
@@ -214,6 +219,7 @@ exports.list = async function (req, res) {
         ...model,
         pricing_config: parsedPricingConfig,
         parameter_schema: parsedParameterSchema,
+        workflow_selection_schema: parsedWorkflowSelectionSchema,
         fallback_mapping: parsedFallbackMapping,
         provider: providersMap[model.amp_id] || null,
         fallback_model
@@ -282,6 +288,10 @@ exports.listForFallback = async function (req, res) {
       if (typeof parsedParameterSchema === 'string') {
         try { parsedParameterSchema = JSON.parse(parsedParameterSchema); } catch (e) { /* keep */ }
       }
+      let parsedWorkflowSelectionSchema = model.workflow_selection_schema;
+      if (parsedWorkflowSelectionSchema != null && typeof parsedWorkflowSelectionSchema === 'string') {
+        try { parsedWorkflowSelectionSchema = JSON.parse(parsedWorkflowSelectionSchema); } catch (e) { parsedWorkflowSelectionSchema = null; }
+      }
       let parsedFallbackMapping = model.fallback_mapping;
       if (typeof parsedFallbackMapping === 'string') {
         try { parsedFallbackMapping = JSON.parse(parsedFallbackMapping); } catch (e) { parsedFallbackMapping = null; }
@@ -290,6 +300,7 @@ exports.listForFallback = async function (req, res) {
         ...model,
         pricing_config: parsedPricingConfig,
         parameter_schema: parsedParameterSchema,
+        workflow_selection_schema: parsedWorkflowSelectionSchema,
         fallback_mapping: parsedFallbackMapping,
         provider: providersMap[model.amp_id] || null
       };
@@ -323,6 +334,7 @@ exports.create = async function (req, res) {
       fallback_amr_id: req.body.fallback_amr_id || null,
       fallback_mapping: req.body.fallback_mapping || null,
       parameter_schema: req.body.parameter_schema || {},
+      workflow_selection_schema: req.body.workflow_selection_schema ?? null,
       pricing_config: req.body.pricing_config || {},
       icon_url: req.body.icon_url,
       documentation_url: req.body.documentation_url
@@ -408,6 +420,9 @@ exports.read = async function (req, res) {
     }
     if (typeof model.parameter_schema === 'string') {
       try { model.parameter_schema = JSON.parse(model.parameter_schema); } catch (e) { /* keep as-is */ }
+    }
+    if (model.workflow_selection_schema != null && typeof model.workflow_selection_schema === 'string') {
+      try { model.workflow_selection_schema = JSON.parse(model.workflow_selection_schema); } catch (e) { model.workflow_selection_schema = null; }
     }
     if (typeof model.fallback_mapping === 'string') {
       try { model.fallback_mapping = JSON.parse(model.fallback_mapping); } catch (e) { model.fallback_mapping = null; }
@@ -527,6 +542,9 @@ exports.update = async function (req, res) {
       }
       if (typeof newModelData.parameter_schema === 'string') {
         try { newModelData.parameter_schema = JSON.parse(newModelData.parameter_schema); } catch (e) { /* keep as-is */ }
+      }
+      if (newModelData.workflow_selection_schema != null && typeof newModelData.workflow_selection_schema === 'string') {
+        try { newModelData.workflow_selection_schema = JSON.parse(newModelData.workflow_selection_schema); } catch (e) { newModelData.workflow_selection_schema = null; }
       }
       if (typeof newModelData.fallback_mapping === 'string') {
         try { newModelData.fallback_mapping = JSON.parse(newModelData.fallback_mapping); } catch (e) { newModelData.fallback_mapping = null; }

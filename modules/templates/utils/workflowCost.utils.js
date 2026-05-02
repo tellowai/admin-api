@@ -44,13 +44,126 @@ const ASSUMED_PER_RUN = {
   video_seconds: 5
 };
 
+function segmentKeyToSeconds(key) {
+  if (key == null || key === '') return null;
+  const m = String(key).trim().match(/^(\d+)\s*s?$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function parseDurationFromValue(val) {
+  if (val == null || val === '') return null;
+  if (typeof val === 'number' && Number.isFinite(val) && val > 0) return Math.round(val);
+  if (typeof val === 'string') {
+    const t = val.trim();
+    const m = t.match(/^(\d+)\s*s?$/i);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+  }
+  return null;
+}
+
+function extractDurationSecondsFromConfig(configValues) {
+  if (!configValues || typeof configValues !== 'object') return null;
+  const keys = ['duration', 'video_duration', 'output_duration', 'num_seconds'];
+  for (const k of keys) {
+    if (configValues[k] !== undefined && configValues[k] !== null && configValues[k] !== '') {
+      const p = parseDurationFromValue(configValues[k]);
+      if (p != null && p <= 600) return p;
+    }
+  }
+  const sel = configValues.workflow_selections;
+  if (sel && typeof sel === 'object') {
+    for (const [k, v] of Object.entries(sel)) {
+      if (!/duration|seconds|length/i.test(k)) continue;
+      const p = parseDurationFromValue(v);
+      if (p != null && p <= 600) return p;
+    }
+  }
+  return null;
+}
+
+function defaultVideoSecondsFromPricing(pricing, qualityRow) {
+  const list = pricing?.capabilities?.video_durations;
+  if (Array.isArray(list) && list.length > 0) {
+    const nums = list.map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0);
+    if (nums.length) return Math.max(...nums);
+  }
+  if (qualityRow?.per_segment && typeof qualityRow.per_segment === 'object') {
+    const secs = Object.keys(qualityRow.per_segment)
+      .map(k => segmentKeyToSeconds(k))
+      .filter(n => n != null);
+    if (secs.length) return Math.max(...secs);
+  }
+  const out = pricing?.output;
+  if (out && typeof out === 'object') {
+    for (const bucket of ['video_with_audio', 'video_without_audio']) {
+      const vid = out[bucket];
+      if (!vid || typeof vid !== 'object') continue;
+      for (const qkey of Object.keys(vid)) {
+        const row = vid[qkey];
+        if (!row?.per_segment || typeof row.per_segment !== 'object') continue;
+        const secs = Object.keys(row.per_segment)
+          .map(k => segmentKeyToSeconds(k))
+          .filter(n => n != null);
+        if (secs.length) return Math.max(...secs);
+      }
+    }
+  }
+  return ASSUMED_PER_RUN.video_seconds;
+}
+
+function resolveVideoOutputDurationSeconds(node, pricing, qualityRow) {
+  const cv = node?.data?.config_values ?? node?.config_values ?? {};
+  const fromConfig = extractDurationSecondsFromConfig(cv);
+  if (fromConfig != null) return fromConfig;
+  return defaultVideoSecondsFromPricing(pricing, qualityRow);
+}
+
+function hasPricedSegments(perSegment) {
+  if (!perSegment || typeof perSegment !== 'object') return false;
+  return Object.values(perSegment).some(v => getNumber(v) > 0);
+}
+
+function pickVideoQualityRow(vid, configQuality) {
+  if (!vid || typeof vid !== 'object') return { key: null, row: null };
+  const preferred = ['4K', '1080p', '768p', '720p', '540p', '512p', '480p', '360p'];
+  if (configQuality && vid[configQuality] && typeof vid[configQuality] === 'object') {
+    return { key: configQuality, row: vid[configQuality] };
+  }
+  for (const k of preferred) {
+    const row = vid[k];
+    if (row && typeof row === 'object' && (getNumber(row.per_second) > 0 || hasPricedSegments(row.per_segment))) {
+      return { key: k, row };
+    }
+  }
+  const firstKey = Object.keys(vid).find(k => vid[k] && typeof vid[k] === 'object');
+  return firstKey ? { key: firstKey, row: vid[firstKey] } : { key: null, row: null };
+}
+
+function computeVideoRowCost(qualityRow, durationSeconds) {
+  if (!qualityRow || typeof qualityRow !== 'object') return 0;
+  const seg = qualityRow.per_segment;
+  const segKey = `${durationSeconds}s`;
+  if (seg && typeof seg === 'object' && seg[segKey] != null && seg[segKey] !== '') {
+    const n = getNumber(seg[segKey]);
+    if (n > 0) return n;
+  }
+  const perSec = getNumber(qualityRow.per_second);
+  if (perSec > 0) return perSec * durationSeconds;
+  return 0;
+}
+
 function getNumber(val) {
   if (val == null || val === '') return 0;
   const n = Number(val);
   return Number.isFinite(n) ? n : 0;
 }
 
-function inputCostFromPricing(pc) {
+function inputCostFromPricing(pc, node) {
   let cost = 0;
   const input = pc?.input;
   if (!input || typeof input !== 'object') return cost;
@@ -63,12 +176,13 @@ function inputCostFromPricing(pc) {
     cost += first + (ASSUMED_PER_RUN.image_megapixels > 1 ? extra * (ASSUMED_PER_RUN.image_megapixels - 1) : 0);
   }
   if (input.video != null && typeof input.video === 'object') {
-    cost += getNumber(input.video.per_second) * ASSUMED_PER_RUN.video_seconds;
+    const vSec = resolveVideoOutputDurationSeconds(node, pc, null);
+    cost += getNumber(input.video.per_second) * vSec;
   }
   return cost;
 }
 
-function outputCostFromPricing(pc, outputTypes) {
+function outputCostFromPricing(pc, outputTypes, node) {
   let cost = 0;
   const output = pc?.output;
   if (!output || typeof output !== 'object') return cost;
@@ -91,7 +205,6 @@ function outputCostFromPricing(pc, outputTypes) {
   }
 
   if (hasVideo) {
-    // Use pricing key that matches actual output type: video_with_audio vs video_without_audio (not a single fallback)
     const types = (outputTypes || []).map(t => (t || '').toLowerCase());
     const useWithAudio = types.includes('video_with_audio');
     const useWithoutAudio = types.includes('video_without_audio');
@@ -109,13 +222,12 @@ function outputCostFromPricing(pc, outputTypes) {
         null;
     }
     if (vid) {
-      const res = vid['720p'] || vid['1080p'] || vid['512p'] || vid['768p'] || vid['360p'] || vid['540p'];
-      if (res && typeof res === 'object') {
-        const seg = res.per_segment;
-        const seg5 = seg && typeof seg === 'object' ? getNumber(seg['5s']) : 0;
-        const perSec = getNumber(res.per_second);
-        if (seg5 > 0) cost += seg5;
-        else if (perSec > 0) cost += perSec * ASSUMED_PER_RUN.video_seconds;
+      const cv = node?.data?.config_values ?? node?.config_values ?? {};
+      const configQuality = typeof cv.video_quality === 'string' ? cv.video_quality : null;
+      const { row } = pickVideoQualityRow(vid, configQuality);
+      if (row && typeof row === 'object') {
+        const seconds = resolveVideoOutputDurationSeconds(node, pc, row);
+        cost += computeVideoRowCost(row, seconds);
       }
     }
   }
@@ -132,8 +244,9 @@ function outputCostFromDefaults(outputTypes) {
   for (const t of outputTypes || []) {
     const type = (t || '').toLowerCase();
     if (type === 'image') cost += DEFAULTS.output.image.first_megapixel;
-    else if (type === 'video') cost += DEFAULTS.output.video.per_5s_segment;
-    else if (type === 'text') cost += DEFAULTS.output.text.per_million_tokens * ASSUMED_PER_RUN.text_tokens_million;
+    else if (type === 'video' || type === 'video_with_audio' || type === 'video_without_audio') {
+      cost += DEFAULTS.output.video.per_5s_segment;
+    } else if (type === 'text') cost += DEFAULTS.output.text.per_million_tokens * ASSUMED_PER_RUN.text_tokens_million;
   }
   return cost;
 }
@@ -167,7 +280,21 @@ function computeNodeCost(node) {
   const inputs = node.data?.inputs || [];
   const outputs = node.data?.outputs || [];
   const inputTypes = inputs.map(i => (i && i.type) ? i.type : (typeof i === 'string' ? i : null)).filter(Boolean);
-  const outputTypes = outputs.map(o => (o && o.type) ? o.type : (typeof o === 'string' ? o : null)).filter(Boolean);
+  let outputTypes = outputs.map(o => (o && o.type) ? o.type : (typeof o === 'string' ? o : null)).filter(Boolean);
+
+  const hasBothVideo =
+    outputTypes.some(t => (t || '').toLowerCase() === 'video_with_audio') &&
+    outputTypes.some(t => (t || '').toLowerCase() === 'video_without_audio');
+  if (hasBothVideo) {
+    const cv = node.data?.config_values ?? node.config_values ?? {};
+    const generateAudio = cv.generate_audio !== false;
+    outputTypes = outputTypes.filter(t => {
+      const lower = (t || '').toLowerCase();
+      if (lower === 'video_with_audio') return generateAudio;
+      if (lower === 'video_without_audio') return !generateAudio;
+      return true;
+    });
+  }
 
   const pricing = node.data?.pricing;
   const usePricing = hasUsablePricing(pricing);
@@ -177,8 +304,8 @@ function computeNodeCost(node) {
   let usedFallback = false;
 
   if (usePricing) {
-    inputCost = inputCostFromPricing(pricing);
-    outputCost = outputCostFromPricing(pricing, outputTypes);
+    inputCost = inputCostFromPricing(pricing, node);
+    outputCost = outputCostFromPricing(pricing, outputTypes, node);
     if (outputTypes.length > 0 && outputCost === 0) {
       outputCost = outputCostFromDefaults(outputTypes);
       usedFallback = true;
@@ -292,6 +419,24 @@ function inferOutputTypesFromPricing(pc) {
 }
 
 /**
+ * Normalize clip step config for cost (string JSON from DB vs object).
+ */
+function parseStepConfigValues(step) {
+  const raw = step?.config_values ?? step?.config ?? {};
+  if (raw == null) return {};
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  return {};
+}
+
+/**
  * Build cost-calculation nodes from clips and a map of modelId -> model (with costs, input_types, output_types).
  * Models may come from AiModelModel.getAiModelsByIds; missing models use fallback (estimate).
  * @param {Array} clips - Template clips with workflow array
@@ -330,12 +475,13 @@ function buildNodesFromClips(clips, modelMap) {
         outputTypes = inferOutputTypesFromWorkflowCode(step.workflow_code);
       }
 
+      const configValues = parseStepConfigValues(step);
+
       // When model supports both video_with_audio and video_without_audio, pick one based on step config (generate_audio)
       const hasBothVideo = outputTypes.some(t => (t || '').toLowerCase() === 'video_with_audio') &&
         outputTypes.some(t => (t || '').toLowerCase() === 'video_without_audio');
       if (hasBothVideo) {
-        const config = step.config_values ?? step.config ?? {};
-        const generateAudio = config.generate_audio !== false;
+        const generateAudio = configValues.generate_audio !== false;
         outputTypes = outputTypes.filter(t => {
           const lower = (t || '').toLowerCase();
           if (lower === 'video_with_audio') return generateAudio;
@@ -357,7 +503,8 @@ function buildNodesFromClips(clips, modelMap) {
         data: {
           inputs: inputTypes.map(t => ({ type: t })),
           outputs: outputTypes.map(t => ({ type: t })),
-          pricing
+          pricing,
+          config_values: configValues
         }
       });
     }

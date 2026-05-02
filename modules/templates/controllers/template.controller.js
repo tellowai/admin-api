@@ -342,6 +342,43 @@ async function getTemplateTagsWithDetails(templateId) {
   }
 }
 
+function enrichTemplateAiClipRowUrls(clip) {
+  if (!clip) return clip;
+  if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
+    clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
+  }
+  if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
+    clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
+  }
+  if (Array.isArray(clip.workflow)) {
+    clip.workflow = clip.workflow.map(step => {
+      if (!step || !Array.isArray(step.data)) return step;
+      step.data = step.data.map(item => {
+        const itemType = String(item?.type || '').toLowerCase();
+        if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
+          item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
+        }
+        return item;
+      });
+      return step;
+    });
+  }
+  return clip;
+}
+
+function splitTemplateAiClipsForApiResponse(allClips) {
+  const visualClips = [];
+  const audioClips = [];
+  for (const c of allClips || []) {
+    if (c.asset_type === 'audio') {
+      audioClips.push(c);
+    } else {
+      visualClips.push(c);
+    }
+  }
+  return { visualClips, audioClips };
+}
+
 /**
  * Mutates template from getTemplateById into the same shape as GET /templates/:templateId (URLs, tags, default scenes).
  */
@@ -354,32 +391,11 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
     template.r2_url = template.cf_r2_url;
   }
 
-  template.clips = await TemplateModel.getTemplateAiClips(template.template_id);
+  const allRows = await TemplateModel.getTemplateAiClips(template.template_id);
+  const { visualClips, audioClips } = splitTemplateAiClipsForApiResponse(allRows);
 
-  if (template.clips && template.clips.length > 0) {
-    template.clips = template.clips.map(clip => {
-      if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
-        clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
-      }
-      if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
-        clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
-      }
-      if (Array.isArray(clip.workflow)) {
-        clip.workflow = clip.workflow.map(step => {
-          if (!step || !Array.isArray(step.data)) return step;
-          step.data = step.data.map(item => {
-            const itemType = String(item?.type || '').toLowerCase();
-            if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
-              item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
-            }
-            return item;
-          });
-          return step;
-        });
-      }
-      return clip;
-    });
-  }
+  template.clips = visualClips.map(enrichTemplateAiClipRowUrls);
+  template.audio_clips = audioClips.map(enrichTemplateAiClipRowUrls);
 
   if (
     template.image_uploads_required === undefined ||
@@ -639,40 +655,11 @@ exports.listTemplates = async function (req, res) {
           template.r2_url = template.cf_r2_url;
         }
 
-        // Load AI clips for all templates (from pre-fetched data)
-        template.clips = clipsMap.get(template.template_id) || [];
-
-        // Generate R2 URLs for AI clip assets
-        if (template.clips && template.clips.length > 0) {
-          template.clips = template.clips.map(clip => {
-            // Generate R2 URL for template image asset
-            if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
-              clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
-            }
-
-            // Generate R2 URL for video file asset
-            if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
-              clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
-            }
-
-            // Enrich workflow steps: add URL for uploaded assets/images inside file_upload steps
-            if (Array.isArray(clip.workflow)) {
-              clip.workflow = clip.workflow.map(step => {
-                if (!step || !Array.isArray(step.data)) return step;
-                step.data = step.data.map(item => {
-                  const itemType = String(item?.type || '').toLowerCase();
-                  if (itemType === 'file_upload' && item && item.value && item.value.asset_key) {
-                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
-                  }
-                  return item;
-                });
-                return step;
-              });
-            }
-
-            return clip;
-          });
-        }
+        // Load AI clips for all templates (from pre-fetched data): video/image vs audio workflows are separate
+        const rawClips = clipsMap.get(template.template_id) || [];
+        const { visualClips, audioClips } = splitTemplateAiClipsForApiResponse(rawClips);
+        template.clips = visualClips.length > 0 ? visualClips.map(enrichTemplateAiClipRowUrls) : [];
+        template.audio_clips = audioClips.length > 0 ? audioClips.map(enrichTemplateAiClipRowUrls) : [];
 
         // Fallback compute of image uploads required if not present or invalid
         if (
@@ -911,7 +898,7 @@ exports.refreshTemplateGenerationMeta = async function (req, res) {
 /**
  * Ensure template_ai_clips rows exist for the given clip definitions; create a workflow per clip
  * and attach wf_id in template_ai_clips. Use when get template returns empty clips (e.g. new/legacy template).
- * Body: { clips: [ { clip_index: number, asset_type: 'image'|'video' }, ... ] }
+ * Body: { clips: [ { clip_index: number, asset_type: 'image'|'video'|'audio' }, ... ] }
  */
 exports.ensureTemplateAiClips = async function (req, res) {
   try {
@@ -1073,31 +1060,10 @@ exports.listArchivedTemplates = async function (req, res) {
           template.r2_url = template.cf_r2_url;
         }
 
-        template.clips = clipsMap.get(template.template_id) || [];
-        if (template.clips.length > 0) {
-          template.clips = template.clips.map(clip => {
-            if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
-              clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
-            }
-            if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
-              clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
-            }
-            if (Array.isArray(clip.workflow)) {
-              clip.workflow = clip.workflow.map(step => {
-                if (!step || !Array.isArray(step.data)) return step;
-                step.data = step.data.map(item => {
-                  const itemType = String(item?.type || '').toLowerCase();
-                  if (itemType === 'file_upload' && item?.value?.asset_key) {
-                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
-                  }
-                  return item;
-                });
-                return step;
-              });
-            }
-            return clip;
-          });
-        }
+        const rawClips = clipsMap.get(template.template_id) || [];
+        const { visualClips, audioClips } = splitTemplateAiClipsForApiResponse(rawClips);
+        template.clips = visualClips.length > 0 ? visualClips.map(enrichTemplateAiClipRowUrls) : [];
+        template.audio_clips = audioClips.length > 0 ? audioClips.map(enrichTemplateAiClipRowUrls) : [];
 
         if (template.image_uploads_required === undefined || template.image_uploads_required === null || Number.isNaN(Number(template.image_uploads_required))) {
           template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
@@ -1303,31 +1269,10 @@ exports.searchTemplates = async function (req, res) {
           template.r2_url = template.cf_r2_url;
         }
 
-        template.clips = clipsMap.get(template.template_id) || [];
-        if (template.clips.length > 0) {
-          template.clips = template.clips.map(clip => {
-            if (clip.template_image_asset_key && clip.template_image_asset_bucket) {
-              clip.template_image_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.template_image_asset_key}`;
-            }
-            if (clip.video_file_asset_key && clip.video_file_asset_bucket) {
-              clip.video_file_asset_r2_url = `${config.os2.r2.public.bucketUrl}/${clip.video_file_asset_key}`;
-            }
-            if (Array.isArray(clip.workflow)) {
-              clip.workflow = clip.workflow.map(step => {
-                if (!step || !Array.isArray(step.data)) return step;
-                step.data = step.data.map(item => {
-                  const itemType = String(item?.type || '').toLowerCase();
-                  if (itemType === 'file_upload' && item?.value?.asset_key) {
-                    item.value.asset_r2_url = `${config.os2.r2.public.bucketUrl}/${item.value.asset_key}`;
-                  }
-                  return item;
-                });
-                return step;
-              });
-            }
-            return clip;
-          });
-        }
+        const rawClips = clipsMap.get(template.template_id) || [];
+        const { visualClips, audioClips } = splitTemplateAiClipsForApiResponse(rawClips);
+        template.clips = visualClips.length > 0 ? visualClips.map(enrichTemplateAiClipRowUrls) : [];
+        template.audio_clips = audioClips.length > 0 ? audioClips.map(enrichTemplateAiClipRowUrls) : [];
 
         if (template.image_uploads_required === undefined || template.image_uploads_required === null || Number.isNaN(Number(template.image_uploads_required))) {
           template.image_uploads_required = calculateImageUploadsRequiredFromClips(template.clips || []);
@@ -3023,7 +2968,7 @@ function isClipMetadataOnlyClips(clips) {
   const ALLOWED_KEYS = new Set(['tac_id', 'asset_type', 'audio_behavior']);
   return clips.every(c => {
     if (typeof c.tac_id !== 'string') return false;
-    if (c.asset_type !== 'image' && c.asset_type !== 'video') return false;
+    if (c.asset_type !== 'image' && c.asset_type !== 'video' && c.asset_type !== 'audio') return false;
     return Object.keys(c).every(k => ALLOWED_KEYS.has(k));
   });
 }
