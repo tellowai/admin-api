@@ -1870,6 +1870,7 @@ exports.createDraftTemplate = async function (req, res) {
     // Set defaults
     templateData.template_output_type = templateData.template_output_type || 'video';
     templateData.template_workflow_type = templateData.template_workflow_type || 'AI_PLUS_AE';
+    templateData.is_effects = templateData.is_effects === true;
     templateData.template_clips_assets_type = (templateData.template_workflow_type === 'AI_ONLY' || templateData.template_workflow_type === 'AI_PLUS_AE') ? 'ai' : 'non-ai';
     templateData.status = templateData.status || 'draft';
     templateData.template_type = templateData.template_type || 'premium';
