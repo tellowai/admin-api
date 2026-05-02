@@ -1941,43 +1941,109 @@ exports.updateTemplateImageInputsFromClips = async function (templateId) {
 
 /**
  * Update the order (clip_index) of template AI clips.
+ *
+ * `uk_template_clip_slot` is (template_id, clip_index, asset_type). Problems solved here:
+ * 1) Swapping two rows of the same asset_type in one UPDATE hits ER_DUP_ENTRY mid-statement.
+ * 2) The UI payload often omits rows that still exist in DB (e.g. asset_type = 'audio', or rows without
+ *    tac_id in the client). Moving only payload rows to temp leaves another row at the old clip_index;
+ *    assigning a reordered row to that index then duplicates (template_id, clip_index, asset_type).
+ *
+ * Strategy: snapshot all rows → move every row to unique temp indices → apply payload positions →
+ * place rows not in the payload back, bumping clip_index when their original slot is already taken
+ * for the same asset_type.
+ *
  * @param {string} templateId - The template UUID.
- * @param {Array<{tac_id: string, clip_index: number}>} clips - Array of clip objects with new indices.
+ * @param {Array<{tac_id: string, clip_index: number}>} clips - tac_id + new 0-based index from client.
  */
 exports.updateTemplateClipOrder = async function (templateId, clips) {
   if (!clips || clips.length === 0) return;
 
-  const caseParts = [];
-  const queryParams = [];
-  // For IN clause
-  const inParams = [];
+  const byTac = new Map();
+  for (const clip of clips) {
+    if (clip?.tac_id) {
+      byTac.set(clip.tac_id, clip);
+    }
+  }
+  const ordered = [...byTac.values()];
+  if (ordered.length === 0) return;
 
-  clips.forEach((clip) => {
-    // DB stores 1-based index, incoming is 0-based
-    const dbIndex = clip.clip_index + 1;
+  const connection = await mysqlQueryRunner.getConnectionFromMaster();
+  try {
+    await connection.beginTransaction();
 
-    caseParts.push('WHEN ? THEN ?');
-    queryParams.push(clip.tac_id, dbIndex);
-    inParams.push(clip.tac_id);
-  });
+    const snapshot = await connection.query(
+      `SELECT tac_id, clip_index, asset_type FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL`,
+      [templateId]
+    );
+    if (!snapshot || snapshot.length === 0) {
+      await connection.commit();
+      return;
+    }
 
-  // Add template_id (for WHERE clause)
-  queryParams.push(templateId);
+    const byTacSnapshot = new Map(snapshot.map((r) => [r.tac_id, r]));
+    const reorderTacs = new Set(ordered.map((c) => c.tac_id));
 
-  // Add tac_ids for IN clause
-  queryParams.push(...inParams);
+    const maxRows = await connection.query(
+      `SELECT COALESCE(MAX(clip_index), 0) AS mx FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL`,
+      [templateId]
+    );
+    const baseTemp = Math.max(100000, Number(maxRows[0]?.mx || 0) + 1000);
 
-  const placeholders = inParams.map(() => '?').join(', ');
+    let seq = 0;
+    for (const row of snapshot) {
+      const tempIdx = baseTemp + ++seq;
+      await connection.query(
+        `UPDATE template_ai_clips SET clip_index = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+        [tempIdx, templateId, row.tac_id]
+      );
+    }
 
-  const query = `
-    UPDATE template_ai_clips
-    SET clip_index = CASE tac_id ${caseParts.join(' ')} END
-    WHERE template_id = ?
-    AND tac_id IN (${placeholders})
-    AND deleted_at IS NULL
-  `;
+    for (const clip of ordered) {
+      if (!byTacSnapshot.has(clip.tac_id)) continue;
+      const dbIndex = clip.clip_index + 1;
+      await connection.query(
+        `UPDATE template_ai_clips SET clip_index = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+        [dbIndex, templateId, clip.tac_id]
+      );
+    }
 
-  await mysqlQueryRunner.runQueryInMaster(query, queryParams);
+    const slotKey = (assetType, idx) => `${assetType}:${idx}`;
+    const occupied = new Set();
+    for (const clip of ordered) {
+      const meta = byTacSnapshot.get(clip.tac_id);
+      if (!meta) continue;
+      occupied.add(slotKey(meta.asset_type, clip.clip_index + 1));
+    }
+
+    const maxSlot = Math.max(...snapshot.map((r) => Number(r.clip_index) || 0), 1);
+    const cap = maxSlot + snapshot.length + ordered.length + 50;
+
+    for (const row of snapshot) {
+      if (reorderTacs.has(row.tac_id)) continue;
+      let idx = Number(row.clip_index) || 1;
+      const at = row.asset_type;
+      let guard = 0;
+      while (occupied.has(slotKey(at, idx)) && guard < cap) {
+        idx += 1;
+        guard += 1;
+      }
+      if (guard >= cap) {
+        throw new Error('Could not resolve clip_index for non-reordered template_ai_clips row');
+      }
+      occupied.add(slotKey(at, idx));
+      await connection.query(
+        `UPDATE template_ai_clips SET clip_index = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+        [idx, templateId, row.tac_id]
+      );
+    }
+
+    await connection.commit();
+  } catch (e) {
+    await connection.rollback();
+    throw e;
+  } finally {
+    connection.release();
+  }
 };
 
 /**
