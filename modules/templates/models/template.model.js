@@ -1408,7 +1408,8 @@ exports.getTemplateAiClips = async function (templateId) {
     FROM template_ai_clips
     WHERE template_id = ?
     AND deleted_at IS NULL
-    ORDER BY clip_index ASC
+    ORDER BY clip_index ASC,
+      CASE asset_type WHEN 'image' THEN 0 WHEN 'video' THEN 1 WHEN 'audio' THEN 2 ELSE 3 END ASC
   `;
 
   const clips = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
@@ -1999,27 +2000,102 @@ exports.updateTemplateClipAssetTypes = async function (templateId, clips) {
 
 /**
  * Update clip metadata (asset_type, audio_behavior) for existing template AI clips.
+ * Handles image↔video at the same clip_index: MySQL unique `uk_template_clip_slot` would reject a plain
+ * UPDATE when another row already holds the target asset_type; we move the conflicting row to a temp
+ * clip_index, update the primary row, then restore the conflicting row with the primary's former type.
+ *
  * @param {string} templateId
  * @param {Array<{tac_id: string, asset_type: string, audio_behavior?: string}>} clips
  */
 exports.updateTemplateClipMetadata = async function (templateId, clips) {
   if (!clips || clips.length === 0) return;
 
-  for (const clip of clips) {
-    const sets = ['asset_type = ?'];
-    const params = [clip.asset_type];
+  const connection = await mysqlQueryRunner.getConnectionFromMaster();
+  let tempSeq = 0;
+  try {
+    await connection.beginTransaction();
 
-    if (clip.audio_behavior === 'muted' || clip.audio_behavior === 'unmuted') {
-      sets.push('audio_behavior = ?');
-      params.push(clip.audio_behavior);
+    const maxRows = await connection.query(
+      `SELECT COALESCE(MAX(clip_index), 0) AS mx FROM template_ai_clips WHERE template_id = ? AND deleted_at IS NULL`,
+      [templateId]
+    );
+    const baseTemp = Math.max(100000, Number(maxRows[0]?.mx || 0) + 1000);
+    const nextTempIdx = () => baseTemp + (++tempSeq);
+
+    for (const clip of clips) {
+      if (!clip?.tac_id) continue;
+      const tacId = clip.tac_id;
+      const newType = clip.asset_type;
+      if (newType !== 'image' && newType !== 'video' && newType !== 'audio') continue;
+
+      const curRows = await connection.query(
+        `SELECT tac_id, clip_index, asset_type, audio_behavior FROM template_ai_clips WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+        [templateId, tacId]
+      );
+      if (!curRows || curRows.length === 0) continue;
+      const cur = curRows[0];
+
+      const wantsAudio =
+        clip.audio_behavior === 'muted' || clip.audio_behavior === 'unmuted' ? clip.audio_behavior : null;
+
+      const noTypeChange = cur.asset_type === newType;
+      const onlyAudioChange =
+        noTypeChange && wantsAudio != null && wantsAudio !== cur.audio_behavior;
+
+      if (noTypeChange && !onlyAudioChange) {
+        continue;
+      }
+      if (noTypeChange && onlyAudioChange) {
+        await connection.query(
+          `UPDATE template_ai_clips SET audio_behavior = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+          [wantsAudio, templateId, tacId]
+        );
+        continue;
+      }
+
+      const conflictRows = await connection.query(
+        `SELECT tac_id, clip_index, asset_type, audio_behavior FROM template_ai_clips WHERE template_id = ? AND clip_index = ? AND asset_type = ? AND tac_id <> ? AND deleted_at IS NULL`,
+        [templateId, cur.clip_index, newType, tacId]
+      );
+
+      if (conflictRows && conflictRows.length > 0) {
+        const other = conflictRows[0];
+        const tempIdx = nextTempIdx();
+        await connection.query(
+          `UPDATE template_ai_clips SET clip_index = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+          [tempIdx, templateId, other.tac_id]
+        );
+
+        const tAudio = wantsAudio != null ? wantsAudio : cur.audio_behavior;
+        await connection.query(
+          `UPDATE template_ai_clips SET asset_type = ?, audio_behavior = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+          [newType, tAudio, templateId, tacId]
+        );
+
+        await connection.query(
+          `UPDATE template_ai_clips SET clip_index = ?, asset_type = ?, audio_behavior = ? WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+          [cur.clip_index, cur.asset_type, other.audio_behavior, templateId, other.tac_id]
+        );
+      } else {
+        const sets = ['asset_type = ?'];
+        const params = [newType];
+        if (wantsAudio != null) {
+          sets.push('audio_behavior = ?');
+          params.push(wantsAudio);
+        }
+        params.push(templateId, tacId);
+        await connection.query(
+          `UPDATE template_ai_clips SET ${sets.join(', ')} WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL`,
+          params
+        );
+      }
     }
 
-    params.push(templateId, clip.tac_id);
-    const query = `
-      UPDATE template_ai_clips
-      SET ${sets.join(', ')}
-      WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
-    `;
-    await mysqlQueryRunner.runQueryInMaster(query, params);
+    await connection.commit();
+  } catch (e) {
+    await connection.rollback();
+    throw e;
+  } finally {
+    connection.release();
   }
 };
