@@ -1364,15 +1364,26 @@ exports.addTemplateClipWithWorkflow = async function (templateId, assetType = 'v
 };
 
 /**
- * Delete a template AI clip (soft delete)
+ * Delete a template AI clip (soft delete) and archive its linked workflow so nothing keeps executing it.
  */
 exports.deleteTemplateClip = async function (templateId, tacId) {
+  const sel = `
+    SELECT wf_id FROM template_ai_clips
+    WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
+  `;
+  const rows = await mysqlQueryRunner.runQueryInMaster(sel, [templateId, tacId]);
+  const wfId = rows[0]?.wf_id ?? null;
+
   const query = `
     UPDATE template_ai_clips 
     SET deleted_at = NOW() 
     WHERE template_id = ? AND tac_id = ? AND deleted_at IS NULL
   `;
   await mysqlQueryRunner.runQueryInMaster(query, [templateId, tacId]);
+
+  if (wfId != null) {
+    await WorkflowModel.archiveWorkflowByWfId(wfId);
+  }
   return true;
 };
 

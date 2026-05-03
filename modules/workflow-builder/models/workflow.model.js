@@ -463,3 +463,15 @@ exports.ensureWorkflowForTacId = async function (tacId, userId) {
   await exports.setWfIdForTacId(tacId, newWfId);
   return newWfId;
 };
+
+/**
+ * Soft-archive a workflow so workers and GET-by-id ignore it (archived_at set).
+ * Used when deleting the last template_ai_clips row that owned this wf_id.
+ */
+exports.archiveWorkflowByWfId = async function (wfId) {
+  if (wfId == null) return;
+  await mysqlQueryRunner.runQueryInMaster(
+    `UPDATE workflows SET archived_at = NOW(), updated_at = NOW() WHERE wf_id = ? AND archived_at IS NULL`,
+    [wfId]
+  );
+};
