@@ -78,16 +78,7 @@ function syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate =
   }
 }
 
-/**
- * Parse additional_data and merge text_fit_groups for persistence on templates.additional_data.
- * @param {*} rawAdditional - Existing additional_data (object or JSON string)
- * @param {*} textFitGroupsPayload - From validated PATCH body (array or null)
- * @returns {{ merged: Object, text_fit_groups: Array }}
- */
-function mergeAdditionalDataWithTextFitGroups(rawAdditional, textFitGroupsPayload) {
-  const normalizedGroups = textFitGroupsPayload === null
-    ? []
-    : (Array.isArray(textFitGroupsPayload) ? textFitGroupsPayload : []);
+function parseAdditionalDataObject(rawAdditional) {
   let ad = rawAdditional;
   if (typeof ad === 'string') {
     try {
@@ -97,10 +88,28 @@ function mergeAdditionalDataWithTextFitGroups(rawAdditional, textFitGroupsPayloa
     }
   }
   if (!ad || typeof ad !== 'object' || Array.isArray(ad)) {
-    ad = {};
+    return {};
   }
-  const merged = { ...ad, text_fit_groups: normalizedGroups };
-  return { merged, text_fit_groups: normalizedGroups };
+  return { ...ad };
+}
+
+/**
+ * Merge selective keys into template.additional_data without dropping unrelated keys.
+ * @param {*} rawAdditional - Existing additional_data (object or JSON string)
+ * @param {{ text_fit_groups?: *, audio_workflow_timeline?: * }} patches - undefined = leave unchanged
+ */
+function mergeTemplateAdditionalDataPatches(rawAdditional, patches) {
+  const merged = parseAdditionalDataObject(rawAdditional);
+  if (patches.text_fit_groups !== undefined) {
+    const normalizedGroups = patches.text_fit_groups === null
+      ? []
+      : (Array.isArray(patches.text_fit_groups) ? patches.text_fit_groups : []);
+    merged.text_fit_groups = normalizedGroups;
+  }
+  if (patches.audio_workflow_timeline !== undefined) {
+    merged.audio_workflow_timeline = patches.audio_workflow_timeline;
+  }
+  return merged;
 }
 
 /**
@@ -1753,10 +1762,13 @@ exports.createTemplate = async function (req, res) {
       templateData.niche_id = nicheId;
     }
 
-    if (templateData.text_fit_groups !== undefined) {
-      const { merged } = mergeAdditionalDataWithTextFitGroups(templateData.additional_data, templateData.text_fit_groups);
-      templateData.additional_data = merged;
+    if (templateData.text_fit_groups !== undefined || templateData.audio_workflow_timeline !== undefined) {
+      templateData.additional_data = mergeTemplateAdditionalDataPatches(templateData.additional_data, {
+        ...(templateData.text_fit_groups !== undefined ? { text_fit_groups: templateData.text_fit_groups } : {}),
+        ...(templateData.audio_workflow_timeline !== undefined ? { audio_workflow_timeline: templateData.audio_workflow_timeline } : {})
+      });
       delete templateData.text_fit_groups;
+      delete templateData.audio_workflow_timeline;
     }
 
     await TemplateModel.createTemplate(templateData, clips);
@@ -3435,10 +3447,13 @@ exports.updateTemplate = async function (req, res) {
       templateData.niche_id = nicheId;
     }
 
-    if (templateData.text_fit_groups !== undefined) {
-      const { merged } = mergeAdditionalDataWithTextFitGroups(existingTemplate.additional_data, templateData.text_fit_groups);
-      templateData.additional_data = merged;
+    if (templateData.text_fit_groups !== undefined || templateData.audio_workflow_timeline !== undefined) {
+      templateData.additional_data = mergeTemplateAdditionalDataPatches(existingTemplate.additional_data, {
+        ...(templateData.text_fit_groups !== undefined ? { text_fit_groups: templateData.text_fit_groups } : {}),
+        ...(templateData.audio_workflow_timeline !== undefined ? { audio_workflow_timeline: templateData.audio_workflow_timeline } : {})
+      });
       delete templateData.text_fit_groups;
+      delete templateData.audio_workflow_timeline;
     }
 
     let updated;

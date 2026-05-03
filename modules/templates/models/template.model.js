@@ -818,20 +818,25 @@ exports.getTemplatesByIdsForExport = async function (templateIds) {
 };
 
 /**
- * Delete AI clips for a template (transaction-aware version)
+ * Soft-delete template_ai_clips (and associated legacy clip_workflow rows) for clip kinds managed by the template PATCH body.
+ * IMPORTANT: Visual clips (`image`, `video`) are replaced wholesale when `clips` is sent on update.
+ * Audio clips (`audio`) are provisioned via `/ensure-ai-clips` and are NOT included in PATCH `clips`; they must survive template saves.
+ * @param {*} connection - Transaction connection from getConnectionFromMaster
+ * @param {string} templateId
  */
 exports.deleteTemplateAiClipsInTransaction = async function (connection, templateId) {
-  // First get all tac_ids for this template
+  // Only remove visual clip rows — PATCH `clips` covers image/video only (admin-ui does not merge audio_workflow rows).
   const getTacIdsQuery = `
     SELECT tac_id
     FROM template_ai_clips
     WHERE template_id = ?
     AND deleted_at IS NULL
+    AND asset_type IN ('image', 'video')
   `;
 
   const tacIds = await connection.query(getTacIdsQuery, [templateId]);
 
-  // Delete workflows for all clips
+  // Delete workflows for those clips only (legacy clip_workflow table)
   if (tacIds.length > 0) {
     const tacIdList = tacIds.map(row => row.tac_id);
     const placeholders = tacIdList.map(() => '?').join(',');
@@ -846,32 +851,32 @@ exports.deleteTemplateAiClipsInTransaction = async function (connection, templat
     await connection.query(softDeleteWorkflowsQuery, tacIdList);
   }
 
-  // Then mark clips as deleted
   const deleteQuery = `
     UPDATE template_ai_clips
     SET deleted_at = NOW()
     WHERE template_id = ?
     AND deleted_at IS NULL
+    AND asset_type IN ('image', 'video')
   `;
 
   await connection.query(deleteQuery, [templateId]);
 };
 
 /**
- * Delete AI clips for a template (non-transactional helper)
+ * Delete AI clips for a template (non-transactional helper).
+ * Only removes image/video rows so audio workflows survive (same contract as deleteTemplateAiClipsInTransaction).
  */
 exports.deleteTemplateAiClips = async function (templateId) {
-  // First get all tac_ids for this template
   const getTacIdsQuery = `
     SELECT tac_id
     FROM template_ai_clips
     WHERE template_id = ?
     AND deleted_at IS NULL
+    AND asset_type IN ('image', 'video')
   `;
 
   const tacRows = await mysqlQueryRunner.runQueryInMaster(getTacIdsQuery, [templateId]);
 
-  // Delete workflows for all clips
   if (tacRows && tacRows.length > 0) {
     const tacIdList = tacRows.map(row => row.tac_id);
     const placeholders = tacIdList.map(() => '?').join(',');
@@ -886,12 +891,12 @@ exports.deleteTemplateAiClips = async function (templateId) {
     await mysqlQueryRunner.runQueryInMaster(softDeleteWorkflowsQuery, tacIdList);
   }
 
-  // Then mark clips as deleted
   const deleteQuery = `
     UPDATE template_ai_clips
     SET deleted_at = NOW()
     WHERE template_id = ?
     AND deleted_at IS NULL
+    AND asset_type IN ('image', 'video')
   `;
 
   await mysqlQueryRunner.runQueryInMaster(deleteQuery, [templateId]);
