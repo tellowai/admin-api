@@ -103,6 +103,7 @@ const ORDERS_ADMIN_SELECT = `
     o.currency,
     o.payment_method,
     o.status,
+    o.transaction_notes,
     o.created_at,
     o.completed_at,
     o.failed_at,
@@ -181,6 +182,7 @@ exports.getByUserId = async function (userId, limit, offset) {
   const query = `
     SELECT order_id, user_id, payment_gateway, pg_order_id, quantity, pg_payment_id,
            payment_plan_id, amount_paid, currency, payment_method, status,
+           transaction_notes,
            created_at, completed_at, failed_at, refunded_at
     FROM orders
     WHERE user_id = ?

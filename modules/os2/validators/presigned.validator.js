@@ -31,4 +31,40 @@ exports.validatePresignedUrlGeneration = async function(req, res, next) {
       message: req.t('os2:INVALID_REQUEST_DATA')
     });
   }
-}; 
+};
+
+exports.validatePresignedReadUrls = async function (req, res, next) {
+  try {
+    const itemSchema = Joi.object({
+      bucket: Joi.string().trim().max(128).required(),
+      key: Joi.string().trim().max(2048).required()
+    });
+
+    const schema = Joi.object({
+      items: Joi.array().items(itemSchema).min(1).max(8).required()
+    });
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message
+      });
+    }
+
+    for (const it of value.items) {
+      if (it.key.includes('..')) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Invalid object key'
+        });
+      }
+    }
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('os2:INVALID_REQUEST_DATA')
+    });
+  }
+};

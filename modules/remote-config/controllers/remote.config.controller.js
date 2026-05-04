@@ -83,23 +83,45 @@ exports.getAllRemoteConfigKeysAndValues = async function (req, res, next) {
  */
 exports.updateRemoteConfigValueByKey = async function (req, res, next) {
   try {
-    const { rc_key_name, value } = req.body || {};
+    const { rc_key_name, value, data_type: dataTypeIn } = req.body || {};
     if (!rc_key_name) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
         message: 'rc_key_name is required'
       });
     }
-    const strValue = value != null ? String(value) : '';
+    const allowedTypes = new Set(['string', 'number', 'boolean', 'json']);
+    const data_type = allowedTypes.has(String(dataTypeIn || '').toLowerCase())
+      ? String(dataTypeIn).toLowerCase()
+      : 'number';
+    let strValue = '';
+    if (data_type === 'json') {
+      if (value === undefined || value === null) strValue = '';
+      else if (typeof value === 'object') strValue = JSON.stringify(value);
+      else strValue = String(value);
+    } else if (data_type === 'boolean') {
+      strValue = value === true || value === 'true' || value === '1' ? 'true' : 'false';
+    } else {
+      strValue = value != null ? String(value) : '';
+    }
     const payload = {
       rc_key_name: rc_key_name.toLowerCase(),
-      data_type: 'number',
+      data_type,
       rc_default_value: strValue,
       rc_value: strValue
     };
     await RemoteConfigDbo.createOrUpdateRemoteConfig(payload);
+    if (payload.rc_key_name === 'output_logo_overlay_config' || payload.rc_key_name === 'free_template_video_logo_config') {
+      try {
+        const RedisService = require('../../core/models/redis.promise.model');
+        await RedisService.deleteData('output_logo_overlay_config_json');
+        await RedisService.deleteData('free_template_video_logo_config_json');
+      } catch (_) {
+        /* non-fatal */
+      }
+    }
     return res.status(HTTP_STATUS_CODES.OK).json({
       message: 'Updated',
-      data: { rc_key_name: payload.rc_key_name, value: strValue }
+      data: { rc_key_name: payload.rc_key_name, value: strValue, data_type }
     });
   } catch (err) {
     err.custom = {

@@ -77,6 +77,15 @@ const textFitGroupSchema = Joi.object({
   policy: Joi.string().valid('min_of_members').default('min_of_members')
 });
 
+/** Admin multi-layer audio timeline; stored under additional_data.audio_workflow_timeline; also accepted top-level on PATCH for merge. */
+const audioWorkflowTimelineSchema = Joi.object({
+  layers: Joi.array().items(
+    Joi.object({
+      blocks: Joi.array().items(Joi.object().unknown(true)).optional()
+    }).unknown(true)
+  ).optional()
+}).unknown(true).allow(null);
+
 // Template tag schema
 
 const layerSchema = Joi.object({
@@ -155,6 +164,7 @@ const createTemplateSchema = Joi.object().keys({
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
   text_fit_groups: Joi.array().items(textFitGroupSchema).optional(),
+  audio_workflow_timeline: audioWorkflowTimelineSchema.optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_json: Joi.array().items(
@@ -257,6 +267,7 @@ const updateTemplateSchema = Joi.object().keys({
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)
   additional_data: Joi.object().allow(null).optional(),
   text_fit_groups: Joi.array().items(textFitGroupSchema).allow(null).optional(),
+  audio_workflow_timeline: audioWorkflowTimelineSchema.optional(),
   android_status: Joi.string().valid('active', 'inactive').optional(),
   ios_status: Joi.string().valid('active', 'inactive').optional(),
   web_status: Joi.string().valid('active', 'inactive').optional(),

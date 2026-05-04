@@ -197,6 +197,33 @@ exports.generatePresignedUrls = async function (req, res) {
  *       "message": "Invalid request data"
  *     }
  */
+/**
+ * POST /os2/presigned-read-urls — resolve existing bucket/key to a URL suitable for &lt;img&gt; / &lt;video&gt; src (public CDN or presigned GET).
+ */
+exports.generatePresignedReadUrls = async function (req, res) {
+  try {
+    const { items } = req.validatedBody;
+    const storage = StorageFactory.getProvider();
+
+    const urls = await Promise.all(
+      items.map(async ({ bucket, key }) => {
+        const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+        const signed_url = await storage.generatePresignedDownloadUrlFromBucket(bucket, cleanKey, {
+          expiresIn: config.os2.download.defaultDownloadExpiresIn
+        });
+        return { bucket, key: cleanKey, signed_url };
+      })
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({ urls });
+  } catch (error) {
+    logger.error('Error generating presigned read URLs:', { error: error.message, stack: error.stack });
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: error.message || req.t('os2:PRESIGNED_URL_GENERATION_FAILED')
+    });
+  }
+};
+
 exports.generatePresignedPublicBucketUrls = async function (req, res) {
   try {
     const { files } = req.validatedBody;
