@@ -23,6 +23,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/os2/presigned-read-urls'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    PresignedValidator.validatePresignedReadUrls,
+    PresignedCtrl.generatePresignedReadUrls
+  );
+
+  app.route(
     versionConfig.routePrefix + '/os2/presigned-urls/ephemeral'
   ).post(
     AuthMiddleware.isAuthorizedJWT,
