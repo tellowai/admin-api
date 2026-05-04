@@ -3,6 +3,7 @@
 const OrdersModel = require('../models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
+const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 
 function normPlanField(v) {
   if (v == null || v === '') return '';
@@ -29,10 +30,15 @@ function purchaseCategoryFromPlan(planType, billingInterval) {
 
 const MAX_EXPORT_ROWS = 25000;
 
-function mapRowToAdminOrder(o, planById, userById) {
+function mapRowToAdminOrder(o, planById, userById, templateNameById) {
   const plan = o.payment_plan_id != null ? planById[o.payment_plan_id] : null;
   const planType = plan ? plan.plan_type : null;
   const billingInterval = plan ? plan.billing_interval : null;
+  const templateId = orderTemplateStitch.parseTemplateIdFromTransactionNotes(o.transaction_notes);
+  const templateName =
+    templateId && templateNameById && Object.prototype.hasOwnProperty.call(templateNameById, templateId)
+      ? templateNameById[templateId]
+      : null;
   return {
     order_id: o.order_id,
     user_id: o.user_id,
@@ -55,7 +61,9 @@ function mapRowToAdminOrder(o, planById, userById) {
     plan_heading: plan ? plan.plan_heading ?? null : null,
     billing_interval: billingInterval ?? null,
     purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
-    user_details: userById[o.user_id] || null
+    user_details: userById[o.user_id] || null,
+    template_id: templateId,
+    template_name: templateName
   };
 }
 
@@ -120,7 +128,8 @@ exports.listAdminOrders = async function (req, res) {
     ]);
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
-    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById));
+    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
+    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById, templateNameById));
 
     return res.status(200).json({
       data: {
@@ -158,7 +167,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
       exportLimit > 0 ? await OrdersModel.listOrdersAdmin({ ...preparedFilters, limit: exportLimit, offset: 0 }) : [];
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
-    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById));
+    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
+    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById, templateNameById));
 
     const headers = [
       'order_id',
@@ -173,6 +183,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
       'plan_name',
       'plan_heading',
       'billing_interval',
+      'template_id',
+      'template_name',
       'client_platform',
       'payment_gateway',
       'quantity',
@@ -199,6 +211,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
           csvEscape(o.plan_name),
           csvEscape(o.plan_heading),
           csvEscape(o.billing_interval),
+          csvEscape(o.template_id),
+          csvEscape(o.template_name),
           csvEscape(o.client_platform),
           csvEscape(o.payment_gateway),
           csvEscape(o.quantity),

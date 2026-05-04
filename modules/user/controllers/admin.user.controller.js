@@ -15,6 +15,7 @@ const RbacModel = require('../../auth/models/rbac.model');
 const CreditsModel = require('../../credits/models/credits.model');
 const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
+const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -457,11 +458,17 @@ exports.getUserOrders = async function (req, res) {
     const planMap = {};
     for (const p of plans) planMap[p.pp_id] = p;
 
+    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(orders);
+
     const data = orders.map(order => {
       const plan = order.payment_plan_id ? planMap[order.payment_plan_id] : null;
+      const tid = orderTemplateStitch.parseTemplateIdFromTransactionNotes(order.transaction_notes);
+      const { transaction_notes: _tn, ...rest } = order;
       return {
-        ...order,
-        plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null
+        ...rest,
+        plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
+        template_id: tid,
+        template_name: tid ? (templateNameById[tid] ?? null) : null
       };
     });
 
