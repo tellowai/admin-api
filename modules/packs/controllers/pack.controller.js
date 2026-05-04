@@ -8,9 +8,8 @@ const PackErrorHandler = require('../middlewares/pack.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const config = require('../../../config/config');
-const { TOPICS } = require('../../core/constants/kafka.events.config');
-const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
+const { recomputePackPricing } = require('../utils/packPricing.util');
 
 class PackController {
   static async listPacks(req, res) {
@@ -53,7 +52,6 @@ class PackController {
   static async createPack(req, res) {
     try {
       const packData = req.validatedBody;
-      console.log(packData,'packData')
       const packId = await PackModel.createPack(packData);
 
       // Publish activity log command
@@ -134,19 +132,13 @@ class PackController {
         });
       }
 
-      // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            admin_user_id: req.user.userId,
-            entity_type: 'PACKS',
-            action_name: 'UPDATE_PACK', 
-            entity_id: packId
-          }
-        }],
-        'create_admin_activity_log'
-      );
+      await publishNewAdminActivityLog({
+        adminUserId: req.user && req.user.userId ? req.user.userId : null,
+        entityType: 'PACKS',
+        actionName: 'UPDATE_PACK',
+        entityId: packId,
+        additionalData: JSON.stringify({})
+      });
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: req.t('packs:success.pack_updated')
@@ -181,19 +173,13 @@ class PackController {
         });
       }
 
-      // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            admin_user_id: req.user.userId,
-            entity_type: 'PACKS',
-            action_name: 'ARCHIVE_PACK', 
-            entity_id: packId
-          }
-        }],
-        'create_admin_activity_log'
-      );
+      await publishNewAdminActivityLog({
+        adminUserId: req.user && req.user.userId ? req.user.userId : null,
+        entityType: 'PACKS',
+        actionName: 'ARCHIVE_PACK',
+        entityId: packId,
+        additionalData: JSON.stringify({})
+      });
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: req.t('packs:success.pack_archived')
@@ -316,6 +302,10 @@ class PackController {
         await PackModel.addTemplateToPackWithOrder(packId, template.template_id, template.sort_order);
       }
 
+      await recomputePackPricing(packId);
+
+      const packAfter = await PackModel.getPack(packId);
+
       // Process template details
       const processedTemplates = existingTemplates.map(template => {
         const templateData = {
@@ -345,18 +335,20 @@ class PackController {
         return templateData;
       });
 
-      // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            entity_type: 'PACKS',
-            action_name: 'ADD_TEMPLATES_TO_PACK', 
-            entity_id: packId
-          }
-        }],
-        'create_admin_activity_log'
-      );
+      await publishNewAdminActivityLog({
+        adminUserId: req.user && req.user.userId ? req.user.userId : null,
+        entityType: 'PACKS',
+        actionName: 'ADD_TEMPLATES_TO_PACK',
+        entityId: packId,
+        additionalData: JSON.stringify({
+          template_ids: templateIds,
+          added_count: templateIds.length,
+          credits: packAfter ? packAfter.credits : null,
+          alacarte_price: packAfter ? packAfter.alacarte_price : null,
+          alacarte_original_price: packAfter ? packAfter.alacarte_original_price : null,
+          language_code: packAfter ? packAfter.language_code : null
+        })
+      });
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: req.t('packs:success.templates_added'),
@@ -388,24 +380,39 @@ class PackController {
       const templatesNotInPack = template_ids.filter(id => !packTemplateIds.includes(id));
       const templatesToRemove = template_ids.filter(id => packTemplateIds.includes(id));
 
+      const remainingAfterRemove = packTemplateIds.length - templatesToRemove.length;
+      if (remainingAfterRemove < PACK_CONSTANTS.MIN_TEMPLATES_PER_PACK) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: req.t('packs:errors.templates_minimum_not_met', {
+            min: PACK_CONSTANTS.MIN_TEMPLATES_PER_PACK,
+            remaining: remainingAfterRemove
+          })
+        });
+      }
+
       // Remove templates
       for (const templateId of templatesToRemove) {
         await PackModel.removeTemplateFromPack(packId, templateId);
       }
 
-      // Publish activity log command
-      await kafkaCtrl.sendMessage(
-        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
-        [{
-          value: { 
-            admin_user_id: req.user.userId,
-            entity_type: 'PACKS',
-            action_name: 'REMOVE_TEMPLATES_FROM_PACK', 
-            entity_id: packId
-          }
-        }],
-        'create_admin_activity_log'
-      );
+      await recomputePackPricing(packId);
+
+      const packAfter = await PackModel.getPack(packId);
+
+      await publishNewAdminActivityLog({
+        adminUserId: req.user && req.user.userId ? req.user.userId : null,
+        entityType: 'PACKS',
+        actionName: 'REMOVE_TEMPLATES_FROM_PACK',
+        entityId: packId,
+        additionalData: JSON.stringify({
+          template_ids: templatesToRemove,
+          removed_count: templatesToRemove.length,
+          credits: packAfter ? packAfter.credits : null,
+          alacarte_price: packAfter ? packAfter.alacarte_price : null,
+          alacarte_original_price: packAfter ? packAfter.alacarte_original_price : null,
+          language_code: packAfter ? packAfter.language_code : null
+        })
+      });
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         message: req.t('packs:success.templates_removed'),

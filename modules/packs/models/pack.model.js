@@ -10,8 +10,9 @@ exports.createPack = async function(packData) {
       pack_name,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
-      additional_data
-    ) VALUES (?, ?, ?, ?, ?)
+      additional_data,
+      language_code
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `;
   
   const values = [
@@ -19,7 +20,8 @@ exports.createPack = async function(packData) {
     packData.pack_name,
     packData.thumbnail_cf_r2_key || null,
     packData.thumbnail_cf_r2_url || null,
-    JSON.stringify(packData.additional_data || {})
+    JSON.stringify(packData.additional_data || {}),
+    packData.language_code || null
   ];
 
   await mysqlQueryRunner.runQueryInMaster(query, values);
@@ -34,7 +36,12 @@ exports.getPack = async function(packId) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
-      created_at
+      language_code,
+      credits,
+      alacarte_price,
+      alacarte_original_price,
+      created_at,
+      updated_at
     FROM packs
     WHERE pack_id = ?
     AND archived_at IS NULL
@@ -52,7 +59,12 @@ exports.listPacks = async function(limit = 10, offset = 0) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
-      created_at
+      language_code,
+      credits,
+      alacarte_price,
+      alacarte_original_price,
+      created_at,
+      updated_at
     FROM packs
     WHERE archived_at IS NULL
     ORDER BY created_at DESC
@@ -131,6 +143,8 @@ exports.getTemplatesByIds = async function(templateIds) {
       cf_r2_key,
       cf_r2_url,
       credits,
+      alacarte_price,
+      alacarte_original_price,
       additional_data,
       template_output_type,
       created_at
@@ -178,4 +192,22 @@ exports.countPackTemplates = async function(packId) {
   
   const [result] = await mysqlQueryRunner.runQueryInSlave(query, [packId]);
   return result.count;
+};
+
+exports.updatePackPricing = async function(packId, { credits, alacarte_price, alacarte_original_price }) {
+  const query = `
+    UPDATE packs
+    SET
+      credits = ?,
+      alacarte_price = ?,
+      alacarte_original_price = ?
+    WHERE pack_id = ?
+    AND archived_at IS NULL
+  `;
+  await mysqlQueryRunner.runQueryInMaster(query, [
+    credits,
+    alacarte_price,
+    alacarte_original_price,
+    packId
+  ]);
 };
