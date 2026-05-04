@@ -22,5 +22,7 @@ module.exports = function (app) {
       ordersAnalyticsController.getOrdersStatusSummary
     );
 
+  app.route('/admin/orders/export').get(AuthMiddleware.isAdminUser, ordersController.exportAdminOrdersCsv);
+
   app.route('/admin/orders').get(AuthMiddleware.isAdminUser, ordersController.listAdminOrders);
 };
