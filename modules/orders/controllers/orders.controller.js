@@ -108,6 +108,68 @@ function formatCsvDate(v) {
   }
 }
 
+const moment = require('moment');
+const TimezoneService = require('../../analytics/services/timezone.service');
+
+/**
+ * Optional created-at range (client calendar → UTC) or numeric order_id bounds from query string.
+ * When both are present, created-at range wins and order_id bounds are ignored (matches admin UI XOR).
+ * Mutates filterPayload with createdAtFrom, createdAtTo, orderIdFrom, orderIdTo when valid.
+ * @returns {{ status: number, message: string } | null} error response body or null
+ */
+function mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload) {
+  const start_date = req.query.start_date != null ? String(req.query.start_date).trim() : '';
+  const end_date = req.query.end_date != null ? String(req.query.end_date).trim() : '';
+  const tz = req.query.tz != null ? String(req.query.tz).trim() : '';
+
+  let hasCreatedRange = false;
+  if (start_date || end_date) {
+    if (!start_date || !end_date) {
+      return { status: 400, message: 'Both start_date and end_date are required for a date filter.' };
+    }
+    const timezone = tz || TimezoneService.getDefaultTimezone();
+    if (!TimezoneService.isValidTimezone(timezone)) {
+      return { status: 400, message: 'Invalid timezone' };
+    }
+    const utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
+    const createdAtFrom = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).format('YYYY-MM-DD HH:mm:ss');
+    const createdAtTo = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).format('YYYY-MM-DD HH:mm:ss');
+    if (moment.utc(createdAtFrom).isAfter(moment.utc(createdAtTo))) {
+      return { status: 400, message: 'Start date cannot be after end date.' };
+    }
+    filterPayload.createdAtFrom = createdAtFrom;
+    filterPayload.createdAtTo = createdAtTo;
+    hasCreatedRange = true;
+  }
+
+  function parseOrderIdParam(v) {
+    if (v == null || v === '') return null;
+    const n = parseInt(String(v).trim(), 10);
+    if (!Number.isFinite(n) || n < 1 || n > 2147483647) return null;
+    return n;
+  }
+
+  // Same rule as admin UI: created range XOR order id range (avoid stricter AND if both appear in query).
+  if (!hasCreatedRange) {
+    const orderIdFrom = parseOrderIdParam(req.query.order_id_from);
+    const orderIdTo = parseOrderIdParam(req.query.order_id_to);
+    let orderIdFromFinal = orderIdFrom;
+    let orderIdToFinal = orderIdTo;
+    if (orderIdFrom != null && orderIdTo != null && orderIdFrom > orderIdTo) {
+      orderIdFromFinal = orderIdTo;
+      orderIdToFinal = orderIdFrom;
+    }
+    if (orderIdFromFinal != null) {
+      filterPayload.orderIdFrom = orderIdFromFinal;
+    }
+    if (orderIdToFinal != null) {
+      filterPayload.orderIdTo = orderIdToFinal;
+    }
+  }
+
+  return null;
+}
+
 /**
  * GET /admin/orders — paginated orders for admin (filters + search).
  */
@@ -125,6 +187,11 @@ exports.listAdminOrders = async function (req, res) {
     const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
 
     const filterPayload = { status, productType, search, client_platform };
+
+    const rangeErr = mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload);
+    if (rangeErr) {
+      return res.status(rangeErr.status).json({ message: rangeErr.message });
+    }
 
     const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
 
@@ -169,6 +236,12 @@ exports.exportAdminOrdersCsv = async function (req, res) {
     const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
 
     const filterPayload = { status, productType, search, client_platform };
+
+    const rangeErr = mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload);
+    if (rangeErr) {
+      return res.status(rangeErr.status).json({ message: rangeErr.message });
+    }
+
     const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
 
     const total = await OrdersModel.countOrdersAdmin(preparedFilters);

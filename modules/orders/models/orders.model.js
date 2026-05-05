@@ -50,7 +50,7 @@ exports.getPpIdsMatchingProductType = async function (productType) {
 };
 
 /**
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, _noMatchingPlans?: boolean }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number, _noMatchingPlans?: boolean }} filters
  * @returns {{ whereSql: string, params: any[] }}
  */
 function buildAdminOrdersWhere(filters) {
@@ -86,6 +86,23 @@ function buildAdminOrdersWhere(filters) {
     params.push(client_platform);
   }
 
+  if (filters.createdAtFrom) {
+    where.push('o.created_at >= ?');
+    params.push(filters.createdAtFrom);
+  }
+  if (filters.createdAtTo) {
+    where.push('o.created_at <= ?');
+    params.push(filters.createdAtTo);
+  }
+  if (filters.orderIdFrom != null && Number.isFinite(Number(filters.orderIdFrom))) {
+    where.push('o.order_id >= ?');
+    params.push(Number(filters.orderIdFrom));
+  }
+  if (filters.orderIdTo != null && Number.isFinite(Number(filters.orderIdTo))) {
+    where.push('o.order_id <= ?');
+    params.push(Number(filters.orderIdTo));
+  }
+
   return { whereSql: where.join(' AND '), params };
 }
 
@@ -113,7 +130,7 @@ const ORDERS_ADMIN_SELECT = `
 
 /**
  * Resolves product-type → payment_plan ids once (avoid duplicate queries when listing + counting).
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  */
 async function resolveAdminFilterPayload(filters) {
   if (filters._ppIdsResolved) return filters;
@@ -138,7 +155,7 @@ exports.prepareAdminOrdersFilters = resolveAdminFilterPayload;
 
 /**
  * Admin list: orders only (plan columns stitched in controller). Filters by status, product bucket, search, client_platform.
- * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string }} filters
+ * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  * @returns {Promise<Array>}
  */
 exports.listOrdersAdmin = async function (filters) {
@@ -155,7 +172,7 @@ exports.listOrdersAdmin = async function (filters) {
 };
 
 /**
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  * @returns {Promise<number>}
  */
 exports.countOrdersAdmin = async function (filters) {
