@@ -159,13 +159,17 @@ exports.replaceTemplateOverrides = async function (templateId, entries) {
     'DELETE FROM template_script_font_overrides WHERE template_id = ?',
     [templateId]
   );
-  for (const e of entries || []) {
-    await mysqlQueryRunner.runQueryInMaster(
-      `INSERT INTO template_script_font_overrides (template_id, script_key, font_asset_id)
-       VALUES (?, ?, ?)`,
-      [templateId, e.script_key, e.font_asset_id]
-    );
+  const list = entries || [];
+  if (list.length === 0) return;
+  const placeholders = list.map(() => '(?, ?, ?)').join(', ');
+  const params = [];
+  for (const e of list) {
+    params.push(templateId, e.script_key, e.font_asset_id);
   }
+  await mysqlQueryRunner.runQueryInMaster(
+    `INSERT INTO template_script_font_overrides (template_id, script_key, font_asset_id) VALUES ${placeholders}`,
+    params
+  );
 };
 
 exports.loadManifestPayloadFromDb = async function () {
@@ -173,27 +177,38 @@ exports.loadManifestPayloadFromDb = async function () {
     `SELECT * FROM script_font_assets WHERE status = 'active' ORDER BY script_key, display_name`,
     []
   );
-  const outAssets = [];
-  for (const a of assets || []) {
-    const sources = await mysqlQueryRunner.runQueryInSlave(
-      'SELECT id, font_asset_id, source_kind, weight, asset_bucket, asset_key, updated_at FROM script_font_asset_sources WHERE font_asset_id = ?',
-      [a.id]
+  const assetList = assets || [];
+  const assetIds = assetList.map((a) => a.id);
+  let allSources = [];
+  if (assetIds.length > 0) {
+    const inPh = assetIds.map(() => '?').join(', ');
+    allSources = await mysqlQueryRunner.runQueryInSlave(
+      `SELECT id, font_asset_id, source_kind, weight, asset_bucket, asset_key, updated_at
+       FROM script_font_asset_sources
+       WHERE font_asset_id IN (${inPh})
+       ORDER BY font_asset_id, source_kind ASC, weight ASC`,
+      assetIds
     );
-    outAssets.push({
-      id: a.id,
-      css_family_name: a.css_family_name,
-      script_key: a.script_key,
-      updated_at: a.updated_at,
-      sources: (sources || []).map((s) => ({
-        id: s.id,
-        source_kind: s.source_kind,
-        weight: s.weight,
-        asset_bucket: s.asset_bucket,
-        asset_key: s.asset_key,
-        updated_at: s.updated_at
-      }))
+  }
+  const sourcesByAssetId = {};
+  for (const s of allSources || []) {
+    if (!sourcesByAssetId[s.font_asset_id]) sourcesByAssetId[s.font_asset_id] = [];
+    sourcesByAssetId[s.font_asset_id].push({
+      id: s.id,
+      source_kind: s.source_kind,
+      weight: s.weight,
+      asset_bucket: s.asset_bucket,
+      asset_key: s.asset_key,
+      updated_at: s.updated_at
     });
   }
+  const outAssets = assetList.map((a) => ({
+    id: a.id,
+    css_family_name: a.css_family_name,
+    script_key: a.script_key,
+    updated_at: a.updated_at,
+    sources: sourcesByAssetId[a.id] || []
+  }));
   const defaultsRows = await mysqlQueryRunner.runQueryInSlave(
     'SELECT script_key, font_asset_id FROM script_font_defaults',
     []
