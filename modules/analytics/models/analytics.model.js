@@ -1092,6 +1092,94 @@ error_category,
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data?.[0] || null;
   }
+
+  /**
+   * One simple query on analytics_events_raw (no MySQL join): app/os from order lifecycle
+   * events keyed by object_id = internal order_id.
+   *
+   * Sort key (max wins): (1) rows that have any non-empty app_version / os_name / os_version —
+   * server-side `order_completed` often has empty client columns while `order_created` from
+   * the app has headers; (2) event priority completed > created > failed; (3) latest timestamp.
+   *
+   * @param {Array<number|string>} orderIds
+   * @returns {Promise<Map<string, { analytics_app_version: string|null, analytics_os_name: string|null, analytics_os_version: string|null }>>}
+   */
+  static async fetchOrderLifecycleDeviceContextByOrderIds(orderIds) {
+    const out = new Map();
+    const ids = [
+      ...new Set(
+        (orderIds || [])
+          .map((id) => (id != null ? String(id).trim() : ''))
+          .filter((s) => s !== '' && /^\d+$/.test(s))
+      )
+    ];
+    if (!ids.length) return out;
+
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const inList = ids.map((id) => `'${esc(id)}'`).join(', ');
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+
+    const ctxRank = `(
+            toUInt8(
+              (trimBoth(coalesce(app_version, '')) != '')
+              OR (trimBoth(coalesce(os_name, '')) != '')
+              OR (trimBoth(coalesce(os_version, '')) != '')
+            ),
+            toUInt8(multiIf(event_name = 'order_completed', 2, event_name = 'order_created', 1, 0)),
+            timestamp
+          )`;
+
+    const query = `
+      SELECT
+        object_id AS order_id,
+        argMax(
+          app_version,
+          ${ctxRank}
+        ) AS analytics_app_version,
+        argMax(
+          os_name,
+          ${ctxRank}
+        ) AS analytics_os_name,
+        argMax(
+          os_version,
+          ${ctxRank}
+        ) AS analytics_os_version
+      FROM ${table}
+      PREWHERE object_type = 'order'
+        AND event_name IN ('order_created', 'order_completed', 'order_failed')
+      WHERE object_id IN (${inList})
+      GROUP BY object_id
+    `;
+
+    try {
+      const result = await slaveClickhouse.querying(query, { dataObjects: true });
+      const rows = result.data || [];
+      for (const r of rows) {
+        const key = r.order_id != null ? String(r.order_id) : '';
+        if (!key) continue;
+        const av =
+          r.analytics_app_version != null && String(r.analytics_app_version).trim() !== ''
+            ? String(r.analytics_app_version).trim()
+            : null;
+        const osn =
+          r.analytics_os_name != null && String(r.analytics_os_name).trim() !== ''
+            ? String(r.analytics_os_name).trim()
+            : null;
+        const osv =
+          r.analytics_os_version != null && String(r.analytics_os_version).trim() !== ''
+            ? String(r.analytics_os_version).trim()
+            : null;
+        out.set(key, {
+          analytics_app_version: av,
+          analytics_os_name: osn,
+          analytics_os_version: osv
+        });
+      }
+    } catch (e) {
+      console.error('fetchOrderLifecycleDeviceContextByOrderIds:', e.message);
+    }
+    return out;
+  }
 }
 
 module.exports = AnalyticsModel;

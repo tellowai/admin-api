@@ -16,6 +16,7 @@ const CreditsModel = require('../../credits/models/credits.model');
 const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
+const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -468,12 +469,20 @@ exports.getUserOrders = async function (req, res) {
         ...rest,
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
         template_id: tid,
-        template_name: tid ? (templateNameById[tid] ?? null) : null
+        template_name: tid ? (templateNameById[tid] ?? null) : null,
+        analytics_app_version: null,
+        analytics_os_name: null,
+        analytics_os_version: null
       };
     });
 
+    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(orders);
+    const enriched = data.map((row) =>
+      orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(row, ctxMap)
+    );
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: { orders: data }
+      data: { orders: enriched }
     });
   } catch (err) {
     console.error('getUserOrders error:', err);

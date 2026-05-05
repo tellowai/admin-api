@@ -4,6 +4,7 @@ const OrdersModel = require('../models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
+const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
 
 function normPlanField(v) {
   if (v == null || v === '') return '';
@@ -29,6 +30,8 @@ function purchaseCategoryFromPlan(planType, billingInterval) {
 }
 
 const MAX_EXPORT_ROWS = 25000;
+/** Skip ClickHouse enrichment on CSV export above this many rows (single IN clause). */
+const MAX_ORDERS_ANALYTICS_ENRICH = 2000;
 
 function mapRowToAdminOrder(o, planById, userById, templateNameById) {
   const plan = o.payment_plan_id != null ? planById[o.payment_plan_id] : null;
@@ -63,7 +66,10 @@ function mapRowToAdminOrder(o, planById, userById, templateNameById) {
     purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
     user_details: userById[o.user_id] || null,
     template_id: templateId,
-    template_name: templateName
+    template_name: templateName,
+    analytics_app_version: null,
+    analytics_os_name: null,
+    analytics_os_version: null
   };
 }
 
@@ -129,7 +135,11 @@ exports.listAdminOrders = async function (req, res) {
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
     const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
-    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById, templateNameById));
+    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
+    const orders = rows.map((o) => {
+      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
+      return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
+    });
 
     return res.status(200).json({
       data: {
@@ -168,7 +178,14 @@ exports.exportAdminOrdersCsv = async function (req, res) {
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
     const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
-    const orders = rows.map((o) => mapRowToAdminOrder(o, planById, userById, templateNameById));
+    const ctxMap =
+      rows.length <= MAX_ORDERS_ANALYTICS_ENRICH
+        ? await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows)
+        : new Map();
+    const orders = rows.map((o) => {
+      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
+      return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
+    });
 
     const headers = [
       'order_id',
@@ -191,7 +208,10 @@ exports.exportAdminOrdersCsv = async function (req, res) {
       'created_at',
       'completed_at',
       'failed_at',
-      'refunded_at'
+      'refunded_at',
+      'analytics_app_version',
+      'analytics_os_name',
+      'analytics_os_version'
     ];
 
     const lines = [headers.join(',')];
@@ -219,7 +239,10 @@ exports.exportAdminOrdersCsv = async function (req, res) {
           csvEscape(formatCsvDate(o.created_at)),
           csvEscape(formatCsvDate(o.completed_at)),
           csvEscape(formatCsvDate(o.failed_at)),
-          csvEscape(formatCsvDate(o.refunded_at))
+          csvEscape(formatCsvDate(o.refunded_at)),
+          csvEscape(o.analytics_app_version),
+          csvEscape(o.analytics_os_name),
+          csvEscape(o.analytics_os_version)
         ].join(',')
       );
     }
