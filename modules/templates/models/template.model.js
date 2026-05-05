@@ -7,6 +7,7 @@ const config = require('../../../config/config');
 const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 const TemplateScenesModel = require('./template.scenes.model');
 const TemplateLayersModel = require('./template.layers.model');
+const ScriptFontModel = require('../../script-fonts/models/script.font.model');
 
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
 const TEMPLATE_WORKFLOW_TYPE_ENUM = ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'];
@@ -163,6 +164,12 @@ exports.getTemplateGenerationMeta = async function (templateId, options = {}) {
   }
 
   template.scenes = scenes || [];
+
+  const scriptFontOverrides = await ScriptFontModel.listOverridesByTemplateId(templateId, options);
+  template.script_font_overrides = {};
+  for (const row of scriptFontOverrides || []) {
+    template.script_font_overrides[row.script_key] = row.font_asset_id;
+  }
 
   return template;
 };
