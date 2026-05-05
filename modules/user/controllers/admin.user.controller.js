@@ -564,3 +564,71 @@ exports.getUserEntitlements = async function (req, res) {
     });
   }
 };
+
+/**
+ * Lookup an end-user by mobile (substring) or internal order_id for support tooling.
+ * GET /admin/consumer-users/lookup?q=&type=mobile|order_id
+ */
+exports.lookupConsumerUserForSupport = async function (req, res) {
+  try {
+    const type = String(req.query.type || 'mobile').toLowerCase();
+    const rawQ = String(req.query.q || '').trim();
+    if (!rawQ) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Query (q) is required' });
+    }
+
+    let userRow = null;
+
+    if (type === 'order_id') {
+      const digits = rawQ.replace(/\D/g, '') || rawQ;
+      const orderId = parseInt(digits, 10);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid order ID' });
+      }
+      const userId = await ManageAdminUserDbo.findUserIdByOrderId(orderId);
+      if (!userId) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No order found for this ID' });
+      }
+      userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
+    } else {
+      const mobileDigits = rawQ.replace(/\D/g, '');
+      if (!mobileDigits) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Enter a mobile number with at least one digit'
+        });
+      }
+      const rows = await ManageAdminUserDbo.lookupEndUsersByMobile(rawQ, 3);
+      if (rows.length === 0) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No user found' });
+      }
+      if (rows.length > 1) {
+        return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+          message: 'Multiple users match this mobile number; narrow your search',
+          data: { match_count: rows.length }
+        });
+      }
+      userRow = rows[0];
+    }
+
+    if (!userRow) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+    }
+
+    const payloadUser = {
+      ...userRow,
+      mobile_number: userRow.mobile
+    };
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        user_id: userRow.user_id,
+        user: payloadUser
+      }
+    });
+  } catch (err) {
+    console.error('lookupConsumerUserForSupport error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Lookup failed'
+    });
+  }
+};

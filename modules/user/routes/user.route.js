@@ -95,4 +95,12 @@ module.exports = function (app) {
     AuthMiddleware.isAdminUser,
     AdminUserCtrl.getUserEntitlements
   );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-users/lookup"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.lookupConsumerUserForSupport
+  );
 };
