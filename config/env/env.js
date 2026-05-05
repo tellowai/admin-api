@@ -116,5 +116,12 @@ module.exports = {
     password: "",
   },
   queuesUrl: "",
-  pwaWebDomainUrl: ""
+  pwaWebDomainUrl: "",
+  /** photobop-api origin (no trailing slash) + shared key for server-to-server calls (e.g. Play fulfilment). Legacy key `photobopApi` is still read if `publicApi` is absent. */
+  publicApi: {
+    baseUrl: "",
+    /** Optional path prefix (e.g. "v1" or "/v1") if the API is not mounted at the origin root. */
+    routePrefix: "",
+    internalServiceKey: ""
+  }
 };

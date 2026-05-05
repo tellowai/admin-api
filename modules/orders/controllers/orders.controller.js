@@ -266,3 +266,138 @@ exports.exportAdminOrdersCsv = async function (req, res) {
     });
   }
 };
+
+const axios = require('axios');
+const config = require('../../../config/config');
+const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
+const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+
+function publicApiProxyRequestConfig() {
+  const cfg = config.publicApi || config.photobopApi;
+  const base =
+    (cfg && String(cfg.baseUrl || '').trim()) || String(process.env.PHOTOBOP_API_BASE_URL || '').trim();
+  const key =
+    (cfg && String(cfg.internalServiceKey || '').trim()) ||
+    String(process.env.PHOTOBOP_INTERNAL_SERVICE_KEY || process.env.INTERNAL_SERVICE_KEY || '').trim();
+  const routePrefixRaw =
+    (cfg && String(cfg.routePrefix || '').trim()) || String(process.env.PHOTOBOP_API_ROUTE_PREFIX || '').trim();
+  const routePrefix = routePrefixRaw
+    ? routePrefixRaw.startsWith('/')
+      ? routePrefixRaw
+      : `/${routePrefixRaw}`
+    : '';
+  const origin = base.replace(/\/$/, '');
+  return { base, key, origin, routePrefix };
+}
+
+/** Shown when publicApi / env is missing so ops can wire admin-api → photobop-api. */
+function publicApiProxyNotConfiguredBody() {
+  return {
+    message:
+      'Photobop API URL or internal service key is not configured for admin-to-photobop server calls.',
+    code: 'PHOTOBOP_PROXY_NOT_CONFIGURED',
+    hint:
+      'photobop-admin-ui VITE_* vars are not read here. Set publicApi.baseUrl (photobop-api origin, no trailing slash; same idea as VITE_PUBLIC_API_URL) and publicApi.internalServiceKey in photobop-admin-api config/env/local.js, or PHOTOBOP_API_BASE_URL and PHOTOBOP_INTERNAL_SERVICE_KEY on the admin-api process. The legacy config key photobopApi is still accepted if publicApi is omitted. Match the same secret on photobop-api. Optional publicApi.routePrefix for versioned paths.'
+  };
+}
+
+/**
+ * POST /admin/orders/:orderId/google-play/preview-from-console
+ * Proxies to photobop-api Google `orders.get` only (no fulfillment).
+ */
+exports.previewGooglePlayFromConsole = async function (req, res) {
+  try {
+    const orderId = parseInt(req.params.orderId, 10);
+    if (!Number.isFinite(orderId) || orderId <= 0) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid order id' });
+    }
+
+    const { base, key, origin, routePrefix } = publicApiProxyRequestConfig();
+    if (!base || !key) {
+      return res.status(HTTP_STATUS_CODES.SERVICE_UNAVAILABLE).json(publicApiProxyNotConfiguredBody());
+    }
+
+    const { play_order_id: playOrderId, pg_payment_id: pgPaymentId } = req.body || {};
+    if (!playOrderId || !String(playOrderId).trim()) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'play_order_id is required' });
+    }
+
+    const url = `${origin}${routePrefix}/internal/admin/orders/${orderId}/google-play/preview-by-play-order`;
+    const { data } = await axios.post(
+      url,
+      { play_order_id: String(playOrderId).trim(), pg_payment_id: pgPaymentId ? String(pgPaymentId).trim() : undefined },
+      {
+        headers: { 'X-Internal-Service-Key': key, 'Content-Type': 'application/json' },
+        timeout: 120000
+      }
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json(data);
+  } catch (err) {
+    const status = (err.response && err.response.status) || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    const body = (err.response && err.response.data) || {};
+    const message = body.message || err.message || 'Google lookup failed';
+    console.error('previewGooglePlayFromConsole error:', { status, message, body });
+    return res.status(status).json({
+      message,
+      code: body.code || 'GOOGLE_PREVIEW_ERROR'
+    });
+  }
+};
+
+/**
+ * POST /admin/orders/:orderId/google-play/fulfill-from-console
+ * Proxies to photobop-api internal fulfilment (Google Play orders.get → verify path).
+ */
+exports.fulfillGooglePlayFromConsole = async function (req, res) {
+  try {
+    const orderId = parseInt(req.params.orderId, 10);
+    if (!Number.isFinite(orderId) || orderId <= 0) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid order id' });
+    }
+
+    const { base, key, origin, routePrefix } = publicApiProxyRequestConfig();
+
+    if (!base || !key) {
+      return res.status(HTTP_STATUS_CODES.SERVICE_UNAVAILABLE).json(publicApiProxyNotConfiguredBody());
+    }
+
+    const { play_order_id: playOrderId, pg_payment_id: pgPaymentId } = req.body || {};
+    if (!playOrderId || !String(playOrderId).trim()) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'play_order_id is required' });
+    }
+
+    const url = `${origin}${routePrefix}/internal/admin/orders/${orderId}/google-play/fulfill-by-play-order`;
+    const { data } = await axios.post(
+      url,
+      { play_order_id: String(playOrderId).trim(), pg_payment_id: pgPaymentId ? String(pgPaymentId).trim() : undefined },
+      {
+        headers: { 'X-Internal-Service-Key': key, 'Content-Type': 'application/json' },
+        timeout: 120000
+      }
+    );
+
+    await publishNewAdminActivityLog({
+      adminUserId: req.user.userId,
+      entityType: 'ORDER',
+      actionName: 'GOOGLE_PLAY_MANUAL_FULFILL_BY_PLAY_ORDER_ID',
+      entityId: String(orderId),
+      additionalData: {
+        play_order_id: String(playOrderId).trim(),
+        had_pg_payment_id: !!(pgPaymentId && String(pgPaymentId).trim()),
+        result_order_id: data && data.data ? data.data.orderId : orderId
+      }
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json(data);
+  } catch (err) {
+    const status = (err.response && err.response.status) || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    const body = (err.response && err.response.data) || {};
+    const message = body.message || err.message || 'Fulfillment failed';
+    console.error('fulfillGooglePlayFromConsole error:', { status, message, body });
+    return res.status(status).json({
+      message,
+      code: body.code || 'FULFILLMENT_ERROR'
+    });
+  }
+};
