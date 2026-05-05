@@ -3,6 +3,7 @@
 const moment = require('moment-timezone');
 const TimezoneService = require('../../analytics/services/timezone.service');
 const OrdersAnalyticsModel = require('../models/orders.analytics.model');
+const OrdersModel = require('../models/orders.model');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 function toCalendarDate(d) {
@@ -79,5 +80,44 @@ exports.getOrdersStatusSummary = async function (req, res) {
   } catch (err) {
     console.error('getOrdersStatusSummary error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load order summary' });
+  }
+};
+
+/** GET /admin/orders/analytics/volume-summary — total orders + distinct users (created_at in range). */
+exports.getOrdersVolumeSummary = async function (req, res) {
+  try {
+    const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date);
+    const endCal = toCalendarDate(q.end_date);
+    const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
+    const paymentGateway =
+      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
+
+    let ppIds = null;
+    if (productType) {
+      ppIds = await OrdersModel.getPpIdsMatchingProductType(productType);
+      if (ppIds.length === 0) {
+        return res.status(HTTP_STATUS_CODES.OK).json({ data: { total_orders: 0, unique_users: 0 } });
+      }
+    }
+
+    const summary = await OrdersAnalyticsModel.getOrdersVolumeSummary({
+      startCal,
+      endCal,
+      tz,
+      ppIds,
+      paymentGateway: paymentGateway || undefined
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });
+  } catch (err) {
+    console.error('getOrdersVolumeSummary error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load order volume summary' });
   }
 };

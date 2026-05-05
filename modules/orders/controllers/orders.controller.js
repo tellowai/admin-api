@@ -108,6 +108,83 @@ function formatCsvDate(v) {
   }
 }
 
+/**
+ * One row per distinct user_id, sorted by user_id ascending, with a stable row_num (#) for review in Excel.
+ * Built from the same capped order list as the per-order export (newest orders first in DB; aggregation loses that order).
+ */
+function aggregateOrdersByUserForCsv(orders) {
+  /** @type {Map<string, { userKey: string, userRows: object[] }>} */
+  const map = new Map();
+  for (const o of orders) {
+    const uid = o.user_id;
+    const key = uid == null || uid === '' ? '__NO_USER__' : String(uid);
+    let agg = map.get(key);
+    if (!agg) {
+      agg = { userKey: key, userRows: [] };
+      map.set(key, agg);
+    }
+    agg.userRows.push(o);
+  }
+
+  const rows = [];
+  for (const { userKey, userRows } of map.values()) {
+    const orderIds = [
+      ...new Set(userRows.map((r) => r.order_id).filter((id) => id != null && id !== ''))
+    ].sort((a, b) => {
+      const na = Number(a);
+      const nb = Number(b);
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+
+    const times = userRows
+      .map((r) => r.created_at)
+      .filter(Boolean)
+      .map((d) => {
+        try {
+          return new Date(d).getTime();
+        } catch {
+          return NaN;
+        }
+      })
+      .filter((t) => !Number.isNaN(t))
+      .sort((a, b) => a - b);
+
+    const newestFirst = [...userRows].sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+    const u =
+      newestFirst.find((r) => r.user_details && Object.keys(r.user_details).length)?.user_details ||
+      newestFirst[0]?.user_details ||
+      {};
+
+    rows.push({
+      row_num: 0,
+      user_id: userKey === '__NO_USER__' ? '' : userKey,
+      order_count: orderIds.length,
+      display_name: u.display_name ?? '',
+      email: u.email ?? '',
+      mobile: u.mobile ?? '',
+      first_order_at: times.length ? new Date(times[0]).toISOString() : '',
+      last_order_at: times.length ? new Date(times[times.length - 1]).toISOString() : '',
+      order_ids: orderIds.join('; ')
+    });
+  }
+
+  rows.sort((a, b) => {
+    const ua = a.user_id;
+    const ub = b.user_id;
+    if (!ua && !ub) return 0;
+    if (!ua) return 1;
+    if (!ub) return -1;
+    return ua.localeCompare(ub);
+  });
+  rows.forEach((r, i) => {
+    r.row_num = i + 1;
+  });
+  return rows;
+}
+
 const moment = require('moment');
 const TimezoneService = require('../../analytics/services/timezone.service');
 
@@ -227,6 +304,7 @@ exports.listAdminOrders = async function (req, res) {
 
 /**
  * GET /admin/orders/export — UTF-8 CSV (opens in Excel) for current filters; capped at MAX_EXPORT_ROWS (newest first).
+ * Query `export_layout=by_user`: one row per user (sorted by user_id), with row_num, order_count, and semicolon-separated order_ids.
  */
 exports.exportAdminOrdersCsv = async function (req, res) {
   try {
@@ -234,6 +312,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
     const productType = req.query.product_type ? String(req.query.product_type).trim() : '';
     const search = req.query.search ? String(req.query.search).trim() : '';
     const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
+    const exportLayoutRaw = req.query.export_layout ? String(req.query.export_layout).trim().toLowerCase() : '';
+    const exportByUser = exportLayoutRaw === 'by_user' || exportLayoutRaw === 'users';
 
     const filterPayload = { status, productType, search, client_platform };
 
@@ -260,69 +340,103 @@ exports.exportAdminOrdersCsv = async function (req, res) {
       return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
     });
 
-    const headers = [
-      'order_id',
-      'user_id',
-      'display_name',
-      'email',
-      'mobile',
-      'status',
-      'amount_paid',
-      'currency',
-      'purchase_category',
-      'plan_name',
-      'plan_heading',
-      'billing_interval',
-      'template_id',
-      'template_name',
-      'client_platform',
-      'payment_gateway',
-      'quantity',
-      'created_at',
-      'completed_at',
-      'failed_at',
-      'refunded_at',
-      'analytics_app_version',
-      'analytics_os_name',
-      'analytics_os_version'
-    ];
+    const lines = [];
+    let filenameBase = 'orders-export';
 
-    const lines = [headers.join(',')];
-    for (const o of orders) {
-      const u = o.user_details || {};
-      lines.push(
-        [
-          csvEscape(o.order_id),
-          csvEscape(o.user_id),
-          csvEscape(u.display_name),
-          csvEscape(u.email),
-          csvEscape(u.mobile),
-          csvEscape(o.status),
-          csvEscape(o.amount_paid),
-          csvEscape(o.currency),
-          csvEscape(o.purchase_category),
-          csvEscape(o.plan_name),
-          csvEscape(o.plan_heading),
-          csvEscape(o.billing_interval),
-          csvEscape(o.template_id),
-          csvEscape(o.template_name),
-          csvEscape(o.client_platform),
-          csvEscape(o.payment_gateway),
-          csvEscape(o.quantity),
-          csvEscape(formatCsvDate(o.created_at)),
-          csvEscape(formatCsvDate(o.completed_at)),
-          csvEscape(formatCsvDate(o.failed_at)),
-          csvEscape(formatCsvDate(o.refunded_at)),
-          csvEscape(o.analytics_app_version),
-          csvEscape(o.analytics_os_name),
-          csvEscape(o.analytics_os_version)
-        ].join(',')
-      );
+    if (exportByUser) {
+      const aggRows = aggregateOrdersByUserForCsv(orders);
+      const headers = [
+        'row_num',
+        'user_id',
+        'order_count',
+        'display_name',
+        'email',
+        'mobile',
+        'first_order_at',
+        'last_order_at',
+        'order_ids'
+      ];
+      lines.push(headers.join(','));
+      for (const r of aggRows) {
+        lines.push(
+          [
+            csvEscape(r.row_num),
+            csvEscape(r.user_id),
+            csvEscape(r.order_count),
+            csvEscape(r.display_name),
+            csvEscape(r.email),
+            csvEscape(r.mobile),
+            csvEscape(r.first_order_at),
+            csvEscape(r.last_order_at),
+            csvEscape(r.order_ids)
+          ].join(',')
+        );
+      }
+      filenameBase = 'orders-by-user';
+    } else {
+      const headers = [
+        'order_id',
+        'user_id',
+        'display_name',
+        'email',
+        'mobile',
+        'status',
+        'amount_paid',
+        'currency',
+        'purchase_category',
+        'plan_name',
+        'plan_heading',
+        'billing_interval',
+        'template_id',
+        'template_name',
+        'client_platform',
+        'payment_gateway',
+        'quantity',
+        'created_at',
+        'completed_at',
+        'failed_at',
+        'refunded_at',
+        'analytics_app_version',
+        'analytics_os_name',
+        'analytics_os_version'
+      ];
+      lines.push(headers.join(','));
+      for (const o of orders) {
+        const u = o.user_details || {};
+        lines.push(
+          [
+            csvEscape(o.order_id),
+            csvEscape(o.user_id),
+            csvEscape(u.display_name),
+            csvEscape(u.email),
+            csvEscape(u.mobile),
+            csvEscape(o.status),
+            csvEscape(o.amount_paid),
+            csvEscape(o.currency),
+            csvEscape(o.purchase_category),
+            csvEscape(o.plan_name),
+            csvEscape(o.plan_heading),
+            csvEscape(o.billing_interval),
+            csvEscape(o.template_id),
+            csvEscape(o.template_name),
+            csvEscape(o.client_platform),
+            csvEscape(o.payment_gateway),
+            csvEscape(o.quantity),
+            csvEscape(formatCsvDate(o.created_at)),
+            csvEscape(formatCsvDate(o.completed_at)),
+            csvEscape(formatCsvDate(o.failed_at)),
+            csvEscape(formatCsvDate(o.refunded_at)),
+            csvEscape(o.analytics_app_version),
+            csvEscape(o.analytics_os_name),
+            csvEscape(o.analytics_os_version)
+          ].join(',')
+        );
+      }
     }
 
     const body = `\uFEFF${lines.join('\r\n')}\r\n`;
     const dayStamp = new Date().toISOString().slice(0, 10);
-    const filename = `orders-export-${dayStamp}.csv`;
+    const filename = `${filenameBase}-${dayStamp}.csv`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
