@@ -37,7 +37,10 @@ function getBannerImageUrl(bucket, assetKey) {
 exports.listExploreSections = async function(req, res) {
   try {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
-    const sections = await ExploreSectionModel.listExploreSections(paginationParams);
+    const listSurface = req.query.app_surface === 'explore' || req.query.app_surface === 'effects'
+      ? req.query.app_surface
+      : undefined;
+    const sections = await ExploreSectionModel.listExploreSections(paginationParams, listSurface);
 
     sections.forEach((section) => {
       if (section.additional_data && typeof section.additional_data === 'string') {
