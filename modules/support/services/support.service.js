@@ -6,6 +6,13 @@ const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const CreditsModel = require('../../credits/models/credits.model');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
+const fcmSupportNotify = require('./fcm.support.notify.service');
+
+function truncateForPush(text, maxLen = 140) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'You have a new message from support.';
+  return s.length <= maxLen ? s : `${s.slice(0, maxLen - 1)}…`;
+}
 
 // A helper to enrich tickets without performing SQL JOINs
 async function enrichTicketsWithUsers(tickets) {
@@ -298,65 +305,126 @@ exports.assignTicket = async function(ticketId, assignedToId) {
   await SupportModel.updateTicket(ticketId, updates);
 };
 
+/**
+ * When an admin contacts the customer, assign the ticket to that admin (and move submitted → in_progress).
+ * No-op if the ticket is already resolved.
+ * @param {object} ticket — row from `getTicketById`
+ */
+async function autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId) {
+  if (!ticket || ticket.status === 'resolved') return;
+  const updates = { assigned_to: adminId };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
+  await SupportModel.updateTicket(ticketId, updates);
+}
+
 exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
 
-exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType, refundCreditsAmount) {
+/**
+ * Apply optional credit refund to a ticket row (mutates `updates`).
+ * @param {object} ticket — row from `getTicketById`
+ * @param {string} ticketId
+ * @param {Record<string, unknown>} updates — fields passed to `updateTicket`
+ * @param {boolean} isCreditsRefunded
+ * @param {number|null|undefined} refundCreditsAmount
+ */
+async function applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount) {
+  if (!isCreditsRefunded) return;
+
+  if (ticket.is_credits_refunded) {
+    throw new Error('Credits have already been refunded for this ticket.');
+  }
+
+  if (!ticket.generation_id) {
+    throw new Error('Cannot refund credits: No generation attached to this ticket.');
+  }
+
+  const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
+  const amountToRefund =
+    refundCreditsAmount != null && Number(refundCreditsAmount) > 0
+      ? Number(refundCreditsAmount)
+      : deductedAmount;
+
+  if (!amountToRefund || amountToRefund <= 0) {
+    throw new Error(
+      refundCreditsAmount != null
+        ? 'Credits to refund must be a positive number.'
+        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.'
+    );
+  }
+
+  const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
+  if (previouslyRefundedAmount > 0) {
+    throw new Error('Credits have already been refunded for this generation.');
+  }
+
+  const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
+  await CreditsModel.refundCreditsTransaction(
+    ticket.user_id,
+    amountToRefund,
+    'adjustment',
+    ticket.generation_id,
+    description
+  );
+
+  updates.is_credits_refunded = true;
+  updates.refunded_credits_type = 'new';
+}
+
+/**
+ * Post resolution notes to the ticket (DB + thread), optional refunds. Does **not** set status to resolved.
+ * Assigns the ticket to the acting admin and moves `submitted` → `in_progress` when applicable.
+ */
+exports.proposeResolution = async function (
+  ticketId,
+  adminId,
+  resolutionNotes,
+  isMoneyRefunded,
+  isCreditsRefunded,
+  _refundedCreditsType,
+  refundCreditsAmount
+) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
 
   const updates = {
-    status: 'resolved',
-    resolution_notes: resolutionNotes
+    resolution_notes: resolutionNotes,
+    assigned_to: adminId
   };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
 
   if (isMoneyRefunded) {
     updates.is_money_refunded = true;
   }
-  
-  if (isCreditsRefunded) {
-    if (ticket.is_credits_refunded) {
-      throw new Error('Credits have already been refunded for this ticket.');
-    }
-    
-    if (!ticket.generation_id) {
-      throw new Error('Cannot refund credits: No generation attached to this ticket.');
-    }
 
-    const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
-    const amountToRefund = (refundCreditsAmount != null && Number(refundCreditsAmount) > 0)
-      ? Number(refundCreditsAmount)
-      : deductedAmount;
-
-    if (!amountToRefund || amountToRefund <= 0) {
-      throw new Error(refundCreditsAmount != null
-        ? 'Credits to refund must be a positive number.'
-        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.');
-    }
-
-    const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
-    if (previouslyRefundedAmount > 0) {
-      throw new Error('Credits have already been refunded for this generation.');
-    }
-
-    const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
-    await CreditsModel.refundCreditsTransaction(
-      ticket.user_id,
-      amountToRefund,
-      'adjustment',
-      ticket.generation_id,
-      description
-    );
-
-    updates.is_credits_refunded = true;
-    updates.refunded_credits_type = 'new';
-  }
+  await applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount);
 
   await SupportModel.updateTicket(ticketId, updates);
-  
-  // Also insert the resolution notes as the final message in the conversation
   await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes);
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support update',
+    body: truncateForPush(resolutionNotes),
+  });
+};
+
+/**
+ * Mark ticket resolved only (no resolution message, no refunds).
+ */
+exports.closeTicket = async function (ticketId) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
+  await SupportModel.updateTicket(ticketId, { status: 'resolved' });
 };
 
 exports.getTicketMessages = async function(ticketId) {
@@ -369,9 +437,15 @@ exports.sendTicketMessage = async function(ticketId, adminId, message) {
   if (!ticket) throw new Error('Ticket not found');
 
   const messageId = await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, message);
+  await autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId);
+
   const newMessage = await SupportModel.getTicketMessageById(messageId);
   
   const enriched = await enrichMessagesWithUsers([newMessage]);
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support',
+    body: truncateForPush(message),
+  });
   return enriched[0];
 };
 

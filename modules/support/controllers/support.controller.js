@@ -99,25 +99,36 @@ exports.updateTicketStatus = async function(req, res) {
   }
 };
 
-exports.resolveTicket = async function(req, res) {
+exports.proposeResolution = async function(req, res) {
   try {
     const ticketId = req.params.ticketId;
     const adminId = req.user.userId;
-    const { resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type, refund_credits_amount } = req.body;
+    const { resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type, refund_credits_amount } =
+      req.body;
     if (!resolution_notes) {
       return res.status(400).send({ message: 'Resolution notes required' });
     }
-    await SupportService.resolveTicket(ticketId, adminId, resolution_notes, is_money_refunded, is_credits_refunded, refunded_credits_type, refund_credits_amount);
+    await SupportService.proposeResolution(
+      ticketId,
+      adminId,
+      resolution_notes,
+      is_money_refunded,
+      is_credits_refunded,
+      refunded_credits_type,
+      refund_credits_amount
+    );
 
-    const eventsToLog = [{
-      value: { 
-        admin_user_id: req.user.userId,
-        entity_type: 'SUPPORT_TICKETS',
-        action_name: 'RESOLVE_TICKET', 
-        entity_id: ticketId,
-        additional_data: JSON.stringify({ is_money_refunded, is_credits_refunded })
+    const eventsToLog = [
+      {
+        value: {
+          admin_user_id: req.user.userId,
+          entity_type: 'SUPPORT_TICKETS',
+          action_name: 'PROPOSE_TICKET_RESOLUTION',
+          entity_id: ticketId,
+          additional_data: JSON.stringify({ is_money_refunded, is_credits_refunded })
+        }
       }
-    }];
+    ];
 
     if (is_credits_refunded) {
       eventsToLog.push({
@@ -149,11 +160,47 @@ exports.resolveTicket = async function(req, res) {
       'create_admin_activity_log'
     );
 
-    return res.status(200).send({ message: 'Ticket resolved successfully' });
-  } catch(err) {
-    console.error('Resolve Ticket Error:', err);
+    return res.status(200).send({ message: 'Resolution proposed successfully' });
+  } catch (err) {
+    console.error('Propose resolution error:', err);
     const errMsg = (err.message || err.originalMessage || '').toString();
-    if (errMsg.includes('Cannot refund') || errMsg.includes('already been refunded')) {
+    if (
+      errMsg.includes('Cannot refund') ||
+      errMsg.includes('already been refunded') ||
+      errMsg.includes('already closed')
+    ) {
+      return res.status(400).send({ message: errMsg });
+    }
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
+exports.closeTicket = async function(req, res) {
+  try {
+    const ticketId = req.params.ticketId;
+    await SupportService.closeTicket(ticketId);
+
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [
+        {
+          value: {
+            admin_user_id: req.user.userId,
+            entity_type: 'SUPPORT_TICKETS',
+            action_name: 'CLOSE_TICKET',
+            entity_id: ticketId,
+            additional_data: JSON.stringify({})
+          }
+        }
+      ],
+      'create_admin_activity_log'
+    );
+
+    return res.status(200).send({ message: 'Ticket closed successfully' });
+  } catch (err) {
+    console.error('Close ticket error:', err);
+    const errMsg = (err.message || err.originalMessage || '').toString();
+    if (errMsg.includes('already closed')) {
       return res.status(400).send({ message: errMsg });
     }
     return res.status(500).send({ message: 'Internal Server Error' });
