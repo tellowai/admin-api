@@ -298,6 +298,20 @@ exports.assignTicket = async function(ticketId, assignedToId) {
   await SupportModel.updateTicket(ticketId, updates);
 };
 
+/**
+ * When an admin contacts the customer, assign the ticket to that admin (and move submitted → in_progress).
+ * No-op if the ticket is already resolved.
+ * @param {object} ticket — row from `getTicketById`
+ */
+async function autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId) {
+  if (!ticket || ticket.status === 'resolved') return;
+  const updates = { assigned_to: adminId };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
+  await SupportModel.updateTicket(ticketId, updates);
+}
+
 exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
@@ -354,7 +368,8 @@ async function applyCreditsRefundIfRequested(ticket, ticketId, updates, isCredit
 }
 
 /**
- * Post resolution notes to the ticket (DB + thread), optional refunds. Does **not** change ticket status.
+ * Post resolution notes to the ticket (DB + thread), optional refunds. Does **not** set status to resolved.
+ * Assigns the ticket to the acting admin and moves `submitted` → `in_progress` when applicable.
  */
 exports.proposeResolution = async function (
   ticketId,
@@ -372,8 +387,12 @@ exports.proposeResolution = async function (
   }
 
   const updates = {
-    resolution_notes: resolutionNotes
+    resolution_notes: resolutionNotes,
+    assigned_to: adminId
   };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
 
   if (isMoneyRefunded) {
     updates.is_money_refunded = true;
@@ -407,6 +426,8 @@ exports.sendTicketMessage = async function(ticketId, adminId, message) {
   if (!ticket) throw new Error('Ticket not found');
 
   const messageId = await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, message);
+  await autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId);
+
   const newMessage = await SupportModel.getTicketMessageById(messageId);
   
   const enriched = await enrichMessagesWithUsers([newMessage]);
