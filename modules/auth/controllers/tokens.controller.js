@@ -13,6 +13,7 @@ const moment = require('moment');
 const bcrypt = require('bcrypt');
 const async = require('async');
 const { createId } = require('@paralleldrive/cuid2');
+const JWT = require('jsonwebtoken');
 var UserDbo = require('../dbo/user.dbo');
 
 
@@ -485,6 +486,53 @@ exports.refreshJwtnRotateRT = function (req, res) {
     }
   });
 }
+
+function bearerTokenFromAuthorizationHeader(req) {
+  if (!req.headers.authorization) {
+    return null;
+  }
+  var tokenArray = req.headers.authorization.split(' ');
+  if (tokenArray[0] === 'Bearer' && tokenArray[1]) {
+    return tokenArray[1];
+  }
+  return null;
+}
+
+function accessTokenCandidatesFromReq(req) {
+  var cookieTok = req.cookies && req.cookies.accessToken ? req.cookies.accessToken : null;
+  var bearerTok = bearerTokenFromAuthorizationHeader(req);
+  var candidates = [];
+  if (cookieTok) {
+    candidates.push(cookieTok);
+  }
+  if (bearerTok && bearerTok !== cookieTok) {
+    candidates.push(bearerTok);
+  }
+  return candidates;
+}
+
+/**
+ * Verified access JWT for the current admin session (cookie or Bearer).
+ * Lets the SPA attach Authorization on cross-origin photobop-api calls; httpOnly cookies are not sent there.
+ */
+exports.getSessionAccessToken = function (req, res) {
+  var candidates = accessTokenCandidatesFromReq(req);
+  if (!candidates.length) {
+    const errMsg = req.t('UNAUTHORIZED');
+    return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
+  }
+  var secret = config.jwt.secret;
+  for (var i = 0; i < candidates.length; i++) {
+    try {
+      JWT.verify(candidates[i], secret);
+      return res.status(HTTP_STATUS_CODES.OK).json({ accessToken: candidates[i] });
+    } catch (e) {
+      // try next candidate
+    }
+  }
+  const errMsg = req.t('UNAUTHORIZED');
+  return res.status(HTTP_STATUS_CODES.UNAUTHORIZED).json({ message: errMsg });
+};
 
 
 /**
