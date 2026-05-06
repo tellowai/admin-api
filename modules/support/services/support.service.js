@@ -6,6 +6,13 @@ const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const CreditsModel = require('../../credits/models/credits.model');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
+const fcmSupportNotify = require('./fcm.support.notify.service');
+
+function truncateForPush(text, maxLen = 140) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'You have a new message from support.';
+  return s.length <= maxLen ? s : `${s.slice(0, maxLen - 1)}…`;
+}
 
 // A helper to enrich tickets without performing SQL JOINs
 async function enrichTicketsWithUsers(tickets) {
@@ -402,6 +409,10 @@ exports.proposeResolution = async function (
 
   await SupportModel.updateTicket(ticketId, updates);
   await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes);
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support update',
+    body: truncateForPush(resolutionNotes),
+  });
 };
 
 /**
@@ -431,6 +442,10 @@ exports.sendTicketMessage = async function(ticketId, adminId, message) {
   const newMessage = await SupportModel.getTicketMessageById(messageId);
   
   const enriched = await enrichMessagesWithUsers([newMessage]);
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support',
+    body: truncateForPush(message),
+  });
   return enriched[0];
 };
 
