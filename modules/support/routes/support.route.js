@@ -21,8 +21,11 @@ module.exports = function (app) {
   app.route(prefix + "/:ticketId/status")
     .put(AuthMiddleware.isAdminUser, SupportCtrl.updateTicketStatus);
 
-  app.route(prefix + "/:ticketId/resolve")
-    .post(AuthMiddleware.isAdminUser, SupportCtrl.resolveTicket);
+  app.route(prefix + "/:ticketId/propose-resolution")
+    .post(AuthMiddleware.isAdminUser, SupportCtrl.proposeResolution);
+
+  app.route(prefix + "/:ticketId/close")
+    .post(AuthMiddleware.isAdminUser, SupportCtrl.closeTicket);
 
   app.route(prefix + "/:ticketId/messages")
     .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketMessages)

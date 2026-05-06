@@ -302,61 +302,99 @@ exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
 
-exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType, refundCreditsAmount) {
+/**
+ * Apply optional credit refund to a ticket row (mutates `updates`).
+ * @param {object} ticket — row from `getTicketById`
+ * @param {string} ticketId
+ * @param {Record<string, unknown>} updates — fields passed to `updateTicket`
+ * @param {boolean} isCreditsRefunded
+ * @param {number|null|undefined} refundCreditsAmount
+ */
+async function applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount) {
+  if (!isCreditsRefunded) return;
+
+  if (ticket.is_credits_refunded) {
+    throw new Error('Credits have already been refunded for this ticket.');
+  }
+
+  if (!ticket.generation_id) {
+    throw new Error('Cannot refund credits: No generation attached to this ticket.');
+  }
+
+  const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
+  const amountToRefund =
+    refundCreditsAmount != null && Number(refundCreditsAmount) > 0
+      ? Number(refundCreditsAmount)
+      : deductedAmount;
+
+  if (!amountToRefund || amountToRefund <= 0) {
+    throw new Error(
+      refundCreditsAmount != null
+        ? 'Credits to refund must be a positive number.'
+        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.'
+    );
+  }
+
+  const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
+  if (previouslyRefundedAmount > 0) {
+    throw new Error('Credits have already been refunded for this generation.');
+  }
+
+  const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
+  await CreditsModel.refundCreditsTransaction(
+    ticket.user_id,
+    amountToRefund,
+    'adjustment',
+    ticket.generation_id,
+    description
+  );
+
+  updates.is_credits_refunded = true;
+  updates.refunded_credits_type = 'new';
+}
+
+/**
+ * Post resolution notes to the ticket (DB + thread), optional refunds. Does **not** change ticket status.
+ */
+exports.proposeResolution = async function (
+  ticketId,
+  adminId,
+  resolutionNotes,
+  isMoneyRefunded,
+  isCreditsRefunded,
+  _refundedCreditsType,
+  refundCreditsAmount
+) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
 
   const updates = {
-    status: 'resolved',
     resolution_notes: resolutionNotes
   };
 
   if (isMoneyRefunded) {
     updates.is_money_refunded = true;
   }
-  
-  if (isCreditsRefunded) {
-    if (ticket.is_credits_refunded) {
-      throw new Error('Credits have already been refunded for this ticket.');
-    }
-    
-    if (!ticket.generation_id) {
-      throw new Error('Cannot refund credits: No generation attached to this ticket.');
-    }
 
-    const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
-    const amountToRefund = (refundCreditsAmount != null && Number(refundCreditsAmount) > 0)
-      ? Number(refundCreditsAmount)
-      : deductedAmount;
-
-    if (!amountToRefund || amountToRefund <= 0) {
-      throw new Error(refundCreditsAmount != null
-        ? 'Credits to refund must be a positive number.'
-        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.');
-    }
-
-    const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
-    if (previouslyRefundedAmount > 0) {
-      throw new Error('Credits have already been refunded for this generation.');
-    }
-
-    const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
-    await CreditsModel.refundCreditsTransaction(
-      ticket.user_id,
-      amountToRefund,
-      'adjustment',
-      ticket.generation_id,
-      description
-    );
-
-    updates.is_credits_refunded = true;
-    updates.refunded_credits_type = 'new';
-  }
+  await applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount);
 
   await SupportModel.updateTicket(ticketId, updates);
-  
-  // Also insert the resolution notes as the final message in the conversation
   await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes);
+};
+
+/**
+ * Mark ticket resolved only (no resolution message, no refunds).
+ */
+exports.closeTicket = async function (ticketId) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
+  await SupportModel.updateTicket(ticketId, { status: 'resolved' });
 };
 
 exports.getTicketMessages = async function(ticketId) {
