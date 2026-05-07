@@ -275,3 +275,31 @@ exports.listGooglePlayOrdersWithPgIdAdmin = async function ({ limit, offset }) {
   `;
   return await MysqlQueryRunner.runQueryInSlave(query, [GATEWAY_GOOGLE_PLAY, limit, offset]);
 };
+
+/**
+ * Internal orders that may match RTDN / orphan queue rows (by Play order id or stored purchase token on `pg_payment_id`).
+ */
+exports.findGooglePlayOrdersMatchingOrphans = async function ({ pgOrderIds, purchaseTokens }) {
+  const pids = [...new Set((pgOrderIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+  const toks = [...new Set((purchaseTokens || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+  if (pids.length === 0 && toks.length === 0) return [];
+
+  const parts = [];
+  const params = [GATEWAY_GOOGLE_PLAY];
+  if (pids.length > 0) {
+    parts.push(`o.pg_order_id IN (${pids.map(() => '?').join(',')})`);
+    params.push(...pids);
+  }
+  if (toks.length > 0) {
+    parts.push(`o.pg_payment_id IN (${toks.map(() => '?').join(',')})`);
+    params.push(...toks);
+  }
+  const whereOr = parts.join(' OR ');
+  const query = `
+    ${ORDERS_ADMIN_SELECT}
+    WHERE o.payment_gateway = ?
+      AND (${whereOr})
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, params);
+};
+

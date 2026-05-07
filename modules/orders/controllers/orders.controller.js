@@ -1,6 +1,7 @@
 'use strict';
 
 const OrdersModel = require('../models/orders.model');
+const GooglePlayOrphanModel = require('../models/google-play-orphan.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
@@ -304,7 +305,8 @@ exports.listAdminOrders = async function (req, res) {
 };
 
 /**
- * GET /admin/orders/play-store — Google Play orders only; augments each row with Play `orders.get` (admin-api, same credentials as photobop-api).
+ * GET /admin/orders/play-store — Orphan reconciliation queue (photobop-api writes `google_play_orphan_events`).
+ * For each row: batch `orders.get` first when `play_order_id` exists, then stitch a matching internal order if any (by `pg_order_id` or `pg_payment_id` = purchase token).
  */
 exports.listAdminPlayStoreOrders = async function (req, res) {
   try {
@@ -314,16 +316,15 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
     const page = Math.max(Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1, 1);
     const offset = (page - 1) * limit;
 
-    const [total, rows] = await Promise.all([
-      OrdersModel.countGooglePlayOrdersWithPgIdAdmin(),
-      OrdersModel.listGooglePlayOrdersWithPgIdAdmin({ limit, offset })
+    const [total, orphanRows] = await Promise.all([
+      GooglePlayOrphanModel.countOrphansAdmin(),
+      GooglePlayOrphanModel.listOrphansAdmin({ limit, offset })
     ]);
 
-    const { planById, userById } = await stitchPlansAndUsersForRows(rows);
-    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
-    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
-
-    const pgIds = rows.map((r) => r.pg_order_id).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id).trim());
+    const pgIds = orphanRows
+      .map((r) => r.play_order_id)
+      .filter((id) => id != null && String(id).trim() !== '')
+      .map((id) => String(id).trim());
 
     let playMeta = { ordersById: {}, failures: [], skipped: false };
     try {
@@ -337,32 +338,87 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
       }
     }
 
+    const matchRows = await OrdersModel.findGooglePlayOrdersMatchingOrphans({
+      pgOrderIds: orphanRows.map((r) => r.play_order_id),
+      purchaseTokens: orphanRows.map((r) => r.purchase_token)
+    });
+
+    const { planById, userById } = await stitchPlansAndUsersForRows(matchRows);
+    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(matchRows);
+    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(matchRows);
+
+    const byPg = Object.create(null);
+    const byTok = Object.create(null);
+    for (const r of matchRows) {
+      if (r.pg_order_id != null && String(r.pg_order_id).trim() !== '') {
+        byPg[String(r.pg_order_id).trim()] = r;
+      }
+      if (r.pg_payment_id != null && String(r.pg_payment_id).trim() !== '') {
+        byTok[String(r.pg_payment_id).trim()] = r;
+      }
+    }
+
     const failureByPg = new Map((playMeta.failures || []).map((f) => [String(f.play_order_id), f]));
 
-    let ordersOut = rows.map((o) => {
-      const internal = orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
-        mapRowToAdminOrder(o, planById, userById, templateNameById),
-        ctxMap
-      );
-      const pid = o.pg_order_id != null ? String(o.pg_order_id).trim() : '';
+    let ordersOut = orphanRows.map((orph) => {
+      const pid = orph.play_order_id != null ? String(orph.play_order_id).trim() : '';
+      const tok = orph.purchase_token != null ? String(orph.purchase_token).trim() : '';
+      const rawOrder = (pid && byPg[pid]) || (tok && byTok[tok]) || null;
+
+      const internal = rawOrder
+        ? orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
+            mapRowToAdminOrder(rawOrder, planById, userById, templateNameById),
+            ctxMap
+          )
+        : null;
+
       const ps = pid && playMeta.ordersById[pid] ? playMeta.ordersById[pid] : null;
       const fail = pid ? failureByPg.get(pid) : null;
+
+      const orphan_meta = {
+        id: orph.id,
+        purchase_token: orph.purchase_token,
+        source: orph.source,
+        reason_code: orph.reason_code,
+        user_id_hint: orph.user_id_hint,
+        requested_internal_order_id: orph.requested_internal_order_id,
+        notification_type: orph.notification_type,
+        product_id: orph.product_id,
+        app_version: orph.app_version,
+        device_os: orph.device_os,
+        device_os_version: orph.device_os_version,
+        device_brand: orph.device_brand,
+        device_model: orph.device_model,
+        first_seen_at: orph.first_seen_at,
+        last_seen_at: orph.last_seen_at,
+        payload_json: orph.payload_json
+      };
+
+      let play_fetch_error = null;
+      if (!ps) {
+        if (fail && fail.message) play_fetch_error = fail.message;
+        else if (!playMeta.skipped) {
+          play_fetch_error = pid ? 'Play order not returned' : 'No Play order id on orphan row';
+        }
+      }
+
       return {
-        internal_order: internal,
         play_store_order: ps,
-        play_fetch_error: ps
-          ? null
-          : fail && fail.message
-            ? fail.message
-            : playMeta.skipped
-              ? null
-              : 'Play order not returned'
+        internal_order: internal,
+        play_fetch_error,
+        orphan_meta
       };
     });
 
     ordersOut.sort((a, b) => {
-      const ta = Date.parse(a.play_store_order?.createTime || a.internal_order?.created_at || '') || 0;
-      const tb = Date.parse(b.play_store_order?.createTime || b.internal_order?.created_at || '') || 0;
+      const ta =
+        Date.parse(a.play_store_order?.createTime || '') ||
+        Date.parse(a.orphan_meta?.last_seen_at || '') ||
+        0;
+      const tb =
+        Date.parse(b.play_store_order?.createTime || '') ||
+        Date.parse(b.orphan_meta?.last_seen_at || '') ||
+        0;
       return tb - ta;
     });
 
@@ -372,8 +428,9 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
         page,
         limit,
         total,
-        has_more: offset + rows.length < total,
-        play_metadata_skipped: playMeta.skipped
+        has_more: offset + orphanRows.length < total,
+        play_metadata_skipped: playMeta.skipped,
+        list_kind: 'orphan_queue'
       }
     });
   } catch (err) {

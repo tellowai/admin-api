@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Live Google Play Order resources via Android Publisher API (`orders.get`).
+ * Live Google Play Order resources via Android Publisher API (`orders.get` per ID).
+ * Google does not expose “list all orders”; callers supply Play order IDs (e.g. from `orders.pg_order_id`), then we fetch Play first and attach DB rows afterward.
  * Uses the same service account shape as photobop-api: `config.google.clientEmail`, `config.google.privateKey`, `config.google.appPackageName`.
  */
 
