@@ -95,13 +95,17 @@ exports.getTicketMessageById = async function(messageId) {
   return result[0] || null;
 };
 
-exports.insertTicketMessage = async function(ticketId, senderType, senderId, message) {
+exports.insertTicketMessage = async function(ticketId, senderType, senderId, message, media) {
   const messageId = crypto.randomUUID();
+  let mediaJson = null;
+  if (media != null) {
+    mediaJson = typeof media === 'string' ? media : JSON.stringify(media);
+  }
   const query = `
-    INSERT INTO support_ticket_messages (message_id, ticket_id, sender_type, sender_id, message)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO support_ticket_messages (message_id, ticket_id, sender_type, sender_id, message, media)
+    VALUES (?, ?, ?, ?, ?, ?)
   `;
-  await mysqlQueryRunner.runQueryInMaster(query, [messageId, ticketId, senderType, senderId, message]);
+  await mysqlQueryRunner.runQueryInMaster(query, [messageId, ticketId, senderType, senderId, message, mediaJson]);
 
   // Bump the ticket's updated_at timestamp so it floats to the top of queues
   const updateQuery = `UPDATE support_tickets SET updated_at = NOW() WHERE ticket_id = ?`;

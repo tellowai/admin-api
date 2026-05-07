@@ -72,6 +72,61 @@ exports.assignTicket = async function(req, res) {
   }
 };
 
+exports.updateDeadlineDate = async function(req, res) {
+  try {
+    const ticketId = req.params.ticketId;
+    if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'deadline_date')) {
+      return res.status(400).send({ message: 'deadline_date is required (string YYYY-MM-DD or null to clear)' });
+    }
+    const raw = req.body.deadline_date;
+
+    let value = null;
+    if (raw === null || raw === undefined || raw === '') {
+      value = null;
+    } else if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+      value = raw.trim();
+    } else {
+      return res.status(400).send({ message: 'deadline_date must be YYYY-MM-DD or null/empty to clear' });
+    }
+
+    await SupportService.updateDeadlineDate(ticketId, value);
+
+    try {
+      await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        [{
+          value: {
+            admin_user_id: req.user.userId,
+            entity_type: 'SUPPORT_TICKETS',
+            action_name: 'UPDATE_TICKET_DEADLINE_DATE',
+            entity_id: ticketId,
+            additional_data: JSON.stringify({ deadline_date: value })
+          }
+        }],
+        'create_admin_activity_log'
+      );
+    } catch (kafkaErr) {
+      console.error('Update deadline date: activity log (Kafka) failed:', kafkaErr);
+    }
+
+    return res.status(200).send({ message: 'Deadline date updated', deadline_date: value });
+  } catch (err) {
+    if (err && err.message === 'Ticket not found') {
+      return res.status(404).send({ message: 'Ticket not found' });
+    }
+    console.error('Update deadline date error:', err);
+    const code = err && err.code;
+    const sqlMsg = (err && err.sqlMessage) || '';
+    if (code === 'ER_BAD_FIELD_ERROR' && String(sqlMsg).includes('deadline_date')) {
+      return res.status(500).send({
+        message:
+          'Database is missing support_tickets.deadline_date. Apply photobop-db-migrations (20260507170000 alter support tickets deadline) and retry.'
+      });
+    }
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.updateTicketStatus = async function(req, res) {
   try {
     const ticketId = req.params.ticketId;
@@ -222,11 +277,12 @@ exports.sendTicketMessage = async function(req, res) {
   try {
     const ticketId = req.params.ticketId;
     const adminId = req.user.userId;
-    const { message } = req.body;
-    if (!message) {
-      return res.status(400).send({ message: 'Message content required' });
+    const { message, media } = req.body || {};
+    const text = message != null ? String(message).trim() : '';
+    if (!text && (!media || !Array.isArray(media) || media.length === 0)) {
+      return res.status(400).send({ message: 'Message text or at least one attachment is required' });
     }
-    const newMessage = await SupportService.sendTicketMessage(ticketId, adminId, message);
+    const newMessage = await SupportService.sendTicketMessage(ticketId, adminId, text, media);
 
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
@@ -243,7 +299,31 @@ exports.sendTicketMessage = async function(req, res) {
 
     return res.status(200).send({ message: 'Message sent successfully', data: newMessage });
   } catch(err) {
+    if (err && err.message === 'Ticket not found') {
+      return res.status(404).send({ message: 'Ticket not found' });
+    }
+    if (
+      err &&
+      (err.message === 'Message or attachment required' ||
+        err.message === 'Invalid attachment URL' ||
+        err.message === 'Invalid attachment asset_key' ||
+        err.message === 'Invalid attachment payload' ||
+        err.message === 'At most 4 attachments allowed' ||
+        err.message === 'Public bucket URL is not configured' ||
+        err.message === 'Public bucket is not configured' ||
+        err.message === 'Ticket is closed')
+    ) {
+      return res.status(400).send({ message: err.message });
+    }
     console.error('Send Ticket Message Error:', err);
+    const code = err && err.code;
+    const sqlMsg = (err && err.sqlMessage) || '';
+    if (code === 'ER_BAD_FIELD_ERROR' && String(sqlMsg).includes('media')) {
+      return res.status(500).send({
+        message:
+          'Database is missing support_ticket_messages.media. Apply photobop-db-migrations (support ticket messages media column) and retry.'
+      });
+    }
     return res.status(500).send({ message: 'Internal Server Error' });
   }
 };

@@ -241,8 +241,7 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
       const prefix = config.os2.r2.assetsPrefix;
       const key = `${prefix}${createId()}${extension ? `.${extension}` : ''}`;
 
-      // Generate URL
-      const url = await storage.generatePresignedPublicBucketUploadUrl(key, {
+      const signedUploadUrl = await storage.generatePresignedPublicBucketUploadUrl(key, {
         contentType,
         metadata: {
           ...metadata,
@@ -251,6 +250,11 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
         expiresIn: config.os2.upload.expiresIn
       });
 
+      const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+      const bucketBase = String(config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
+      /** Browser-readable URL (CDN/custom domain). Stripped S3 host is for PUT only and often rejects anonymous GET on R2. */
+      const publicReadUrl = bucketBase ? `${bucketBase}/${cleanKey}` : signedUploadUrl.split('?')[0];
+
       // Add to ClickHouse data array
       presignedUrlData.push({
         event_id: createId(),
@@ -258,15 +262,15 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
         object_key: key,
         content_type: contentType,
         generated_at: moment().format('YYYY-MM-DD HH:mm:ss.SSS'),
-        signed_url: url,
-        url: url.split('?')[0],
+        signed_url: signedUploadUrl,
+        url: publicReadUrl,
         expires_at: moment().add(config.os2.upload.expiresInMs, 'ms').format('YYYY-MM-DD HH:mm:ss.SSS'),
         metadata: JSON.stringify(metadata)
       });
 
       return {
-        signed_url: url,
-        url: url.split('?')[0],
+        signed_url: signedUploadUrl,
+        url: publicReadUrl,
         key,
         state
       };

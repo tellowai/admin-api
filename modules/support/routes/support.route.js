@@ -18,6 +18,9 @@ module.exports = function (app) {
   app.route(prefix + "/:ticketId/assign")
     .put(AuthMiddleware.isAdminUser, SupportCtrl.assignTicket);
 
+  app.route(prefix + "/:ticketId/deadline-date")
+    .put(AuthMiddleware.isAdminUser, SupportCtrl.updateDeadlineDate);
+
   app.route(prefix + "/:ticketId/status")
     .put(AuthMiddleware.isAdminUser, SupportCtrl.updateTicketStatus);
 
