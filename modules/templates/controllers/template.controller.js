@@ -600,6 +600,14 @@ exports.listTemplates = async function (req, res) {
     const templateWorkflowType =
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
 
+    const ie = req.query.is_effects;
+    let isEffectsFilter;
+    if (ie === 'true' || ie === true || ie === '1' || ie === 1) {
+      isEffectsFilter = true;
+    } else if (ie === 'false' || ie === false || ie === '0' || ie === 0) {
+      isEffectsFilter = false;
+    }
+
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
       status: req.query.status || undefined,
@@ -607,7 +615,8 @@ exports.listTemplates = async function (req, res) {
       template_output_type: req.query.template_output_type || undefined,
       platform: req.query.platform || undefined,
       billing,
-      template_workflow_type: templateWorkflowType
+      template_workflow_type: templateWorkflowType,
+      is_effects: isEffectsFilter
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 

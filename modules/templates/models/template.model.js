@@ -58,6 +58,12 @@ exports.listTemplates = async function (pagination) {
     }
   }
 
+  if (pagination.is_effects === true) {
+    conditions.push('(is_effects = 1 OR is_effects = TRUE)');
+  } else if (pagination.is_effects === false) {
+    conditions.push('(is_effects IS NULL OR is_effects = 0 OR is_effects = FALSE)');
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `

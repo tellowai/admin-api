@@ -2,7 +2,18 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
-exports.listExploreSections = async function(pagination) {
+/**
+ * @param {object} pagination - limit, offset
+ * @param {'explore'|'effects'|null|undefined} listSurface - when set, same filter as consumer API (app_surface NOT NULL)
+ */
+exports.listExploreSections = async function (pagination, listSurface) {
+  let surfaceClause = '';
+  if (listSurface === 'explore') {
+    surfaceClause = ` AND app_surface = 'explore'`;
+  } else if (listSurface === 'effects') {
+    surfaceClause = ` AND app_surface = 'effects'`;
+  }
+
   const query = `
     SELECT 
       section_id,
@@ -12,18 +23,20 @@ exports.listExploreSections = async function(pagination) {
       section_type,
       ui_type,
       sort_order,
+      app_surface,
       status,
       additional_data,
       created_at,
       updated_at
     FROM explore_sections
     WHERE archived_at IS NULL
+    ${surfaceClause}
     ORDER BY sort_order ASC
     LIMIT ? OFFSET ?
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(
-    query, 
+    query,
     [pagination.limit, pagination.offset]
   );
 }; 

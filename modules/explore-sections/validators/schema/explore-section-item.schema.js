@@ -24,7 +24,8 @@ const addCollectionTemplatesSchema = Joi.object().keys({
   collection_id: Joi.alternatives().try(
     Joi.string().uuid(),
     Joi.number().integer()
-  ).required()
+  ).required(),
+  is_effects: Joi.boolean().optional()
 });
 
 const updateSectionItemsSortOrderSchema = Joi.object().keys({

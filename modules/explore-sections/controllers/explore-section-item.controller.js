@@ -322,10 +322,19 @@ exports.updateSectionItemsSortOrder = async function(req, res) {
 exports.addCollectionTemplates = async function(req, res) {
   try {
     const { sectionId } = req.params;
-    const { collection_id } = req.validatedBody;
+    const { collection_id, is_effects: isEffectsBody } = req.validatedBody;
 
-    // Get template IDs from collection
-    const collectionTemplates = await ExploreSectionItemModel.getCollectionTemplateIds(collection_id);
+    const collectionFilterOpts = {};
+    if (isEffectsBody === true) {
+      collectionFilterOpts.is_effects = true;
+    } else if (isEffectsBody === false) {
+      collectionFilterOpts.is_effects = false;
+    }
+
+    const collectionTemplates = await ExploreSectionItemModel.getCollectionTemplateIds(
+      collection_id,
+      collectionFilterOpts
+    );
 
     if (!collectionTemplates.length) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
