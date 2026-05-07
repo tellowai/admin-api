@@ -108,16 +108,29 @@ exports.removeSectionItems = async function(sectionId, itemIds) {
   return result.affectedRows > 0;
 };
 
-exports.getCollectionTemplateIds = async function(collectionId) {
+/**
+ * @param {string|number} collectionId
+ * @param {{ is_effects?: boolean }} [options] - when true/false, join templates and limit by is_effects (Explore vs Effects parity)
+ */
+exports.getCollectionTemplateIds = async function (collectionId, options = {}) {
+  let effectsClause = '';
+  if (options.is_effects === true) {
+    effectsClause = ' AND (t.is_effects = 1 OR t.is_effects = TRUE)';
+  } else if (options.is_effects === false) {
+    effectsClause = ' AND (t.is_effects IS NULL OR t.is_effects = 0 OR t.is_effects = FALSE)';
+  }
+
   const query = `
     SELECT 
-      template_id,
-      sort_order,
-      created_at
-    FROM collection_templates
-    WHERE collection_id = ?
-    AND archived_at IS NULL
-    ORDER BY sort_order ASC, created_at DESC
+      ct.template_id,
+      ct.sort_order,
+      ct.created_at
+    FROM collection_templates ct
+    INNER JOIN templates t ON t.template_id = ct.template_id AND t.archived_at IS NULL
+    WHERE ct.collection_id = ?
+    AND ct.archived_at IS NULL
+    ${effectsClause}
+    ORDER BY ct.sort_order ASC, ct.created_at DESC
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);

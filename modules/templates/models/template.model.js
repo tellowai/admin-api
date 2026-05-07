@@ -58,6 +58,12 @@ exports.listTemplates = async function (pagination) {
     }
   }
 
+  if (pagination.is_effects === true) {
+    conditions.push('(is_effects = 1 OR is_effects = TRUE)');
+  } else if (pagination.is_effects === false) {
+    conditions.push('(is_effects IS NULL OR is_effects = 0 OR is_effects = FALSE)');
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `
@@ -80,6 +86,7 @@ exports.listTemplates = async function (pagination) {
       image_input_fields_json,
       niche_id,
       template_workflow_type,
+      is_effects,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,
@@ -355,6 +362,7 @@ exports.searchTemplates = async function (searchQuery, page, limit, status = nul
       language_code,
       template_type,
       template_workflow_type,
+      is_effects,
       description,
       faces_needed,
       image_uploads_required,
@@ -651,6 +659,7 @@ exports.getTemplateById = async function (templateId) {
       image_input_fields_json,
       niche_id,
       template_workflow_type,
+      is_effects,
       user_assets_layer,
       cf_r2_key,
       cf_r2_url,

@@ -10,6 +10,7 @@ const createExploreSectionSchema = Joi.object().keys({
   ui_type: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').default('normal'),
   sort_order: Joi.number().integer().min(0).default(0),
   status: Joi.string().valid('active', 'inactive').default('active'),
+  app_surface: Joi.string().valid('explore', 'effects').optional(),
   additional_data: Joi.object().allow(null)
 });
 
@@ -21,6 +22,7 @@ const updateExploreSectionSchema = Joi.object().keys({
   ui_type: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').optional(),
   sort_order: Joi.number().integer().min(0).optional(),
   status: Joi.string().valid('active', 'inactive').optional(),
+  app_surface: Joi.string().valid('explore', 'effects').optional(),
   additional_data: Joi.object().allow(null).optional()
 });
 
