@@ -15,3 +15,4 @@ logs/combined.log
 logs/error.log
 logs
 .qodo
+config/secrets

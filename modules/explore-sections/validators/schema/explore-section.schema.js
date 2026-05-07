@@ -7,7 +7,11 @@ const createExploreSectionSchema = Joi.object().keys({
   layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').default('horizontal_scroller'),
   section_items_type: Joi.string().valid('manual', 'latest', 'track_collection', 'track_pack').default('manual'),
   section_type: Joi.string().valid('template', 'collection', 'pack', 'mixed', 'banner').default('mixed'),
-  ui_type: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').default('normal'),
+  ui_type: Joi.when('section_type', {
+    is: 'pack',
+    then: Joi.string().valid('list_of_packs', 'pack_templates').default('list_of_packs'),
+    otherwise: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').default('normal')
+  }),
   sort_order: Joi.number().integer().min(0).default(0),
   status: Joi.string().valid('active', 'inactive').default('active'),
   additional_data: Joi.object().allow(null)
@@ -18,7 +22,9 @@ const updateExploreSectionSchema = Joi.object().keys({
   layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').optional(),
   section_items_type: Joi.string().valid('manual', 'latest', 'track_collection', 'track_pack').optional(),
   section_type: Joi.string().valid('template', 'collection', 'pack', 'mixed', 'banner').optional(),
-  ui_type: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').optional(),
+  ui_type: Joi.string()
+    .valid('normal', 'compact_horizontal', 'compact_vertical', 'list_of_packs', 'pack_templates')
+    .optional(),
   sort_order: Joi.number().integer().min(0).optional(),
   status: Joi.string().valid('active', 'inactive').optional(),
   additional_data: Joi.object().allow(null).optional()
