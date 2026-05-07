@@ -303,6 +303,81 @@ exports.listAdminOrders = async function (req, res) {
 };
 
 /**
+ * GET /admin/orders/play-store — Google Play orders only; augments each row with Play `orders.get` via photobop-api.
+ */
+exports.listAdminPlayStoreOrders = async function (req, res) {
+  try {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const pageRaw = parseInt(req.query.page, 10);
+    const limit = Math.min(Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 20, 100);
+    const page = Math.max(Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1, 1);
+    const offset = (page - 1) * limit;
+
+    const status = req.query.status != null ? String(req.query.status).trim() : '';
+    const productType = req.query.product_type ? String(req.query.product_type).trim() : '';
+    const search = req.query.search ? String(req.query.search).trim() : '';
+    const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
+
+    const filterPayload = { status, productType, search, client_platform, payment_gateway: 'google_play' };
+
+    const rangeErr = mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload);
+    if (rangeErr) {
+      return res.status(rangeErr.status).json({ message: rangeErr.message });
+    }
+
+    const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
+
+    const [total, rows] = await Promise.all([
+      OrdersModel.countOrdersAdmin(preparedFilters),
+      OrdersModel.listOrdersAdmin({ ...preparedFilters, limit, offset })
+    ]);
+
+    const { planById, userById } = await stitchPlansAndUsersForRows(rows);
+    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
+    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
+    const orders = rows.map((o) => {
+      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
+      return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
+    });
+
+    const pgIds = orders.map((o) => o.pg_order_id).filter((id) => id != null && String(id).trim() !== '');
+    let playMeta = { ordersById: {}, failures: [], skipped: false };
+    try {
+      playMeta = await fetchGooglePlayOrderSummariesFromPhotobopApi(pgIds);
+    } catch (e) {
+      console.error('listAdminPlayStoreOrders: Play batch lookup failed', e.message || e);
+      playMeta = { ordersById: {}, failures: [], skipped: true };
+    }
+
+    const ordersOut = orders.map((o) => {
+      const pid = o.pg_order_id != null ? String(o.pg_order_id).trim() : '';
+      const ps = pid && playMeta.ordersById[pid] ? playMeta.ordersById[pid] : null;
+      return {
+        ...o,
+        play_store_order: ps,
+        play_store_synced: !!ps
+      };
+    });
+
+    return res.status(200).json({
+      data: {
+        orders: ordersOut,
+        page,
+        limit,
+        total,
+        has_more: offset + ordersOut.length < total,
+        play_metadata_skipped: playMeta.skipped
+      }
+    });
+  } catch (err) {
+    console.error('listAdminPlayStoreOrders error:', err);
+    return res.status(500).json({
+      message: 'Failed to list Play Store orders'
+    });
+  }
+};
+
+/**
  * GET /admin/orders/export — UTF-8 CSV (opens in Excel) for current filters; capped at MAX_EXPORT_ROWS (newest first).
  * Query `export_layout=by_user`: one row per user (sorted by user_id), with row_num, order_count, and semicolon-separated order_ids.
  */
@@ -485,6 +560,37 @@ function publicApiProxyNotConfiguredBody() {
     code: 'PHOTOBOP_PROXY_NOT_CONFIGURED',
     hint:
       'photobop-admin-ui VITE_* vars are not read here. Set publicApi.baseUrl (photobop-api origin, no trailing slash; same idea as VITE_PUBLIC_API_URL) and publicApi.internalServiceKey in photobop-admin-api config/env/local.js, or PHOTOBOP_API_BASE_URL and PHOTOBOP_INTERNAL_SERVICE_KEY on the admin-api process. The legacy config key photobopApi is still accepted if publicApi is omitted. Match the same secret on photobop-api. Optional publicApi.routePrefix for versioned paths.'
+  };
+}
+
+/**
+ * Batch-fetch raw Google Order objects by Play order id (proxied to photobop-api).
+ * @param {string[]} playOrderIds
+ * @returns {Promise<{ ordersById: Record<string, object>, failures: Array<{ play_order_id: string, message: string }>, skipped: boolean }>}
+ */
+async function fetchGooglePlayOrderSummariesFromPhotobopApi(playOrderIds) {
+  const unique = [...new Set((playOrderIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (unique.length === 0) {
+    return { ordersById: {}, failures: [], skipped: false };
+  }
+  const { base, key, origin, routePrefix } = publicApiProxyRequestConfig();
+  if (!base || !key) {
+    return { ordersById: {}, failures: [], skipped: true };
+  }
+  const url = `${origin}${routePrefix}/internal/admin/google-play/orders/batch-get-by-play-order-id`;
+  const { data } = await axios.post(
+    url,
+    { play_order_ids: unique },
+    {
+      headers: { 'X-Internal-Service-Key': key, 'Content-Type': 'application/json' },
+      timeout: 120000
+    }
+  );
+  const inner = data && data.data ? data.data : data;
+  return {
+    ordersById: (inner && inner.ordersById) || {},
+    failures: (inner && inner.failures) || [],
+    skipped: false
   };
 }
 

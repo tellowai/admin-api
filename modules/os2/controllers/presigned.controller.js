@@ -252,8 +252,10 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
 
       const cleanKey = key.startsWith('/') ? key.slice(1) : key;
       const bucketBase = String(config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
-      /** Browser-readable URL (CDN/custom domain). Stripped S3 host is for PUT only and often rejects anonymous GET on R2. */
-      const publicReadUrl = bucketBase ? `${bucketBase}/${cleanKey}` : signedUploadUrl.split('?')[0];
+      /** Stripped PUT URL host (R2 API). Not reliable for anonymous GET; kept for backward compatibility when CDN differs. */
+      const strippedSignedBase = signedUploadUrl.split('?')[0];
+      /** Primary public GET URL (CDN / custom domain). */
+      const publicReadUrl = bucketBase ? `${bucketBase}/${cleanKey}` : strippedSignedBase;
 
       // Add to ClickHouse data array
       presignedUrlData.push({
@@ -268,12 +270,17 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
         metadata: JSON.stringify(metadata)
       });
 
-      return {
+      const responseItem = {
         signed_url: signedUploadUrl,
         url: publicReadUrl,
         key,
         state
       };
+      // When CDN URL differs from stripped presigned host, expose legacy shape for callers that still expect it.
+      if (publicReadUrl !== strippedSignedBase) {
+        responseItem.storage_object_url = strippedSignedBase;
+      }
+      return responseItem;
     }));
 
     insertUploadPresignedURLGeneration(presignedUrlData);

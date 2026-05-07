@@ -50,7 +50,7 @@ exports.getPpIdsMatchingProductType = async function (productType) {
 };
 
 /**
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number, _noMatchingPlans?: boolean }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number, _noMatchingPlans?: boolean }} filters
  * @returns {{ whereSql: string, params: any[] }}
  */
 function buildAdminOrdersWhere(filters) {
@@ -60,10 +60,16 @@ function buildAdminOrdersWhere(filters) {
   const productType = filters.productType && String(filters.productType).trim();
   const search = filters.search && String(filters.search).trim();
   const client_platform = filters.client_platform && String(filters.client_platform).trim().toLowerCase();
+  const payment_gateway = filters.payment_gateway && String(filters.payment_gateway).trim().toLowerCase();
 
   if (status && ['created', 'completed', 'failed'].includes(status)) {
     where.push('o.status = ?');
     params.push(status);
+  }
+
+  if (payment_gateway === 'google_play') {
+    where.push('LOWER(o.payment_gateway) = ?');
+    params.push('google_play');
   }
 
   if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
@@ -130,7 +136,7 @@ const ORDERS_ADMIN_SELECT = `
 
 /**
  * Resolves product-type → payment_plan ids once (avoid duplicate queries when listing + counting).
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  */
 async function resolveAdminFilterPayload(filters) {
   if (filters._ppIdsResolved) return filters;
@@ -155,7 +161,7 @@ exports.prepareAdminOrdersFilters = resolveAdminFilterPayload;
 
 /**
  * Admin list: orders only (plan columns stitched in controller). Filters by status, product bucket, search, client_platform.
- * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @param {{ limit: number, offset: number, status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  * @returns {Promise<Array>}
  */
 exports.listOrdersAdmin = async function (filters) {
@@ -172,7 +178,7 @@ exports.listOrdersAdmin = async function (filters) {
 };
 
 /**
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
  * @returns {Promise<number>}
  */
 exports.countOrdersAdmin = async function (filters) {
