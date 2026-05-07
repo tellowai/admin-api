@@ -5,6 +5,7 @@ const PaymentPlansModel = require('../../payment-plans/models/payment-plans.mode
 const GenerationsModel = require('../../generations/models/generations.model');
 const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
+const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
 
 function normPlanField(v) {
   if (v == null || v === '') return '';
@@ -303,7 +304,7 @@ exports.listAdminOrders = async function (req, res) {
 };
 
 /**
- * GET /admin/orders/play-store — Google Play orders only; augments each row with Play `orders.get` via photobop-api.
+ * GET /admin/orders/play-store — Google Play orders only; augments each row with Play `orders.get` (admin-api, same credentials as photobop-api).
  */
 exports.listAdminPlayStoreOrders = async function (req, res) {
   try {
@@ -313,50 +314,56 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
     const page = Math.max(Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1, 1);
     const offset = (page - 1) * limit;
 
-    const status = req.query.status != null ? String(req.query.status).trim() : '';
-    const productType = req.query.product_type ? String(req.query.product_type).trim() : '';
-    const search = req.query.search ? String(req.query.search).trim() : '';
-    const client_platform = req.query.client_platform ? String(req.query.client_platform).trim().toLowerCase() : '';
-
-    const filterPayload = { status, productType, search, client_platform, payment_gateway: 'google_play' };
-
-    const rangeErr = mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload);
-    if (rangeErr) {
-      return res.status(rangeErr.status).json({ message: rangeErr.message });
-    }
-
-    const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
-
     const [total, rows] = await Promise.all([
-      OrdersModel.countOrdersAdmin(preparedFilters),
-      OrdersModel.listOrdersAdmin({ ...preparedFilters, limit, offset })
+      OrdersModel.countGooglePlayOrdersWithPgIdAdmin(),
+      OrdersModel.listGooglePlayOrdersWithPgIdAdmin({ limit, offset })
     ]);
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
     const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
     const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
-    const orders = rows.map((o) => {
-      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
-      return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
-    });
 
-    const pgIds = orders.map((o) => o.pg_order_id).filter((id) => id != null && String(id).trim() !== '');
+    const pgIds = rows.map((r) => r.pg_order_id).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id).trim());
+
     let playMeta = { ordersById: {}, failures: [], skipped: false };
     try {
-      playMeta = await fetchGooglePlayOrderSummariesFromPhotobopApi(pgIds);
+      playMeta = await GooglePlayOrderSyncService.batchGetOrdersByPlayOrderIds(pgIds);
     } catch (e) {
-      console.error('listAdminPlayStoreOrders: Play batch lookup failed', e.message || e);
-      playMeta = { ordersById: {}, failures: [], skipped: true };
+      if (e && e.code === 'GOOGLE_NOT_CONFIGURED') {
+        playMeta = { ordersById: {}, failures: [], skipped: true };
+      } else {
+        console.error('listAdminPlayStoreOrders: Play batch lookup failed', e.message || e);
+        playMeta = { ordersById: {}, failures: [], skipped: true };
+      }
     }
 
-    const ordersOut = orders.map((o) => {
+    const failureByPg = new Map((playMeta.failures || []).map((f) => [String(f.play_order_id), f]));
+
+    let ordersOut = rows.map((o) => {
+      const internal = orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
+        mapRowToAdminOrder(o, planById, userById, templateNameById),
+        ctxMap
+      );
       const pid = o.pg_order_id != null ? String(o.pg_order_id).trim() : '';
       const ps = pid && playMeta.ordersById[pid] ? playMeta.ordersById[pid] : null;
+      const fail = pid ? failureByPg.get(pid) : null;
       return {
-        ...o,
+        internal_order: internal,
         play_store_order: ps,
-        play_store_synced: !!ps
+        play_fetch_error: ps
+          ? null
+          : fail && fail.message
+            ? fail.message
+            : playMeta.skipped
+              ? null
+              : 'Play order not returned'
       };
+    });
+
+    ordersOut.sort((a, b) => {
+      const ta = Date.parse(a.play_store_order?.createTime || a.internal_order?.created_at || '') || 0;
+      const tb = Date.parse(b.play_store_order?.createTime || b.internal_order?.created_at || '') || 0;
+      return tb - ta;
     });
 
     return res.status(200).json({
@@ -365,7 +372,7 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
         page,
         limit,
         total,
-        has_more: offset + ordersOut.length < total,
+        has_more: offset + rows.length < total,
         play_metadata_skipped: playMeta.skipped
       }
     });
@@ -560,37 +567,6 @@ function publicApiProxyNotConfiguredBody() {
     code: 'PHOTOBOP_PROXY_NOT_CONFIGURED',
     hint:
       'photobop-admin-ui VITE_* vars are not read here. Set publicApi.baseUrl (photobop-api origin, no trailing slash; same idea as VITE_PUBLIC_API_URL) and publicApi.internalServiceKey in photobop-admin-api config/env/local.js, or PHOTOBOP_API_BASE_URL and PHOTOBOP_INTERNAL_SERVICE_KEY on the admin-api process. The legacy config key photobopApi is still accepted if publicApi is omitted. Match the same secret on photobop-api. Optional publicApi.routePrefix for versioned paths.'
-  };
-}
-
-/**
- * Batch-fetch raw Google Order objects by Play order id (proxied to photobop-api).
- * @param {string[]} playOrderIds
- * @returns {Promise<{ ordersById: Record<string, object>, failures: Array<{ play_order_id: string, message: string }>, skipped: boolean }>}
- */
-async function fetchGooglePlayOrderSummariesFromPhotobopApi(playOrderIds) {
-  const unique = [...new Set((playOrderIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
-  if (unique.length === 0) {
-    return { ordersById: {}, failures: [], skipped: false };
-  }
-  const { base, key, origin, routePrefix } = publicApiProxyRequestConfig();
-  if (!base || !key) {
-    return { ordersById: {}, failures: [], skipped: true };
-  }
-  const url = `${origin}${routePrefix}/internal/admin/google-play/orders/batch-get-by-play-order-id`;
-  const { data } = await axios.post(
-    url,
-    { play_order_ids: unique },
-    {
-      headers: { 'X-Internal-Service-Key': key, 'Content-Type': 'application/json' },
-      timeout: 120000
-    }
-  );
-  const inner = data && data.data ? data.data : data;
-  return {
-    ordersById: (inner && inner.ordersById) || {},
-    failures: (inner && inner.failures) || [],
-    skipped: false
   };
 }
 

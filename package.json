@@ -39,6 +39,7 @@
     "glob": "*",
     "google-auth-library": "^9.4.1",
     "google-libphonenumber": "^3.2.34",
+    "googleapis": "^169.0.0",
     "helmet": "*",
     "i18next": "*",
     "i18next-fs-backend": "*",

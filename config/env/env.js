@@ -71,6 +71,10 @@ module.exports = {
     clientID: "",
     clientSecret: "",
     callbackURL: "",
+    /** Same Play Billing service account as photobop-api (Android Publisher scope). Optional unless Play Store admin lists are used. */
+    clientEmail: "",
+    privateKey: "",
+    appPackageName: "",
   },
   jwt: {
     secret: "",

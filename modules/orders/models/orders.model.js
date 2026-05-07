@@ -1,9 +1,17 @@
 'use strict';
 
+/**
+ * Admin order reads are intentionally single-table on `orders` only.
+ * Payment plans and users are stitched in the controller via separate keyed lookups (no JOIN hot paths).
+ */
+
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
 /** Column ref for filters; values come from X-Device-OS at order creation */
 const CLIENT_PLATFORM_COL = 'o.client_platform';
+
+/** Canonical DB value (ENUM); avoids LOWER(column) which prevents index use on payment_gateway. */
+const GATEWAY_GOOGLE_PLAY = 'google_play';
 
 /**
  * Single-table: payment plan ids that match the admin "product type" bucket (for filtering orders by payment_plan_id).
@@ -68,8 +76,8 @@ function buildAdminOrdersWhere(filters) {
   }
 
   if (payment_gateway === 'google_play') {
-    where.push('LOWER(o.payment_gateway) = ?');
-    params.push('google_play');
+    where.push('o.payment_gateway = ?');
+    params.push(GATEWAY_GOOGLE_PLAY);
   }
 
   if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
@@ -83,7 +91,9 @@ function buildAdminOrdersWhere(filters) {
 
   if (search) {
     const term = `%${search}%`;
-    where.push('(o.user_id LIKE ? OR CAST(o.order_id AS CHAR) LIKE ?)');
+    // No CAST on order_id — MySQL compares LIKE against numeric columns using string conversion;
+    // avoids expression wrapping that can limit optimizer choices vs CAST(... AS CHAR).
+    where.push('(o.user_id LIKE ? OR o.order_id LIKE ?)');
     params.push(term, term);
   }
 
@@ -231,4 +241,37 @@ exports.getByOrderIds = async function (orderIds) {
     WHERE order_id IN (${placeholders})
   `;
   return await MysqlQueryRunner.runQueryInSlave(query, orderIds);
+};
+
+/**
+ * Count orders we can look up on Play (have pg_order_id + google_play gateway).
+ * Uses `pg_order_id <> ''` (not TRIM) so the predicate stays index-friendly; normalize whitespace in data if needed.
+ */
+exports.countGooglePlayOrdersWithPgIdAdmin = async function () {
+  const query = `
+    SELECT COUNT(*) AS total
+    FROM orders o
+    WHERE o.payment_gateway = ?
+      AND o.pg_order_id IS NOT NULL
+      AND o.pg_order_id <> ''
+  `;
+  const rows = await MysqlQueryRunner.runQueryInSlave(query, [GATEWAY_GOOGLE_PLAY]);
+  const r = rows && rows[0];
+  const n = r && r.total != null ? Number(r.total) : 0;
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Paginated list of google_play orders with pg_order_id (Play ID index only).
+ */
+exports.listGooglePlayOrdersWithPgIdAdmin = async function ({ limit, offset }) {
+  const query = `
+    ${ORDERS_ADMIN_SELECT}
+    WHERE o.payment_gateway = ?
+      AND o.pg_order_id IS NOT NULL
+      AND o.pg_order_id <> ''
+    ORDER BY o.created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, [GATEWAY_GOOGLE_PLAY, limit, offset]);
 };
