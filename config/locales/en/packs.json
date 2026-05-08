@@ -2,6 +2,7 @@
   "errors": {
     "pack_not_found": "Pack not found",
     "templates_limit_exceeded": "Cannot add {{adding}} templates. Pack already has {{current}} templates. Maximum {{max}} templates allowed per pack",
+    "templates_minimum_not_met": "A pack must keep at least {{min}} templates. After this removal it would have {{remaining}}",
     "template_not_found": "Template not found",
     "template_already_exists": "Template already exists in the pack"
   },

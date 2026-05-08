@@ -2,6 +2,7 @@
   "errors": {
     "pack_not_found": "पैक नहीं मिला",
     "templates_limit_exceeded": "और टेम्पलेट नहीं जोड़ सकते। प्रति पैक अधिकतम {{max}} टेम्पलेट की अनुमति है",
+    "templates_minimum_not_met": "पैक में कम से कम {{min}} टेम्पलेट रहने चाहिए। हटाने के बाद {{remaining}} रह जाएंगे",
     "template_not_found": "टेम्पलेट नहीं मिला",
     "template_already_exists": "टेम्पलेट पहले से ही पैक में मौजूद है"
   },

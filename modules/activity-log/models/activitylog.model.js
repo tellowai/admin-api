@@ -99,6 +99,10 @@ exports.getPackDetailsByIds = async function(packIds) {
             thumbnail_cf_r2_key,
             thumbnail_cf_r2_url,
             additional_data,
+            language_code,
+            credits,
+            alacarte_price,
+            alacarte_original_price,
             created_at
         FROM packs 
         WHERE pack_id IN (?)

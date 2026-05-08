@@ -10,8 +10,9 @@ exports.createPack = async function(packData) {
       pack_name,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
-      additional_data
-    ) VALUES (?, ?, ?, ?, ?)
+      additional_data,
+      language_code
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `;
   
   const values = [
@@ -19,7 +20,8 @@ exports.createPack = async function(packData) {
     packData.pack_name,
     packData.thumbnail_cf_r2_key || null,
     packData.thumbnail_cf_r2_url || null,
-    JSON.stringify(packData.additional_data || {})
+    JSON.stringify(packData.additional_data || {}),
+    packData.language_code || null
   ];
 
   await mysqlQueryRunner.runQueryInMaster(query, values);
@@ -34,7 +36,12 @@ exports.getPack = async function(packId) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
-      created_at
+      language_code,
+      credits,
+      alacarte_price,
+      alacarte_original_price,
+      created_at,
+      updated_at
     FROM packs
     WHERE pack_id = ?
     AND archived_at IS NULL
@@ -52,7 +59,12 @@ exports.listPacks = async function(limit = 10, offset = 0) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
-      created_at
+      language_code,
+      credits,
+      alacarte_price,
+      alacarte_original_price,
+      created_at,
+      updated_at
     FROM packs
     WHERE archived_at IS NULL
     ORDER BY created_at DESC
@@ -118,6 +130,72 @@ exports.getPackTemplates = async function(packId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [packId]);
 };
 
+/**
+ * Paginated pack template rows (with optional name/code search).
+ * @param {string} packId
+ * @param {{ limit: number, offset: number, q?: string }} opts
+ */
+exports.getPackTemplatesPaginated = async function(packId, opts) {
+  const limit = Number(opts.limit) || 20;
+  const offset = Number(opts.offset) || 0;
+  const q = opts.q != null && String(opts.q).trim() !== '' ? String(opts.q).trim() : null;
+
+  const params = [packId];
+  let searchClause = '';
+  if (q) {
+    const term = `%${q}%`;
+    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
+    params.push(term, term);
+  }
+  params.push(limit, offset);
+
+  const query = `
+    SELECT 
+      pt.pack_template_id,
+      pt.pack_id,
+      pt.template_id,
+      pt.sort_order,
+      pt.created_at
+    FROM pack_templates pt
+    INNER JOIN templates t
+      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
+      AND t.archived_at IS NULL
+    WHERE pt.pack_id = ?
+    AND pt.archived_at IS NULL
+    ${searchClause}
+    ORDER BY pt.sort_order ASC
+    LIMIT ? OFFSET ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+/** Count pack templates matching optional name/code search (same filter as paginated list). */
+exports.countPackTemplatesMatching = async function(packId, qRaw) {
+  const q = qRaw != null && String(qRaw).trim() !== '' ? String(qRaw).trim() : null;
+  const params = [packId];
+  let searchClause = '';
+  if (q) {
+    const term = `%${q}%`;
+    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
+    params.push(term, term);
+  }
+
+  const query = `
+    SELECT COUNT(*) AS cnt
+    FROM pack_templates pt
+    INNER JOIN templates t
+      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
+      AND t.archived_at IS NULL
+    WHERE pt.pack_id = ?
+    AND pt.archived_at IS NULL
+    ${searchClause}
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, params);
+  return row && row.cnt != null ? Number(row.cnt) : 0;
+};
+
 exports.getTemplatesByIds = async function(templateIds) {
   const query = `
     SELECT 
@@ -131,6 +209,8 @@ exports.getTemplatesByIds = async function(templateIds) {
       cf_r2_key,
       cf_r2_url,
       credits,
+      alacarte_price,
+      alacarte_original_price,
       additional_data,
       template_output_type,
       created_at
@@ -178,4 +258,22 @@ exports.countPackTemplates = async function(packId) {
   
   const [result] = await mysqlQueryRunner.runQueryInSlave(query, [packId]);
   return result.count;
+};
+
+exports.updatePackPricing = async function(packId, { credits, alacarte_price, alacarte_original_price }) {
+  const query = `
+    UPDATE packs
+    SET
+      credits = ?,
+      alacarte_price = ?,
+      alacarte_original_price = ?
+    WHERE pack_id = ?
+    AND archived_at IS NULL
+  `;
+  await mysqlQueryRunner.runQueryInMaster(query, [
+    credits,
+    alacarte_price,
+    alacarte_original_price,
+    packId
+  ]);
 };
