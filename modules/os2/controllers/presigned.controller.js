@@ -241,8 +241,7 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
       const prefix = config.os2.r2.assetsPrefix;
       const key = `${prefix}${createId()}${extension ? `.${extension}` : ''}`;
 
-      // Generate URL
-      const url = await storage.generatePresignedPublicBucketUploadUrl(key, {
+      const signedUploadUrl = await storage.generatePresignedPublicBucketUploadUrl(key, {
         contentType,
         metadata: {
           ...metadata,
@@ -251,6 +250,13 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
         expiresIn: config.os2.upload.expiresIn
       });
 
+      const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+      const bucketBase = String(config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
+      /** Stripped PUT URL host (R2 API). Not reliable for anonymous GET; kept for backward compatibility when CDN differs. */
+      const strippedSignedBase = signedUploadUrl.split('?')[0];
+      /** Primary public GET URL (CDN / custom domain). */
+      const publicReadUrl = bucketBase ? `${bucketBase}/${cleanKey}` : strippedSignedBase;
+
       // Add to ClickHouse data array
       presignedUrlData.push({
         event_id: createId(),
@@ -258,18 +264,23 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
         object_key: key,
         content_type: contentType,
         generated_at: moment().format('YYYY-MM-DD HH:mm:ss.SSS'),
-        signed_url: url,
-        url: url.split('?')[0],
+        signed_url: signedUploadUrl,
+        url: publicReadUrl,
         expires_at: moment().add(config.os2.upload.expiresInMs, 'ms').format('YYYY-MM-DD HH:mm:ss.SSS'),
         metadata: JSON.stringify(metadata)
       });
 
-      return {
-        signed_url: url,
-        url: url.split('?')[0],
+      const responseItem = {
+        signed_url: signedUploadUrl,
+        url: publicReadUrl,
         key,
         state
       };
+      // When CDN URL differs from stripped presigned host, expose legacy shape for callers that still expect it.
+      if (publicReadUrl !== strippedSignedBase) {
+        responseItem.storage_object_url = strippedSignedBase;
+      }
+      return responseItem;
     }));
 
     insertUploadPresignedURLGeneration(presignedUrlData);

@@ -112,4 +112,11 @@ module.exports = function (app) {
     AuthMiddleware.isAuthorizedJWT,
     UsersCtrl.getLoggedInUserData
   );
+
+  app.route(
+    versionConfig.routePrefix +
+    '/session/access-token'
+  ).get(
+    TokensCtrl.getSessionAccessToken
+  );
 };

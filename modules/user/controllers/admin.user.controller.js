@@ -16,6 +16,7 @@ const CreditsModel = require('../../credits/models/credits.model');
 const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
+const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -468,12 +469,20 @@ exports.getUserOrders = async function (req, res) {
         ...rest,
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
         template_id: tid,
-        template_name: tid ? (templateNameById[tid] ?? null) : null
+        template_name: tid ? (templateNameById[tid] ?? null) : null,
+        analytics_app_version: null,
+        analytics_os_name: null,
+        analytics_os_version: null
       };
     });
 
+    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(orders);
+    const enriched = data.map((row) =>
+      orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(row, ctxMap)
+    );
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: { orders: data }
+      data: { orders: enriched }
     });
   } catch (err) {
     console.error('getUserOrders error:', err);
@@ -552,6 +561,74 @@ exports.getUserEntitlements = async function (req, res) {
     console.error('getUserEntitlements error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
       message: req.t('user:USER_ENTITLEMENTS_FAILED') || 'Failed to retrieve user entitlements'
+    });
+  }
+};
+
+/**
+ * Lookup an end-user by mobile (substring) or internal order_id for support tooling.
+ * GET /admin/consumer-users/lookup?q=&type=mobile|order_id
+ */
+exports.lookupConsumerUserForSupport = async function (req, res) {
+  try {
+    const type = String(req.query.type || 'mobile').toLowerCase();
+    const rawQ = String(req.query.q || '').trim();
+    if (!rawQ) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Query (q) is required' });
+    }
+
+    let userRow = null;
+
+    if (type === 'order_id') {
+      const digits = rawQ.replace(/\D/g, '') || rawQ;
+      const orderId = parseInt(digits, 10);
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid order ID' });
+      }
+      const userId = await ManageAdminUserDbo.findUserIdByOrderId(orderId);
+      if (!userId) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No order found for this ID' });
+      }
+      userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
+    } else {
+      const mobileDigits = rawQ.replace(/\D/g, '');
+      if (!mobileDigits) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Enter a mobile number with at least one digit'
+        });
+      }
+      const rows = await ManageAdminUserDbo.lookupEndUsersByMobile(rawQ, 3);
+      if (rows.length === 0) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No user found' });
+      }
+      if (rows.length > 1) {
+        return res.status(HTTP_STATUS_CODES.CONFLICT).json({
+          message: 'Multiple users match this mobile number; narrow your search',
+          data: { match_count: rows.length }
+        });
+      }
+      userRow = rows[0];
+    }
+
+    if (!userRow) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+    }
+
+    const payloadUser = {
+      ...userRow,
+      mobile_number: userRow.mobile
+    };
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        user_id: userRow.user_id,
+        user: payloadUser
+      }
+    });
+  } catch (err) {
+    console.error('lookupConsumerUserForSupport error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Lookup failed'
     });
   }
 };

@@ -6,6 +6,188 @@ const AdminUserModel = require('../../user/models/admin.user.model');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const CreditsModel = require('../../credits/models/credits.model');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
+const fcmSupportNotify = require('./fcm.support.notify.service');
+const config = require('../../../config/config');
+
+const MAX_CHAT_ATTACHMENTS = 4;
+
+/** Origins where public-bucket chat attachments may be hosted (CDN + direct R2 URL from presigned PUT). */
+function getAllowedPublicAttachmentOrigins() {
+  const origins = new Set();
+  const bucketUrlRaw = String(config.os2?.r2?.public?.bucketUrl || '').trim();
+  if (bucketUrlRaw) {
+    try {
+      origins.add(new URL(bucketUrlRaw).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+  const bucket = String(config.os2?.r2?.public?.bucket || '').trim();
+  const endpointRaw = String(
+    config.os2?.r2?.public?.endpoint || config.os2?.r2?.endpoint || ''
+  ).trim();
+  if (bucket && endpointRaw) {
+    try {
+      const host = new URL(endpointRaw).hostname;
+      origins.add(new URL(`https://${bucket}.${host}`).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+  return origins;
+}
+
+function truncateForPush(text, maxLen = 140) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return 'You have a new message from support.';
+  return s.length <= maxLen ? s : `${s.slice(0, maxLen - 1)}…`;
+}
+
+function parseMessageMediaField(m) {
+  if (!m || m.media == null || m.media === '') {
+    if (m) m.media = null;
+    return;
+  }
+  if (typeof m.media === 'string') {
+    try {
+      m.media = JSON.parse(m.media);
+    } catch {
+      m.media = null;
+      return;
+    }
+  }
+  if (!Array.isArray(m.media)) {
+    m.media = null;
+  }
+}
+
+/** Strip optional `/{bucket}/` prefix from R2 pathname, return `assets/...` key or null. */
+function extractPublicAssetKeyFromUrl(urlStr, publicBucket) {
+  try {
+    const u = new URL(urlStr);
+    let path = u.pathname.replace(/^\/+/, '');
+    if (publicBucket) {
+      const prefixed = `${publicBucket}/`;
+      if (path.startsWith(prefixed)) path = path.slice(prefixed.length);
+    }
+    if (path.includes('..')) return null;
+    if (path.startsWith('assets/')) return path;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function normalizePublicAssetsPrefix() {
+  const p = String(config.os2?.r2?.assetsPrefix || 'assets/').replace(/^\/+/, '');
+  return p.endsWith('/') ? p : `${p}/`;
+}
+
+/**
+ * Add `url` for clients; keep `asset_key` + `bucket` from DB. Fixes legacy rows that only stored direct URLs.
+ * @param {unknown} mediaArr
+ * @returns {unknown}
+ */
+function expandSupportMessageMediaForClient(mediaArr) {
+  if (!Array.isArray(mediaArr) || mediaArr.length === 0) return mediaArr;
+  const publicBucket = String(config.os2?.r2?.public?.bucket || '').trim();
+  const base = String(config.os2?.r2?.public?.bucketUrl || '').trim().replace(/\/$/, '');
+
+  return mediaArr.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    const type = item.type === 'video' ? 'video' : 'image';
+
+    if (item.asset_key) {
+      const asset_key = String(item.asset_key).replace(/^\/+/, '');
+      const bucket = item.bucket || publicBucket;
+      const url = base && asset_key ? `${base}/${asset_key}` : item.url || null;
+      return { asset_key, bucket, type, ...(url ? { url } : {}) };
+    }
+
+    if (item.url) {
+      const legacyUrl = String(item.url).trim();
+      const asset_key = extractPublicAssetKeyFromUrl(legacyUrl, publicBucket);
+      const url = asset_key && base ? `${base}/${asset_key}` : legacyUrl;
+      return {
+        asset_key: asset_key || undefined,
+        bucket: publicBucket || item.bucket,
+        type,
+        url
+      };
+    }
+
+    return item;
+  });
+}
+
+/**
+ * Persist public-bucket chat media as `{ asset_key, bucket, type }` (no URLs in DB).
+ * Accepts `{ asset_key, type }` or legacy `{ url, type }` from older clients.
+ * @param {unknown} mediaInput
+ * @returns {Array<{ asset_key: string, bucket: string, type: 'image'|'video' }>|null}
+ */
+function normalizeAdminMediaPayload(mediaInput) {
+  if (mediaInput == null) return null;
+  const arr = Array.isArray(mediaInput) ? mediaInput : [];
+  if (arr.length === 0) return null;
+  if (arr.length > MAX_CHAT_ATTACHMENTS) {
+    throw new Error(`At most ${MAX_CHAT_ATTACHMENTS} attachments allowed`);
+  }
+
+  const publicBucket = String(config.os2?.r2?.public?.bucket || '').trim();
+  if (!publicBucket) {
+    throw new Error('Public bucket is not configured');
+  }
+
+  const prefix = normalizePublicAssetsPrefix();
+  const allowedOrigins = getAllowedPublicAttachmentOrigins();
+  const out = [];
+
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+
+    const akInput = item.asset_key != null ? String(item.asset_key).trim().replace(/^\/+/, '') : '';
+    const urlInput = item.url != null ? String(item.url).trim() : '';
+
+    let asset_key = akInput;
+    if (!asset_key && urlInput) {
+      if (allowedOrigins.size === 0) {
+        throw new Error('Public bucket URL is not configured');
+      }
+      let origin;
+      try {
+        origin = new URL(urlInput).origin;
+      } catch {
+        throw new Error('Invalid attachment URL');
+      }
+      if (!allowedOrigins.has(origin)) {
+        throw new Error('Invalid attachment URL');
+      }
+      asset_key = extractPublicAssetKeyFromUrl(urlInput, publicBucket);
+      if (!asset_key) {
+        throw new Error('Invalid attachment URL');
+      }
+    }
+
+    if (!asset_key || asset_key.includes('..')) {
+      throw new Error('Invalid attachment asset_key');
+    }
+    if (!asset_key.startsWith(prefix)) {
+      throw new Error('Invalid attachment asset_key');
+    }
+
+    const rawType = item.type != null ? String(item.type).toLowerCase() : '';
+    const type = rawType === 'video' || /\.(mp4|webm|mov)(\?|$)/i.test(asset_key) ? 'video' : 'image';
+    const bucket = item.bucket && String(item.bucket).trim() ? String(item.bucket).trim() : publicBucket;
+
+    out.push({ asset_key, bucket, type });
+  }
+
+  if (arr.length > 0 && out.length === 0) {
+    throw new Error('Invalid attachment payload');
+  }
+  return out.length ? out : null;
+}
 
 // A helper to enrich tickets without performing SQL JOINs
 async function enrichTicketsWithUsers(tickets) {
@@ -66,6 +248,10 @@ async function enrichMessagesWithUsers(messages) {
     });
   }
   return messages.map(m => {
+    parseMessageMediaField(m);
+    if (m.media && Array.isArray(m.media)) {
+      m.media = expandSupportMessageMediaForClient(m.media);
+    }
     m.sender = m.sender_id === 'system' ? { first_name: 'Support', last_name: 'Team', email: 'support@kriya.com' } : usersMap[m.sender_id] || { email: m.sender_id };
     return m;
   });
@@ -298,65 +484,133 @@ exports.assignTicket = async function(ticketId, assignedToId) {
   await SupportModel.updateTicket(ticketId, updates);
 };
 
+/** @param {string|null} dateOrNull — `YYYY-MM-DD` or null to clear */
+exports.updateDeadlineDate = async function(ticketId, dateOrNull) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+  await SupportModel.updateTicket(ticketId, { deadline_date: dateOrNull });
+};
+
+/**
+ * When an admin contacts the customer, assign the ticket to that admin (and move submitted → in_progress).
+ * No-op if the ticket is already resolved.
+ * @param {object} ticket — row from `getTicketById`
+ */
+async function autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId) {
+  if (!ticket || ticket.status === 'resolved') return;
+  const updates = { assigned_to: adminId };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
+  await SupportModel.updateTicket(ticketId, updates);
+}
+
 exports.updateTicketStatus = async function(ticketId, status) {
   await SupportModel.updateTicket(ticketId, { status });
 };
 
-exports.resolveTicket = async function(ticketId, adminId, resolutionNotes, isMoneyRefunded, isCreditsRefunded, refundedCreditsType, refundCreditsAmount) {
+/**
+ * Apply optional credit refund to a ticket row (mutates `updates`).
+ * @param {object} ticket — row from `getTicketById`
+ * @param {string} ticketId
+ * @param {Record<string, unknown>} updates — fields passed to `updateTicket`
+ * @param {boolean} isCreditsRefunded
+ * @param {number|null|undefined} refundCreditsAmount
+ */
+async function applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount) {
+  if (!isCreditsRefunded) return;
+
+  if (ticket.is_credits_refunded) {
+    throw new Error('Credits have already been refunded for this ticket.');
+  }
+
+  if (!ticket.generation_id) {
+    throw new Error('Cannot refund credits: No generation attached to this ticket.');
+  }
+
+  const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
+  const amountToRefund =
+    refundCreditsAmount != null && Number(refundCreditsAmount) > 0
+      ? Number(refundCreditsAmount)
+      : deductedAmount;
+
+  if (!amountToRefund || amountToRefund <= 0) {
+    throw new Error(
+      refundCreditsAmount != null
+        ? 'Credits to refund must be a positive number.'
+        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.'
+    );
+  }
+
+  const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
+  if (previouslyRefundedAmount > 0) {
+    throw new Error('Credits have already been refunded for this generation.');
+  }
+
+  const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
+  await CreditsModel.refundCreditsTransaction(
+    ticket.user_id,
+    amountToRefund,
+    'adjustment',
+    ticket.generation_id,
+    description
+  );
+
+  updates.is_credits_refunded = true;
+  updates.refunded_credits_type = 'new';
+}
+
+/**
+ * Post resolution notes to the ticket (DB + thread), optional refunds. Does **not** set status to resolved.
+ * Assigns the ticket to the acting admin and moves `submitted` → `in_progress` when applicable.
+ */
+exports.proposeResolution = async function (
+  ticketId,
+  adminId,
+  resolutionNotes,
+  isMoneyRefunded,
+  isCreditsRefunded,
+  _refundedCreditsType,
+  refundCreditsAmount
+) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
 
   const updates = {
-    status: 'resolved',
-    resolution_notes: resolutionNotes
+    resolution_notes: resolutionNotes,
+    assigned_to: adminId
   };
+  if (ticket.status === 'submitted') {
+    updates.status = 'in_progress';
+  }
 
   if (isMoneyRefunded) {
     updates.is_money_refunded = true;
   }
-  
-  if (isCreditsRefunded) {
-    if (ticket.is_credits_refunded) {
-      throw new Error('Credits have already been refunded for this ticket.');
-    }
-    
-    if (!ticket.generation_id) {
-      throw new Error('Cannot refund credits: No generation attached to this ticket.');
-    }
 
-    const deductedAmount = await SupportModel.getDeductedCreditsForGeneration(ticket.generation_id);
-    const amountToRefund = (refundCreditsAmount != null && Number(refundCreditsAmount) > 0)
-      ? Number(refundCreditsAmount)
-      : deductedAmount;
-
-    if (!amountToRefund || amountToRefund <= 0) {
-      throw new Error(refundCreditsAmount != null
-        ? 'Credits to refund must be a positive number.'
-        : 'Cannot refund credits: No credits were deducted for this generation. For à la carte, enter the number of credits to refund.');
-    }
-
-    const previouslyRefundedAmount = await SupportModel.getRefundedCreditsForGeneration(ticket.generation_id);
-    if (previouslyRefundedAmount > 0) {
-      throw new Error('Credits have already been refunded for this generation.');
-    }
-
-    const description = `Refund for support ticket #${ticketId} (Generation: ${ticket.generation_id})`;
-    await CreditsModel.refundCreditsTransaction(
-      ticket.user_id,
-      amountToRefund,
-      'adjustment',
-      ticket.generation_id,
-      description
-    );
-
-    updates.is_credits_refunded = true;
-    updates.refunded_credits_type = 'new';
-  }
+  await applyCreditsRefundIfRequested(ticket, ticketId, updates, isCreditsRefunded, refundCreditsAmount);
 
   await SupportModel.updateTicket(ticketId, updates);
-  
-  // Also insert the resolution notes as the final message in the conversation
-  await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes);
+  await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, resolutionNotes, null);
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support update',
+    body: truncateForPush(resolutionNotes),
+  });
+};
+
+/**
+ * Mark ticket resolved only (no resolution message, no refunds).
+ */
+exports.closeTicket = async function (ticketId) {
+  const ticket = await SupportModel.getTicketById(ticketId);
+  if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is already closed.');
+  }
+  await SupportModel.updateTicket(ticketId, { status: 'resolved' });
 };
 
 exports.getTicketMessages = async function(ticketId) {
@@ -364,14 +618,30 @@ exports.getTicketMessages = async function(ticketId) {
   return await enrichMessagesWithUsers(messages);
 };
 
-exports.sendTicketMessage = async function(ticketId, adminId, message) {
+exports.sendTicketMessage = async function(ticketId, adminId, messageText, mediaInput) {
   const ticket = await SupportModel.getTicketById(ticketId);
   if (!ticket) throw new Error('Ticket not found');
+  if (ticket.status === 'resolved') {
+    throw new Error('Ticket is closed');
+  }
 
-  const messageId = await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, message);
+  const text = messageText != null ? String(messageText).trim() : '';
+  const mediaPayload = normalizeAdminMediaPayload(mediaInput);
+  if (!text && !mediaPayload) {
+    throw new Error('Message or attachment required');
+  }
+
+  const messageId = await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, text || '', mediaPayload);
+  await autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId);
+
   const newMessage = await SupportModel.getTicketMessageById(messageId);
-  
+
   const enriched = await enrichMessagesWithUsers([newMessage]);
+  const pushBody = text || (mediaPayload && mediaPayload.length ? 'Sent an attachment' : '');
+  void fcmSupportNotify.notifyUserSupportReply(ticket.user_id, ticketId, {
+    title: 'Support',
+    body: truncateForPush(pushBody),
+  });
   return enriched[0];
 };
 

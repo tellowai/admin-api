@@ -203,3 +203,73 @@ exports.updateUserRoles = async function(userId, roleIds) {
     
     return roleIds ? roleIds.length : 0;
 };
+
+exports.findUserIdByOrderId = async function (orderId) {
+    const rows = await mysqlQueryRunner.runQueryInSlave(
+        'SELECT user_id FROM orders WHERE order_id = ? LIMIT 1',
+        [orderId]
+    );
+    return rows && rows[0] ? rows[0].user_id : null;
+};
+
+exports.getEndUserSnapshotByUserId = async function (userId) {
+    const rows = await mysqlQueryRunner.runQueryInSlave(
+        `SELECT user_id, email, first_name, last_name, mobile, display_name, profile_pic, profile_pic_bucket, profile_pic_asset_key
+         FROM user WHERE user_id = ? AND deleted_at IS NULL LIMIT 1`,
+        [userId]
+    );
+    return rows && rows[0] ? rows[0] : null;
+};
+
+/**
+ * Support mobile lookup: compares digits-only form (handles +91 / spaces), substring on raw mobile,
+ * exact trailing digit match, and national number match after a leading 91 country code.
+ */
+exports.lookupEndUsersByMobile = async function (rawMobile, limit) {
+    const cap = typeof limit === 'number' && limit > 0 ? limit : 3;
+    const rawTrim = String(rawMobile || '').trim();
+    const digitsQuery = rawTrim.replace(/\D/g, '');
+    if (!digitsQuery) return [];
+
+    const escapeLike = (s) =>
+        String(s).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const rawPattern = `%${escapeLike(rawTrim)}%`;
+    const digitsPattern = `%${digitsQuery}%`;
+    const natPattern = `%${digitsQuery}%`;
+    const dlen = digitsQuery.length;
+
+    const mdExpr = `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(mobile,''),'+',''),'-',''),' ',''),'(',''),')','')`;
+
+    const sql = `
+SELECT u.user_id, u.email, u.first_name, u.last_name, u.mobile, u.display_name, u.profile_pic, u.profile_pic_bucket, u.profile_pic_asset_key
+FROM (
+  SELECT user_id, email, first_name, last_name, mobile, display_name, profile_pic, profile_pic_bucket, profile_pic_asset_key, created_at,
+    ${mdExpr} AS md
+  FROM user
+  WHERE deleted_at IS NULL AND mobile IS NOT NULL AND TRIM(mobile) <> ''
+) u
+WHERE u.mobile LIKE ?
+   OR u.md LIKE ?
+   OR ( ? BETWEEN 7 AND 15 AND RIGHT(u.md, ?) = ? )
+   OR ( ? >= 6 AND u.md LIKE '91%' AND CHAR_LENGTH(u.md) >= 12 AND SUBSTRING(u.md, 3) LIKE ? )
+ORDER BY (u.md = ?) DESC, (RIGHT(u.md, ?) = ?) DESC, (u.mobile = ?) DESC, u.created_at DESC
+LIMIT ?
+`;
+
+    const params = [
+        rawPattern,
+        digitsPattern,
+        dlen,
+        dlen,
+        digitsQuery,
+        dlen,
+        natPattern,
+        digitsQuery,
+        dlen,
+        digitsQuery,
+        rawTrim,
+        cap
+    ];
+
+    return await mysqlQueryRunner.runQueryInMaster(sql, params);
+};

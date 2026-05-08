@@ -71,6 +71,10 @@ module.exports = {
     clientID: "",
     clientSecret: "",
     callbackURL: "",
+    /** Same Play Billing service account as photobop-api (Android Publisher scope). Optional unless Play Store admin lists are used. */
+    clientEmail: "",
+    privateKey: "",
+    appPackageName: "",
   },
   jwt: {
     secret: "",
@@ -116,5 +120,12 @@ module.exports = {
     password: "",
   },
   queuesUrl: "",
-  pwaWebDomainUrl: ""
+  pwaWebDomainUrl: "",
+  /** photobop-api origin (no trailing slash) + shared key for server-to-server calls (e.g. Play fulfilment). Legacy key `photobopApi` is still read if `publicApi` is absent. */
+  publicApi: {
+    baseUrl: "",
+    /** Optional path prefix (e.g. "v1" or "/v1") if the API is not mounted at the origin root. */
+    routePrefix: "",
+    internalServiceKey: ""
+  }
 };
