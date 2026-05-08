@@ -130,6 +130,72 @@ exports.getPackTemplates = async function(packId) {
   return await mysqlQueryRunner.runQueryInSlave(query, [packId]);
 };
 
+/**
+ * Paginated pack template rows (with optional name/code search).
+ * @param {string} packId
+ * @param {{ limit: number, offset: number, q?: string }} opts
+ */
+exports.getPackTemplatesPaginated = async function(packId, opts) {
+  const limit = Number(opts.limit) || 20;
+  const offset = Number(opts.offset) || 0;
+  const q = opts.q != null && String(opts.q).trim() !== '' ? String(opts.q).trim() : null;
+
+  const params = [packId];
+  let searchClause = '';
+  if (q) {
+    const term = `%${q}%`;
+    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
+    params.push(term, term);
+  }
+  params.push(limit, offset);
+
+  const query = `
+    SELECT 
+      pt.pack_template_id,
+      pt.pack_id,
+      pt.template_id,
+      pt.sort_order,
+      pt.created_at
+    FROM pack_templates pt
+    INNER JOIN templates t
+      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
+      AND t.archived_at IS NULL
+    WHERE pt.pack_id = ?
+    AND pt.archived_at IS NULL
+    ${searchClause}
+    ORDER BY pt.sort_order ASC
+    LIMIT ? OFFSET ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+/** Count pack templates matching optional name/code search (same filter as paginated list). */
+exports.countPackTemplatesMatching = async function(packId, qRaw) {
+  const q = qRaw != null && String(qRaw).trim() !== '' ? String(qRaw).trim() : null;
+  const params = [packId];
+  let searchClause = '';
+  if (q) {
+    const term = `%${q}%`;
+    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
+    params.push(term, term);
+  }
+
+  const query = `
+    SELECT COUNT(*) AS cnt
+    FROM pack_templates pt
+    INNER JOIN templates t
+      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
+      AND t.archived_at IS NULL
+    WHERE pt.pack_id = ?
+    AND pt.archived_at IS NULL
+    ${searchClause}
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, params);
+  return row && row.cnt != null ? Number(row.cnt) : 0;
+};
+
 exports.getTemplatesByIds = async function(templateIds) {
   const query = `
     SELECT 

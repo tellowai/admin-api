@@ -193,7 +193,13 @@ class PackController {
   static async getPackTemplates(req, res) {
     try {
       const { packId } = req.params;
-      
+
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const rawLimit = parseInt(req.query.limit, 10) || 20;
+      const limit = Math.min(100, Math.max(1, rawLimit));
+      const offset = (page - 1) * limit;
+      const q = req.query.q != null ? String(req.query.q).trim() : '';
+
       const pack = await PackModel.getPack(packId);
       if (!pack) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -201,12 +207,18 @@ class PackController {
         });
       }
 
-      // Get pack templates
-      const packTemplates = await PackModel.getPackTemplates(packId);
-      
+      const total = await PackModel.countPackTemplatesMatching(packId, q);
+
+      const packTemplates = await PackModel.getPackTemplatesPaginated(packId, {
+        limit,
+        offset,
+        q: q || undefined,
+      });
+
       if (!packTemplates.length) {
         return res.status(HTTP_STATUS_CODES.OK).json({
-          data: []
+          data: [],
+          meta: { total, page, limit, has_more: false },
         });
       }
 
@@ -252,7 +264,13 @@ class PackController {
       }).filter(Boolean); // Remove any null values from missing templates
 
       return res.status(HTTP_STATUS_CODES.OK).json({
-        data: combinedTemplates
+        data: combinedTemplates,
+        meta: {
+          total,
+          page,
+          limit,
+          has_more: combinedTemplates.length === limit,
+        },
       });
     } catch (error) {
       logger.error('Error getting pack templates:', { error: error.message, stack: error.stack });
