@@ -98,6 +98,14 @@ module.exports = function (app) {
 
   app.route(
     versionConfig.routePrefix +
+    "/admin/consumer-users/by-user-id/:userId"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getConsumerUserSnapshotByUserId
+  );
+
+  app.route(
+    versionConfig.routePrefix +
     "/admin/consumer-users/lookup"
   ).get(
     AuthMiddleware.isAdminUser,

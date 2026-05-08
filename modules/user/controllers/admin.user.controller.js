@@ -566,6 +566,41 @@ exports.getUserEntitlements = async function (req, res) {
 };
 
 /**
+ * End-user profile snapshot by primary user id (same row shape as consumer lookup `user`).
+ * GET /admin/consumer-users/by-user-id/:userId
+ */
+exports.getConsumerUserSnapshotByUserId = async function (req, res) {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'userId is required' });
+    }
+
+    const userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
+    if (!userRow) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+    }
+
+    const payloadUser = {
+      ...userRow,
+      mobile_number: userRow.mobile
+    };
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        user_id: userRow.user_id,
+        user: payloadUser
+      }
+    });
+  } catch (err) {
+    console.error('getConsumerUserSnapshotByUserId error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to load user profile'
+    });
+  }
+};
+
+/**
  * Lookup an end-user by mobile (substring) or internal order_id for support tooling.
  * GET /admin/consumer-users/lookup?q=&type=mobile|order_id
  */
