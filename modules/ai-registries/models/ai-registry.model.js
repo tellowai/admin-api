@@ -232,6 +232,16 @@ exports.getSocketTypesByIds = async function (ids) {
 
 // --- Tags (ai_model_registry_tags + ai_model_tag_definitions) ---
 
+exports.filterExistingTagIds = async function (ids) {
+  if (!ids || ids.length === 0) return [];
+  const query = `
+    SELECT amtd_id FROM ai_model_tag_definitions
+    WHERE amtd_id IN (?) AND deleted_at IS NULL
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [ids]);
+  return rows.map(r => r.amtd_id);
+};
+
 exports.getTagsForAmrId = async function (amrId) {
   const junctionQuery = `SELECT amtd_id FROM ai_model_registry_tags WHERE amr_id = ? ORDER BY amtd_id ASC`;
   const rows = await mysqlQueryRunner.runQueryInSlave(junctionQuery, [amrId]);

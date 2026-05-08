@@ -6,6 +6,8 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const _ = require('lodash');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
+const config = require('../../../config/config');
+const aiRegistryExport = require('../services/ai-registry-export.service');
 
 /**
  * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf/array structure).
@@ -123,6 +125,62 @@ function ioDefinitionsVersioningDiff(incomingList, existingList) {
     return sorted.map(i => ioDefVersioningRelevant(i));
   };
   return JSON.stringify(scrub(incomingList)) !== JSON.stringify(scrub(existingList));
+}
+
+/**
+ * Full AI model row + provider + tags + IO definitions (same shape as GET /models/:amrId).
+ */
+async function loadAiModelDetail(amrId) {
+  const model = await aiRegistryModel.getAiModelById(amrId);
+  if (!model) {
+    return null;
+  }
+
+  const [providers, ioDefinitions, tagsResult] = await Promise.all([
+    aiRegistryModel.getProvidersByIds([model.amp_id]),
+    aiRegistryModel.getIoDefinitionsByModelId(amrId),
+    aiRegistryModel.getTagsForAmrId(amrId).catch(() => [])
+  ]);
+
+  model.provider = providers[0] || null;
+  model.tags = tagsResult || [];
+
+  if (ioDefinitions.length > 0) {
+    const amstIds = _.uniq(ioDefinitions.map(io => io.amst_id));
+    const socketTypes = await aiRegistryModel.getSocketTypesByIds(amstIds);
+    const socketTypesMap = _.keyBy(socketTypes, 'amst_id');
+
+    model.io_definitions = ioDefinitions.map(io => {
+      const row = { ...io, socket_type: socketTypesMap[io.amst_id] || null };
+      if (typeof row.constraints === 'string') {
+        try { row.constraints = JSON.parse(row.constraints); } catch (e) { row.constraints = {}; }
+      }
+      if (typeof row.default_value === 'string') {
+        try { row.default_value = JSON.parse(row.default_value); } catch (e) { row.default_value = null; }
+      }
+      return row;
+    });
+  } else {
+    model.io_definitions = [];
+  }
+
+  if (typeof model.pricing_config === 'string') {
+    try { model.pricing_config = JSON.parse(model.pricing_config); } catch (e) { /* keep */ }
+  }
+  if (typeof model.parameter_schema === 'string') {
+    try { model.parameter_schema = JSON.parse(model.parameter_schema); } catch (e) { /* keep */ }
+  }
+  if (model.workflow_selection_schema != null && typeof model.workflow_selection_schema === 'string') {
+    try { model.workflow_selection_schema = JSON.parse(model.workflow_selection_schema); } catch (e) { model.workflow_selection_schema = null; }
+  }
+  if (model.data_contract != null && typeof model.data_contract === 'string') {
+    try { model.data_contract = JSON.parse(model.data_contract); } catch (e) { model.data_contract = null; }
+  }
+  if (typeof model.fallback_mapping === 'string') {
+    try { model.fallback_mapping = JSON.parse(model.fallback_mapping); } catch (e) { model.fallback_mapping = null; }
+  }
+
+  return model;
 }
 
 /**
@@ -390,63 +448,124 @@ exports.create = async function (req, res) {
 exports.read = async function (req, res) {
   try {
     const amrId = req.params.amrId;
-    const model = await aiRegistryModel.getAiModelById(amrId);
+    const model = await loadAiModelDetail(amrId);
 
     if (!model) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
-    }
-
-    // Fetch related data in parallel (tags optional - table may not exist yet)
-    const [providers, ioDefinitions, tagsResult] = await Promise.all([
-      aiRegistryModel.getProvidersByIds([model.amp_id]),
-      aiRegistryModel.getIoDefinitionsByModelId(amrId),
-      aiRegistryModel.getTagsForAmrId(amrId).catch(() => [])
-    ]);
-
-    model.provider = providers[0] || null;
-    model.tags = tagsResult || [];
-
-    // Stitch Socket Types to IO Definitions
-    if (ioDefinitions.length > 0) {
-      const amstIds = _.uniq(ioDefinitions.map(io => io.amst_id));
-      const socketTypes = await aiRegistryModel.getSocketTypesByIds(amstIds);
-      const socketTypesMap = _.keyBy(socketTypes, 'amst_id');
-
-      model.io_definitions = ioDefinitions.map(io => {
-        const row = { ...io, socket_type: socketTypesMap[io.amst_id] || null };
-        if (typeof row.constraints === 'string') {
-          try { row.constraints = JSON.parse(row.constraints); } catch (e) { row.constraints = {}; }
-        }
-        if (typeof row.default_value === 'string') {
-          try { row.default_value = JSON.parse(row.default_value); } catch (e) { row.default_value = null; }
-        }
-        return row;
-      });
-    } else {
-      model.io_definitions = [];
-    }
-
-    // Ensure JSON columns are returned as objects, not strings
-    if (typeof model.pricing_config === 'string') {
-      try { model.pricing_config = JSON.parse(model.pricing_config); } catch (e) { /* keep as-is */ }
-    }
-    if (typeof model.parameter_schema === 'string') {
-      try { model.parameter_schema = JSON.parse(model.parameter_schema); } catch (e) { /* keep as-is */ }
-    }
-    if (model.workflow_selection_schema != null && typeof model.workflow_selection_schema === 'string') {
-      try { model.workflow_selection_schema = JSON.parse(model.workflow_selection_schema); } catch (e) { model.workflow_selection_schema = null; }
-    }
-    if (model.data_contract != null && typeof model.data_contract === 'string') {
-      try { model.data_contract = JSON.parse(model.data_contract); } catch (e) { model.data_contract = null; }
-    }
-    if (typeof model.fallback_mapping === 'string') {
-      try { model.fallback_mapping = JSON.parse(model.fallback_mapping); } catch (e) { model.fallback_mapping = null; }
     }
 
     return res.status(HTTP_STATUS_CODES.OK).json(model);
   } catch (err) {
     console.error('Error reading AI model:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+  }
+};
+
+/**
+ * Export full model as signed JSON (Photobop Admin format).
+ */
+exports.exportJson = async function (req, res) {
+  try {
+    const amrId = req.params.amrId;
+    const model = await loadAiModelDetail(amrId);
+    if (!model) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
+    }
+
+    const secret = aiRegistryExport.getExportSecret(config);
+    const { sanitized, sourceAmrId } = aiRegistryExport.sanitizeModelForExport(model);
+    const doc = aiRegistryExport.buildExportDocument(sanitized, sourceAmrId, secret);
+
+    const safeName = String(model.name || 'model')
+      .replace(/[^\w.\-]+/g, '_')
+      .slice(0, 80);
+    const filename = `ai-model-${safeName}-${amrId}.json`;
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(HTTP_STATUS_CODES.OK).send(JSON.stringify(doc, null, 2));
+  } catch (err) {
+    console.error('Error exporting AI model:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: req.t('common:SOMETHING_WENT_WRONG') || 'Internal Server Error' });
+  }
+};
+
+/**
+ * Import model from signed export JSON (creates a new registry row, IO rows, and tags).
+ */
+exports.importJson = async function (req, res) {
+  try {
+    const secret = aiRegistryExport.getExportSecret(config);
+    const verified = aiRegistryExport.verifyImportEnvelope(req.body, secret);
+    if (verified.error) {
+      return res.status(verified.statusCode || HTTP_STATUS_CODES.BAD_REQUEST).send({ message: verified.error });
+    }
+
+    const importModel = verified.model;
+    const sourceAmrFromExport = verified.source_amr_id;
+    const provider = await aiRegistryModel.getProviderById(importModel.amp_id);
+    if (!provider) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({
+        message: `Provider amp_id ${importModel.amp_id} does not exist in this environment. Create or select a matching provider first.`
+      });
+    }
+
+    const { insertPayload, ioDefinitions, tagIds } = aiRegistryExport.modelPayloadForInsert(importModel);
+
+    let result;
+    try {
+      result = await aiRegistryModel.createAiModel(insertPayload);
+    } catch (err) {
+      if (err && (err.code === 'ER_DUP_ENTRY' || err.errno === 1062)) {
+        return res.status(HTTP_STATUS_CODES.CONFLICT).send({
+          message:
+            'A model with the same provider, platform_model_id, and version already exists. Change version or platform_model_id in the export file and try again.'
+        });
+      }
+      throw err;
+    }
+
+    const newAmrId = result.insertId;
+
+    for (const io of ioDefinitions) {
+      const { amiod_id, amr_id, socket_type, created_at, updated_at, _tid, ...ioData } = io;
+      ioData.amr_id = newAmrId;
+      await aiRegistryModel.createIoDefinition(ioData);
+    }
+
+    const existingTagIds = tagIds.length ? await aiRegistryModel.filterExistingTagIds(tagIds) : [];
+    if (existingTagIds.length) {
+      await aiRegistryModel.setTagsForAmrId(newAmrId, existingTagIds);
+    }
+
+    try {
+      await publishNewAdminActivityLog({
+        adminUserId: req.user.userId,
+        entityType: 'AI_REGISTRY',
+        actionName: 'IMPORT_AI_REGISTRY_MODEL',
+        entityId: newAmrId,
+        details: `Imported from export (source amr_id ${sourceAmrFromExport != null ? sourceAmrFromExport : 'unknown'})`
+      });
+    } catch (logErr) {
+      console.error('Import succeeded but activity log failed (amr_id=%s):', newAmrId, logErr);
+    }
+
+    const existingSet = new Set(existingTagIds.map((id) => Number(id)));
+    const skippedTags = tagIds.filter((id) => !existingSet.has(Number(id)));
+
+    return res.status(HTTP_STATUS_CODES.CREATED).json({
+      message: 'Model imported successfully',
+      amr_id: newAmrId,
+      tags_applied: existingTagIds.length,
+      tags_skipped: skippedTags.length,
+      note:
+        skippedTags.length > 0
+          ? 'Some tag IDs from the export are not defined in this database and were skipped.'
+          : undefined
+    });
+  } catch (err) {
+    console.error('Error importing AI model:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).send({ message: err.message || req.t('common:SOMETHING_WENT_WRONG') });
   }
 };
 

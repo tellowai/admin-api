@@ -18,7 +18,14 @@ module.exports = function (app) {
   app.route(baseUrl + '/models/for-fallback')
     .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.listForFallback);
 
+  // Import must be registered before /models/:amrId so "import-json" is not captured as amrId
+  app.route(baseUrl + '/models/import-json')
+    .post(AuthMiddleware.isAdminUser, AiRegistryCtrl.importJson);
+
   // Single AI model
+  app.route(baseUrl + '/models/:amrId/export-json')
+    .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.exportJson);
+
   app.route(baseUrl + '/models/:amrId')
     .get(AuthMiddleware.isAdminUser, AiRegistryCtrl.read)
     .patch(AuthMiddleware.isAdminUser, AiRegistryCtrl.update);
