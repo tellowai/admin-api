@@ -1,5 +1,6 @@
 'use strict';
 
+const moment = require('moment-timezone');
 const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
 const TimezoneService = require('./timezone.service');
@@ -235,6 +236,31 @@ class AnalyticsService {
       where.push(`properties['product_classification'] = '${esc(String(product_type))}'`);
     }
     return { prewhere, where };
+  }
+
+  /**
+   * SQL fragments for fused growth overview: order filters belong in countIf/sumIf only
+   * (never global WHERE — that would drop template/install/commerce rows). app_version
+   * is also applied on the order branch of PREWHERE to match narrow order-only scans.
+   */
+  static buildGrowthFusedOrderFragments(additionalFilters = {}) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const bits = [];
+    let orderPreAppFragment = '';
+    const { payment_gateway, app_version, product_type } = additionalFilters;
+    if (app_version != null && String(app_version).trim() !== '') {
+      const v = esc(String(app_version).trim());
+      orderPreAppFragment = ` AND app_version = '${v}'`;
+      bits.push(`app_version = '${v}'`);
+    }
+    if (payment_gateway != null && String(payment_gateway).trim() !== '') {
+      bits.push(`properties['payment_gateway'] = '${esc(String(payment_gateway).trim())}'`);
+    }
+    if (product_type != null && String(product_type).trim() !== '') {
+      bits.push(`properties['product_classification'] = '${esc(String(product_type).trim())}'`);
+    }
+    const orderAggFragment = bits.length ? ` AND ${bits.join(' AND ')}` : '';
+    return { orderPreAppFragment, orderAggFragment };
   }
 
   // Build conditions for daily summary tables (single table, date range only)
@@ -1284,6 +1310,124 @@ class AnalyticsService {
         stuck_user_count: b.userSet.size
       };
     });
+  }
+
+  /**
+   * Executive growth dashboard: one fused ClickHouse read over `analytics_events_raw`
+   * (timestamp + event-type OR in PREWHERE; conditional aggregates per day in client TZ).
+   * Same semantics as the former four parallel queries, fewer round-trips and typically
+   * less total I/O when the same time range was scanned four times before.
+   *
+   * - Installs: `attributed_install` (server-accepted install signal; not Play Console totals).
+   * - Template views: `template_view` + object_type=template (raw hub, calendar in client TZ).
+   * - Orders: `order_created` / `order_completed` (same optional filters as orders-funnel).
+   * - Commerce: purchase + commerce (ARPPU inputs).
+   * - ARPPU / avg cart: derived in JS from commerce + order columns.
+   */
+  static async getGrowthMetricsOverview(queryParams) {
+    const tz = TimezoneService.normalizeTimezoneAlias(queryParams.tz || 'UTC');
+    const startCal = TimezoneService.toCalendarYmd(queryParams.start_date);
+    const endCal = TimezoneService.toCalendarYmd(queryParams.end_date);
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(
+      startCal,
+      endCal,
+      tz
+    );
+
+    const additional = {};
+    if (queryParams.product_type != null && String(queryParams.product_type).trim() !== '') {
+      additional.product_type = String(queryParams.product_type).trim();
+    }
+    if (queryParams.payment_gateway != null && String(queryParams.payment_gateway).trim() !== '') {
+      additional.payment_gateway = String(queryParams.payment_gateway).trim();
+    }
+    if (queryParams.app_version != null && String(queryParams.app_version).trim() !== '') {
+      additional.app_version = String(queryParams.app_version).trim();
+    }
+
+    const fusedFragments = this.buildGrowthFusedOrderFragments(additional);
+    const growthRows = await AnalyticsModel.queryGrowthOverviewFused(
+      rangeStartUtc,
+      rangeEndUtc,
+      tz,
+      fusedFragments
+    );
+
+    const byDate = new Map();
+    const ensure = (d) => {
+      if (!byDate.has(d)) {
+        byDate.set(d, {
+          date: d,
+          attributed_installs: 0,
+          template_views: 0,
+          orders_created: 0,
+          orders_completed: 0,
+          revenue_order_completed: 0,
+          gross_revenue_commerce: 0,
+          paying_users_commerce: 0,
+          purchase_rows_commerce: 0
+        });
+      }
+      return byDate.get(d);
+    };
+
+    const z = moment.tz.zone(tz) != null ? tz : 'UTC';
+    const startM = moment.tz(startCal, z).startOf('day');
+    const endM = moment.tz(endCal, z).startOf('day');
+    for (let m = startM.clone(); m.isSameOrBefore(endM, 'day'); m.add(1, 'day')) {
+      ensure(m.format('YYYY-MM-DD'));
+    }
+
+    for (const r of growthRows || []) {
+      const row = ensure(String(r.date));
+      row.attributed_installs = Number(r.installs) || 0;
+      row.template_views = Number(r.views) || 0;
+      row.orders_created = Number(r.orders_created) || 0;
+      row.orders_completed = Number(r.orders_completed) || 0;
+      row.revenue_order_completed = Number(r.revenue_completed) || 0;
+      row.gross_revenue_commerce = Number(r.gross_revenue) || 0;
+      row.paying_users_commerce = Number(r.paying_users) || 0;
+      row.purchase_rows_commerce = Number(r.purchase_rows) || 0;
+    }
+
+    const sorted = [...byDate.keys()].sort().map((d) => {
+      const x = byDate.get(d);
+      const payers = x.paying_users_commerce;
+      const arppu = payers > 0 ? Math.round((x.gross_revenue_commerce / payers) * 100) / 100 : null;
+      const completed = x.orders_completed;
+      const avgCartPaid =
+        completed > 0 ? Math.round((x.revenue_order_completed / completed) * 100) / 100 : null;
+      return {
+        date: d,
+        attributed_installs: x.attributed_installs,
+        template_views: x.template_views,
+        orders_created: x.orders_created,
+        orders_completed: x.orders_completed,
+        revenue_order_completed: Math.round(x.revenue_order_completed * 100) / 100,
+        gross_revenue_commerce: Math.round(x.gross_revenue_commerce * 100) / 100,
+        paying_users_commerce: payers,
+        arppu_commerce: arppu,
+        avg_cart_value_paid: avgCartPaid
+      };
+    });
+
+    return {
+      timezone: tz,
+      start_date: startCal,
+      end_date: endCal,
+      series: sorted,
+      definitions: {
+        attributed_installs:
+          'Count of server-accepted attributed_install events (mobile cold start → /attribution/install). Not total Play Store installs.',
+        template_views: 'template_view events (object_type=template) counted in the client timezone per day.',
+        orders_created: 'order_created events (object_type=order), client calendar day.',
+        orders_completed: 'order_completed events (object_type=order), client calendar day.',
+        arppu_commerce:
+          'Gross revenue from commerce purchase events / distinct user_ids with revenue>0 that day.',
+        avg_cart_value_paid:
+          'Sum of amount on order_completed / count(order_completed) for that day (same filters as orders).'
+      }
+    };
   }
 }
 

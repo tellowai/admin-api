@@ -1180,6 +1180,49 @@ error_category,
     }
     return out;
   }
+
+  /**
+   * Fused growth overview: one pass over `analytics_events_raw` for installs, template views,
+   * commerce purchases, and order lifecycle in the UTC window. PREWHERE uses timestamp plus
+   * a disjunction of (event_name, object_type) pairs — aligned with ORDER BY (event_name, object_type, timestamp).
+   * Order-only filters (gateway, product_classification, app_version) are applied inside countIf/sumIf
+   * so non-order rows are not dropped; app_version is also repeated on the order PREWHERE branch.
+   */
+  static async queryGrowthOverviewFused(rangeStartUtc, rangeEndUtc, clientTz, fragments) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(rangeStartUtc);
+    const endEsc = esc(rangeEndUtc);
+    const tzRaw = String(clientTz || 'UTC').trim() || 'UTC';
+    const tzEsc = tzRaw.replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const { orderPreAppFragment = '', orderAggFragment = '' } = fragments || {};
+
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        countIf(event_name = 'template_view' AND object_type = 'template') AS views,
+        countIf(event_name = 'attributed_install' AND object_type = 'attribution') AS installs,
+        sumIf(revenue, event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0) AS gross_revenue,
+        countIf(event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0) AS purchase_rows,
+        uniqIf(user_id, event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0 AND user_id IS NOT NULL AND trimBoth(user_id) != '') AS paying_users,
+        countIf(event_name = 'order_created' AND object_type = 'order'${orderAggFragment}) AS orders_created,
+        countIf(event_name = 'order_completed' AND object_type = 'order'${orderAggFragment}) AS orders_completed,
+        sumIf(toFloat64OrZero(properties['amount']), event_name = 'order_completed' AND object_type = 'order'${orderAggFragment}) AS revenue_completed
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${startEsc}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')
+        AND (
+          (event_name = 'template_view' AND object_type = 'template')
+          OR (event_name = 'attributed_install' AND object_type = 'attribution')
+          OR (event_name = 'purchase' AND object_type = 'commerce')
+          OR (event_name IN ('order_created', 'order_completed') AND object_type = 'order'${orderPreAppFragment})
+        )
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;

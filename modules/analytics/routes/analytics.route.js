@@ -436,4 +436,12 @@ module.exports = function(app) {
     AnalyticsCtrl.getOrdersFunnelClickhouseSummary
   );
 
+  app.route(
+    versionConfig.routePrefix + '/analytics/growth-metrics/overview'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateGrowthMetricsOverviewQuery,
+    AnalyticsCtrl.getGrowthMetricsOverview
+  );
+
 };

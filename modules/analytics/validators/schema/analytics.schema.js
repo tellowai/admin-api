@@ -184,8 +184,12 @@ const ordersFunnelClickhouseSchema = Joi.object().keys({
   app_version: Joi.string().max(64).optional().allow('')
 });
 
+/** Growth overview: same date + tz semantics as orders-funnel ClickHouse routes. */
+const growthMetricsOverviewSchema = ordersFunnelClickhouseSchema;
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.ordersFunnelClickhouseSchema = ordersFunnelClickhouseSchema;
+exports.growthMetricsOverviewSchema = growthMetricsOverviewSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
 exports.templateTopByGenerationSchema = templateTopByGenerationSchema;
