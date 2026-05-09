@@ -239,39 +239,135 @@ exports.countDistinctUsersAdmin = async function (filters) {
 };
 
 /**
- * Per calendar-day counts for **only** the given local dates (YYYY-MM-DD in `tz`).
- * One indexed range query per day: no joins, no full-table row fanout into Node.
- *
- * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
- * @param {string} tz IANA (must match admin UI day grouping)
- * @param {string[]} dayKeys YYYY-MM-DD, typically from the current page’s `created_at` values
- * @returns {Promise<{ distinct_calendar_days: number, orders_by_calendar_day: Array<{ day_key: string, order_count: number, unique_users: number }> }>}
+ * Max calendar span (min→max local day) for which we use **one** `orders` range scan and bucket in Node.
+ * Wider spans use per-day aggregate queries only (still no joins).
  */
-exports.summarizeAdminOrdersForCalendarDays = async function (filters, tz, dayKeys) {
-  const sorted = [...new Set(dayKeys || [])]
-    .filter((k) => typeof k === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(k.trim()))
-    .sort((a, b) => b.localeCompare(a));
-  if (sorted.length === 0) {
-    return { distinct_calendar_days: 0, orders_by_calendar_day: [] };
-  }
-  const resolved = await resolveAdminFilterPayload(filters);
-  const { whereSql, params } = buildAdminOrdersWhere(resolved);
+const ADMIN_ORDER_DAY_SUMMARY_SINGLE_SCAN_MAX_SPAN_DAYS = 14;
 
-  const tasks = sorted.map(async (dayKey) => {
+/**
+ * Bucket orders into calendar days (same TZ semantics as the admin list).
+ * @param {Array<{ ca: unknown, uid: unknown, cur: unknown, amt: unknown }>} rows
+ * @param {string} tz
+ * @param {Set<string>} wantedDayKeys
+ */
+function aggregateAdminOrderDayRows(rows, tz, wantedDayKeys) {
+  /** @type {Map<string, { count: number, users: Set<string>, rev: Map<string, number> }>} */
+  const byDay = new Map();
+  for (const row of rows || []) {
+    const dk = calendarDayKeyFromCreatedAt(row.ca, tz);
+    if (!dk || !wantedDayKeys.has(dk)) continue;
+    let agg = byDay.get(dk);
+    if (!agg) {
+      agg = { count: 0, users: new Set(), rev: new Map() };
+      byDay.set(dk, agg);
+    }
+    agg.count += 1;
+    const uid = row.uid;
+    if (uid != null && uid !== '') agg.users.add(String(uid));
+    const curRaw = row.cur != null ? String(row.cur).trim() : '';
+    const curKey = curRaw === '' ? '__NONE__' : curRaw;
+    const amt = Number(row.amt) || 0;
+    agg.rev.set(curKey, (agg.rev.get(curKey) || 0) + amt);
+  }
+  return byDay;
+}
+
+function buildOrdersByCalendarDayPayload(sortedAsc, byDay) {
+  const descending = [...sortedAsc].reverse();
+  return descending.map((dayKey) => {
+    const agg = byDay.get(dayKey);
+    if (!agg) {
+      return {
+        day_key: dayKey,
+        order_count: 0,
+        unique_users: 0,
+        revenue_by_currency: []
+      };
+    }
+    const revenue_by_currency = [...agg.rev.entries()]
+      .map(([currency_key, amount]) => ({
+        currency: currency_key === '__NONE__' ? '' : currency_key,
+        amount
+      }))
+      .filter((x) => x.amount !== 0)
+      .sort((a, b) => b.amount - a.amount);
+    return {
+      day_key: dayKey,
+      order_count: agg.count,
+      unique_users: agg.users.size,
+      revenue_by_currency
+    };
+  });
+}
+
+/** One range scan + in-memory buckets (no joins). */
+async function summarizeAdminOrdersCalendarDaysSingleScan(whereSql, params, tz, sortedAsc) {
+  const firstDay = sortedAsc[0];
+  const lastDay = sortedAsc[sortedAsc.length - 1];
+  const rangeStartUtc = moment.tz(`${firstDay} 00:00:00.000`, tz).utc();
+  const rangeEndUtc = moment.tz(`${lastDay} 00:00:00.000`, tz).utc().add(1, 'day');
+  const bind = [...params, rangeStartUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), rangeEndUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
+
+  const q = `
+    SELECT
+      o.created_at AS ca,
+      o.user_id AS uid,
+      COALESCE(NULLIF(TRIM(o.currency), ''), '') AS cur,
+      o.amount_paid AS amt
+    FROM orders o
+    WHERE ${whereSql} AND o.created_at >= ? AND o.created_at < ?
+  `;
+  const rows = await MysqlQueryRunner.runQueryInSlave(q, bind);
+  const wanted = new Set(sortedAsc);
+  const byDay = aggregateAdminOrderDayRows(rows, tz, wanted);
+  const orders_by_calendar_day = buildOrdersByCalendarDayPayload(sortedAsc, byDay);
+  return {
+    distinct_calendar_days: orders_by_calendar_day.length,
+    orders_by_calendar_day
+  };
+}
+
+/** Parallel per-day aggregates only (indexed range per day, no joins). Used when calendar span is large. */
+async function summarizeAdminOrdersCalendarDaysPerDayAggregates(whereSql, params, tz, sortedAsc) {
+  const sortedDesc = [...sortedAsc].reverse();
+  const tasks = sortedDesc.map(async (dayKey) => {
     const startUtc = moment.tz(`${dayKey} 00:00:00.000`, tz).utc();
     const endUtc = startUtc.clone().add(1, 'day');
-    const q = `
+    const bind = [...params, startUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), endUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
+
+    const qCount = `
       SELECT COUNT(*) AS order_count, COUNT(DISTINCT o.user_id) AS unique_users
       FROM orders o
       WHERE ${whereSql} AND o.created_at >= ? AND o.created_at < ?
     `;
-    const bind = [...params, startUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), endUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
-    const rows = await MysqlQueryRunner.runQueryInSlave(q, bind);
-    const r = rows && rows[0];
+    const qRev = `
+      SELECT
+        COALESCE(NULLIF(TRIM(o.currency), ''), '__NONE__') AS currency_key,
+        COALESCE(SUM(o.amount_paid), 0) AS amount
+      FROM orders o
+      WHERE ${whereSql} AND o.created_at >= ? AND o.created_at < ?
+      GROUP BY COALESCE(NULLIF(TRIM(o.currency), ''), '__NONE__')
+    `;
+
+    const [countRows, revRows] = await Promise.all([
+      MysqlQueryRunner.runQueryInSlave(qCount, bind),
+      MysqlQueryRunner.runQueryInSlave(qRev, bind)
+    ]);
+
+    const r = countRows && countRows[0];
+    const revenue_by_currency = (revRows || [])
+      .map((row) => ({
+        currency: row.currency_key === '__NONE__' ? '' : String(row.currency_key || '').trim(),
+        amount: Number(row.amount) || 0
+      }))
+      .filter((x) => x.amount !== 0)
+      .sort((a, b) => b.amount - a.amount);
+
     return {
       day_key: dayKey,
       order_count: Number(r?.order_count) || 0,
-      unique_users: Number(r?.unique_users) || 0
+      unique_users: Number(r?.unique_users) || 0,
+      revenue_by_currency
     };
   });
 
@@ -280,6 +376,37 @@ exports.summarizeAdminOrdersForCalendarDays = async function (filters, tz, dayKe
     distinct_calendar_days: orders_by_calendar_day.length,
     orders_by_calendar_day
   };
+}
+
+/**
+ * Per calendar-day counts for **only** the given local dates (YYYY-MM-DD in `tz`).
+ * Uses **one** indexed `orders` scan when the min/max calendar span is small; otherwise parallel
+ * **per-day aggregate** queries (no joins, no subqueries).
+ *
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @param {string} tz IANA (must match admin UI day grouping)
+ * @param {string[]} dayKeys YYYY-MM-DD, typically from the current page’s `created_at` values
+ * @returns {Promise<{ distinct_calendar_days: number, orders_by_calendar_day: Array<{ day_key: string, order_count: number, unique_users: number, revenue_by_currency: Array<{ currency: string, amount: number }> }> }>}
+ */
+exports.summarizeAdminOrdersForCalendarDays = async function (filters, tz, dayKeys) {
+  const sortedAsc = [...new Set(dayKeys || [])]
+    .filter((k) => typeof k === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(k.trim()))
+    .sort((a, b) => a.localeCompare(b));
+  if (sortedAsc.length === 0) {
+    return { distinct_calendar_days: 0, orders_by_calendar_day: [] };
+  }
+
+  const resolved = await resolveAdminFilterPayload(filters);
+  const { whereSql, params } = buildAdminOrdersWhere(resolved);
+
+  const firstDay = sortedAsc[0];
+  const lastDay = sortedAsc[sortedAsc.length - 1];
+  const spanDays = moment.tz(lastDay, 'YYYY-MM-DD', tz).diff(moment.tz(firstDay, 'YYYY-MM-DD', tz), 'days');
+
+  if (spanDays <= ADMIN_ORDER_DAY_SUMMARY_SINGLE_SCAN_MAX_SPAN_DAYS) {
+    return summarizeAdminOrdersCalendarDaysSingleScan(whereSql, params, tz, sortedAsc);
+  }
+  return summarizeAdminOrdersCalendarDaysPerDayAggregates(whereSql, params, tz, sortedAsc);
 };
 
 /**
