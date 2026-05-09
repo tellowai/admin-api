@@ -1327,7 +1327,10 @@ class AnalyticsController {
         null,
         timezone
       );
-      const data = await AnalyticsService.getTechHealthVersionAdoption(utcFilters);
+      const data = await AnalyticsService.getTechHealthVersionAdoption({
+        ...utcFilters,
+        platform: queryParams.platform
+      });
       const converted = TimezoneService.convertFromUTC(data || [], timezone);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: converted });
     } catch (error) {

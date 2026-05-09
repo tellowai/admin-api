@@ -972,7 +972,10 @@ class AnalyticsService {
 
   static async getTechHealthVersionAdoption(filters) {
     const { start_date, end_date } = filters;
-    const whereConditions = this.buildTechHealthConditions(start_date, end_date, {});
+    const additionalFilters = {};
+    if (filters.platform === 'android') additionalFilters.os_name = 'android';
+    else if (filters.platform === 'ios') additionalFilters.os_name = 'ios';
+    const whereConditions = this.buildTechHealthConditions(start_date, end_date, additionalFilters);
     return AnalyticsModel.queryTechHealthVersionAdoption(whereConditions);
   }
 

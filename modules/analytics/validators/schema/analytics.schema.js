@@ -109,7 +109,9 @@ const techHealthAnalyticsSchema = Joi.object().keys({
   start_date: Joi.date().iso().required(),
   end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
   tz: Joi.string().optional(),
-  limit: Joi.number().integer().min(1).max(100).optional()
+  limit: Joi.number().integer().min(1).max(100).optional(),
+  /** Mobile sends X-Device-OS as `android` | `ios` (see device headers). */
+  platform: Joi.string().valid('android', 'ios').optional()
 });
 
 /**
