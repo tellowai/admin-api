@@ -274,10 +274,52 @@ exports.listAdminOrders = async function (req, res) {
 
     const preparedFilters = await OrdersModel.prepareAdminOrdersFilters(filterPayload);
 
-    const [total, rows] = await Promise.all([
+    const tzRaw = req.query.tz != null ? String(req.query.tz).trim() : '';
+    const summaryTz =
+      tzRaw && TimezoneService.isValidTimezone(tzRaw)
+        ? tzRaw
+        : TimezoneService.getDefaultTimezone();
+
+    const [total, rows, distinctUsersResult] = await Promise.all([
       OrdersModel.countOrdersAdmin(preparedFilters),
-      OrdersModel.listOrdersAdmin({ ...preparedFilters, limit, offset })
+      OrdersModel.listOrdersAdmin({ ...preparedFilters, limit, offset }),
+      page === 1 ? OrdersModel.countDistinctUsersAdmin(preparedFilters) : Promise.resolve(null)
     ]);
+
+    /** Local calendar days represented on this page (usually 1–5); stats run only for these UTC day windows. */
+    const dayKeySet = new Set();
+    for (const r of rows || []) {
+      const k = OrdersModel.calendarDayKeyFromCreatedAt(r.created_at, summaryTz);
+      if (k) dayKeySet.add(k);
+    }
+    const dayKeys = [...dayKeySet].sort((a, b) => b.localeCompare(a));
+
+    let summary;
+    if (dayKeys.length > 0) {
+      const dayAgg = await OrdersModel.summarizeAdminOrdersForCalendarDays(
+        preparedFilters,
+        summaryTz,
+        dayKeys
+      );
+      if (page === 1) {
+        summary = {
+          unique_users: distinctUsersResult,
+          distinct_calendar_days: dayAgg.distinct_calendar_days,
+          orders_by_calendar_day: dayAgg.orders_by_calendar_day
+        };
+      } else {
+        summary = {
+          orders_by_calendar_day: dayAgg.orders_by_calendar_day,
+          distinct_calendar_days: dayAgg.distinct_calendar_days
+        };
+      }
+    } else if (page === 1) {
+      summary = {
+        unique_users: distinctUsersResult,
+        distinct_calendar_days: 0,
+        orders_by_calendar_day: []
+      };
+    }
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
     const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
@@ -287,14 +329,19 @@ exports.listAdminOrders = async function (req, res) {
       return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
     });
 
+    const payload = {
+      orders,
+      page,
+      limit,
+      total,
+      has_more: offset + orders.length < total
+    };
+    if (summary) {
+      payload.summary = summary;
+    }
+
     return res.status(200).json({
-      data: {
-        orders,
-        page,
-        limit,
-        total,
-        has_more: offset + orders.length < total
-      }
+      data: payload
     });
   } catch (err) {
     console.error('listAdminOrders error:', err);

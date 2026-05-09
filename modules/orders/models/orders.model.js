@@ -6,6 +6,7 @@
  */
 
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const moment = require('moment-timezone');
 
 /** Column ref for filters; values come from X-Device-OS at order creation */
 const CLIENT_PLATFORM_COL = 'o.client_platform';
@@ -202,6 +203,83 @@ exports.countOrdersAdmin = async function (filters) {
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   const n = rows && rows[0] ? Number(rows[0].total) : 0;
   return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Calendar day in `tz` for one UTC order timestamp (matches admin UI Intl local-day keys).
+ * Implemented in Node so MySQL does not rely on time_zone tables for CONVERT_TZ.
+ * @param {string|Date} tsVal
+ * @param {string} tz IANA
+ */
+function calendarDayKeyFromCreatedAt(tsVal, tz) {
+  if (tsVal == null) return null;
+  const m = tsVal instanceof Date ? moment.utc(tsVal) : moment.utc(String(tsVal).trim());
+  if (!m.isValid()) return null;
+  return m.tz(tz).format('YYYY-MM-DD');
+}
+
+exports.calendarDayKeyFromCreatedAt = calendarDayKeyFromCreatedAt;
+
+/**
+ * Distinct users matching admin list filters (single aggregate, no joins).
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @returns {Promise<number>}
+ */
+exports.countDistinctUsersAdmin = async function (filters) {
+  const resolved = await resolveAdminFilterPayload(filters);
+  const { whereSql, params } = buildAdminOrdersWhere(resolved);
+  const query = `
+    SELECT COUNT(DISTINCT o.user_id) AS n
+    FROM orders o
+    WHERE ${whereSql}
+  `;
+  const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
+  const n = rows && rows[0] && rows[0].n != null ? Number(rows[0].n) : 0;
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Per calendar-day counts for **only** the given local dates (YYYY-MM-DD in `tz`).
+ * One indexed range query per day: no joins, no full-table row fanout into Node.
+ *
+ * @param {{ status?: string, productType?: string, search?: string, client_platform?: string, payment_gateway?: string, createdAtFrom?: string, createdAtTo?: string, orderIdFrom?: number, orderIdTo?: number }} filters
+ * @param {string} tz IANA (must match admin UI day grouping)
+ * @param {string[]} dayKeys YYYY-MM-DD, typically from the current page’s `created_at` values
+ * @returns {Promise<{ distinct_calendar_days: number, orders_by_calendar_day: Array<{ day_key: string, order_count: number, unique_users: number }> }>}
+ */
+exports.summarizeAdminOrdersForCalendarDays = async function (filters, tz, dayKeys) {
+  const sorted = [...new Set(dayKeys || [])]
+    .filter((k) => typeof k === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(k.trim()))
+    .sort((a, b) => b.localeCompare(a));
+  if (sorted.length === 0) {
+    return { distinct_calendar_days: 0, orders_by_calendar_day: [] };
+  }
+  const resolved = await resolveAdminFilterPayload(filters);
+  const { whereSql, params } = buildAdminOrdersWhere(resolved);
+
+  const tasks = sorted.map(async (dayKey) => {
+    const startUtc = moment.tz(`${dayKey} 00:00:00.000`, tz).utc();
+    const endUtc = startUtc.clone().add(1, 'day');
+    const q = `
+      SELECT COUNT(*) AS order_count, COUNT(DISTINCT o.user_id) AS unique_users
+      FROM orders o
+      WHERE ${whereSql} AND o.created_at >= ? AND o.created_at < ?
+    `;
+    const bind = [...params, startUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), endUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, bind);
+    const r = rows && rows[0];
+    return {
+      day_key: dayKey,
+      order_count: Number(r?.order_count) || 0,
+      unique_users: Number(r?.unique_users) || 0
+    };
+  });
+
+  const orders_by_calendar_day = await Promise.all(tasks);
+  return {
+    distinct_calendar_days: orders_by_calendar_day.length,
+    orders_by_calendar_day
+  };
 };
 
 /**
