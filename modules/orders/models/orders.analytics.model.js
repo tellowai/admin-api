@@ -143,7 +143,14 @@ function calendarDayInTzFromUtcWallTime(tsVal, tz) {
 }
 
 /**
- * Daily buckets: filter in SQL (UTC range), aggregate by calendar day in `tz` in Node.
+ * Daily buckets for orders analytics.
+ *
+ * **created** — all orders whose `created_at` falls in the UTC window (starters in period).
+ * **completed** — orders with `status = 'completed'` whose **`created_at`** falls in the window
+ *   (cohort: successfully completed among starters — comparable to “created”, not completion-throughput).
+ * **failed** — orders with `status = 'failed'` whose **`created_at`** falls in the window
+ *   (same cohort so rates vs created are meaningful).
+ *
  * @param {string} tz
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
@@ -157,11 +164,11 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind
     dateFormatCol = "DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s')";
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
   } else if (kind === 'completed') {
-    dateFormatCol = "DATE_FORMAT(o.completed_at, '%Y-%m-%d %H:%i:%s')";
-    whereExtra = `o.status = 'completed' AND o.completed_at IS NOT NULL AND o.completed_at >= ? AND o.completed_at <= ?`;
+    dateFormatCol = "DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s')";
+    whereExtra = `o.status = 'completed' AND o.created_at >= ? AND o.created_at <= ?`;
   } else {
-    dateFormatCol = "DATE_FORMAT(o.failed_at, '%Y-%m-%d %H:%i:%s')";
-    whereExtra = `o.status = 'failed' AND o.failed_at IS NOT NULL AND o.failed_at >= ? AND o.failed_at <= ?`;
+    dateFormatCol = "DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s')";
+    whereExtra = `o.status = 'failed' AND o.created_at >= ? AND o.created_at <= ?`;
   }
 
   const query = `
@@ -190,19 +197,16 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind
 }
 
 /**
- * @param {string} rangeStartUtc
- * @param {string} rangeEndUtc
- * @param {{ sql: string, params: any[] }} filterPart
- * @param {'created'|'completed'|'failed'} kind
+ * Period totals for orders analytics (same cohort semantics as {@link queryDailyByKind}).
  */
 async function queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, kind) {
   let whereExtra;
   if (kind === 'created') {
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
   } else if (kind === 'completed') {
-    whereExtra = `o.status = 'completed' AND o.completed_at IS NOT NULL AND o.completed_at >= ? AND o.completed_at <= ?`;
+    whereExtra = `o.status = 'completed' AND o.created_at >= ? AND o.created_at <= ?`;
   } else {
-    whereExtra = `o.status = 'failed' AND o.failed_at IS NOT NULL AND o.failed_at >= ? AND o.failed_at <= ?`;
+    whereExtra = `o.status = 'failed' AND o.created_at >= ? AND o.created_at <= ?`;
   }
 
   const query = `
@@ -247,7 +251,7 @@ exports.getOrdersStatusDaily = async function (opts) {
 };
 
 /**
- * Summary counts for metric cards (same date semantics and product filter as daily series).
+ * Summary counts for metric cards (cohort: `created_at` in window; completed/failed are subsets of starters).
  * @param {Object} opts
  * @param {string} opts.startCal
  * @param {string} opts.endCal
