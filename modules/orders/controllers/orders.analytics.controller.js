@@ -121,3 +121,32 @@ exports.getOrdersVolumeSummary = async function (req, res) {
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load order volume summary' });
   }
 };
+
+/** GET /admin/orders/analytics/subscription-purchases-daily — completed subscription orders per calendar day in tz. */
+exports.getSubscriptionPurchasesDaily = async function (req, res) {
+  try {
+    const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date);
+    const endCal = toCalendarDate(q.end_date);
+    const paymentGateway =
+      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
+
+    const data = await OrdersAnalyticsModel.getSubscriptionPurchasesDaily({
+      startCal,
+      endCal,
+      tz,
+      paymentGateway: paymentGateway || undefined
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({ data });
+  } catch (err) {
+    console.error('getSubscriptionPurchasesDaily error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load subscription purchase analytics' });
+  }
+};

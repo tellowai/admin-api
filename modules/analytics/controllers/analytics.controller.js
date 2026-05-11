@@ -372,6 +372,36 @@ class AnalyticsController {
     }
   }
 
+  /** Templates & performance: active cohort + hub aggregates for the metric window (paginated). */
+  static async getTemplatePerformance(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+      const result = await AnalyticsService.getTemplatePerformanceTable({
+        ...utcFilters,
+        cohort: queryParams.cohort,
+        page: queryParams.page,
+        limit: queryParams.limit,
+        sort: queryParams.sort || 'generations'
+      });
+      return res.status(HTTP_STATUS_CODES.OK).json(result);
+    } catch (error) {
+      logger.error('Error fetching template performance analytics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
   static async getCharacterAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;

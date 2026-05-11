@@ -330,3 +330,26 @@ exports.getOrdersVolumeSummary = async function (opts) {
     unique_users: Number(row.unique_users) || 0
   };
 };
+
+/**
+ * Day-wise count of **completed** orders for the subscription product bucket only
+ * (credits + monthly/yearly — same definition as {@link getPpIdsForProductFilter} `subscription`).
+ *
+ * @param {Object} opts
+ * @param {string} opts.startCal
+ * @param {string} opts.endCal
+ * @param {string} opts.tz
+ * @param {string} [opts.paymentGateway]
+ * @returns {Promise<{ daily: { date: string, count: number }[] }>}
+ */
+exports.getSubscriptionPurchasesDaily = async function (opts) {
+  const { startCal, endCal, tz, paymentGateway } = opts;
+  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+
+  const ppIds = await getPpIdsForProductFilter('subscription');
+  const planPart = planFilterClause(ppIds);
+  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
+
+  const daily = await queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'completed');
+  return { daily };
+};

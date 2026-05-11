@@ -47,6 +47,13 @@ const templateTopByGenerationSchema = Joi.object().keys({
   limit: Joi.number().integer().min(1).max(100).optional()
 });
 
+const templatePerformanceAnalyticsSchema = templateAnalyticsSchema.keys({
+  cohort: Joi.string().valid('all_active', 'created_in_range').required(),
+  page: Joi.number().integer().min(1).optional(),
+  limit: Joi.number().integer().min(1).max(500).optional(),
+  sort: Joi.string().valid('generations', 'tries', 'views', 'downloads').optional()
+});
+
 const signupAnalyticsSchema = Joi.object().keys({
   start_date: Joi.date().iso().required(),
   end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
@@ -195,6 +202,7 @@ exports.growthMetricsOverviewSchema = growthMetricsOverviewSchema;
 exports.characterAnalyticsSchema = characterAnalyticsSchema;
 exports.templateAnalyticsSchema = templateAnalyticsSchema;
 exports.templateTopByGenerationSchema = templateTopByGenerationSchema;
+exports.templatePerformanceAnalyticsSchema = templatePerformanceAnalyticsSchema;
 exports.signupAnalyticsSchema = signupAnalyticsSchema;
 exports.loginAnalyticsSchema = loginAnalyticsSchema;
 exports.purchasesAnalyticsSchema = purchasesAnalyticsSchema;

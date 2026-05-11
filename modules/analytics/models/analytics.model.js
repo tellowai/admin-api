@@ -1006,6 +1006,31 @@ error_category,
   }
 
   /**
+   * Per-template aggregates for template_daily_stats in date window, filtered to template_ids (batch).
+   */
+  static async getTemplatePerformanceAggregatesBatch(whereConditions, templateIds) {
+    if (!templateIds || templateIds.length === 0) return [];
+    const safeIds = templateIds
+      .map((id) => `'${String(id).replace(/'/g, "''")}'`)
+      .join(', ');
+    const query = `
+      SELECT
+        template_id,
+        sum(views) AS views,
+        sum(tries) AS generations,
+        sum(downloads) AS downloads,
+        sum(successes) AS successes,
+        sum(failures) AS failures
+      FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
+      WHERE ${whereConditions.join(' AND ')}
+        AND template_id IN (${safeIds})
+      GROUP BY template_id
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
    * Completed orders with template attribution from analytics_events_raw.
    *
    * PREWHERE: event_name, object_type, timestamp — matches MergeTree ORDER BY.
@@ -1024,6 +1049,33 @@ error_category,
         AND object_type = 'order'
         AND ${ts}
       WHERE properties['template_id'] != ''
+      GROUP BY properties['template_id'], currency
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Same as getOrderCompletedStatsByTemplateIdRaw but scoped to template_ids (performance table merge).
+   */
+  static async getOrderCompletedStatsByTemplateIdsRaw(timestampConditions, templateIds) {
+    if (!templateIds || templateIds.length === 0) return [];
+    const ts = (timestampConditions || []).join(' AND ');
+    const safeIds = templateIds
+      .map((id) => `'${String(id).replace(/'/g, "''")}'`)
+      .join(', ');
+    const query = `
+      SELECT
+        properties['template_id'] AS template_id,
+        upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
+        count() AS purchases,
+        sum(toFloat64OrZero(properties['amount'])) AS revenue
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE event_name = 'order_completed'
+        AND object_type = 'order'
+        AND ${ts}
+      WHERE properties['template_id'] != ''
+        AND properties['template_id'] IN (${safeIds})
       GROUP BY properties['template_id'], currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
