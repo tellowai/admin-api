@@ -15,8 +15,9 @@ exports.createPack = async function(packData) {
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
-      language_code
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      language_code,
+      people_used_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   
   const values = [
@@ -35,7 +36,10 @@ exports.createPack = async function(packData) {
     packData.thumbnail_cf_r2_key || null,
     packData.thumbnail_cf_r2_url || null,
     JSON.stringify(packData.additional_data || {}),
-    packData.language_code || null
+    packData.language_code || null,
+    packData.people_used_count != null && Number.isFinite(Number(packData.people_used_count))
+      ? Math.max(0, Math.round(Number(packData.people_used_count)))
+      : null
   ];
 
   await mysqlQueryRunner.runQueryInMaster(query, values);
@@ -58,6 +62,7 @@ exports.getPack = async function(packId) {
       credits,
       alacarte_price,
       alacarte_original_price,
+      people_used_count,
       created_at,
       updated_at
     FROM packs
@@ -85,6 +90,7 @@ exports.listPacks = async function(limit = 10, offset = 0) {
       credits,
       alacarte_price,
       alacarte_original_price,
+      people_used_count,
       created_at,
       updated_at
     FROM packs

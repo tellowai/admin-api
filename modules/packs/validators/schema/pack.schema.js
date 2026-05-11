@@ -22,7 +22,8 @@ const createPackSchema = Joi.object().keys({
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).uri().allow(null),
   additional_data: Joi.object().allow(null),
-  language_code: Joi.string().max(10).allow(null).optional()
+  language_code: Joi.string().max(10).allow(null).optional(),
+  people_used_count: Joi.number().integer().min(0).max(9999999).allow(null).optional()
 });
 
 const updatePackSchema = Joi.object().keys({
@@ -37,7 +38,8 @@ const updatePackSchema = Joi.object().keys({
   language_code: Joi.string().max(10).allow(null).optional(),
   credits: Joi.number().integer().min(1).optional(),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
-  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional()
+  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
+  people_used_count: Joi.number().integer().min(0).max(9999999).allow(null).optional()
 });
 
 const addTemplatesSchema = Joi.object().keys({
