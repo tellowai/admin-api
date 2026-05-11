@@ -8,16 +8,30 @@ exports.createPack = async function(packData) {
     INSERT INTO packs (
       pack_id,
       pack_name,
+      description,
+      featured_badge_title,
+      featured_badge_icon,
+      featured_badge_color,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
       language_code
-    ) VALUES (?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   
   const values = [
     packId,
     packData.pack_name,
+    packData.description != null && String(packData.description).trim() !== '' ? String(packData.description).trim() : null,
+    packData.featured_badge_title != null && String(packData.featured_badge_title).trim() !== ''
+      ? String(packData.featured_badge_title).trim().slice(0, 160)
+      : null,
+    packData.featured_badge_icon != null && String(packData.featured_badge_icon).trim() !== ''
+      ? String(packData.featured_badge_icon).trim().slice(0, 128)
+      : null,
+    packData.featured_badge_color != null && String(packData.featured_badge_color).trim() !== ''
+      ? String(packData.featured_badge_color).trim().slice(0, 16)
+      : null,
     packData.thumbnail_cf_r2_key || null,
     packData.thumbnail_cf_r2_url || null,
     JSON.stringify(packData.additional_data || {}),
@@ -33,6 +47,10 @@ exports.getPack = async function(packId) {
     SELECT 
       pack_id,
       pack_name,
+      description,
+      featured_badge_title,
+      featured_badge_icon,
+      featured_badge_color,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
@@ -56,6 +74,10 @@ exports.listPacks = async function(limit = 10, offset = 0) {
     SELECT 
       pack_id,
       pack_name,
+      description,
+      featured_badge_title,
+      featured_badge_icon,
+      featured_badge_color,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
@@ -131,69 +153,47 @@ exports.getPackTemplates = async function(packId) {
 };
 
 /**
- * Paginated pack template rows (with optional name/code search).
+ * Paginated pack template membership rows only (no join).
  * @param {string} packId
- * @param {{ limit: number, offset: number, q?: string }} opts
+ * @param {number} limit
+ * @param {number} offset
  */
-exports.getPackTemplatesPaginated = async function(packId, opts) {
-  const limit = Number(opts.limit) || 20;
-  const offset = Number(opts.offset) || 0;
-  const q = opts.q != null && String(opts.q).trim() !== '' ? String(opts.q).trim() : null;
-
-  const params = [packId];
-  let searchClause = '';
-  if (q) {
-    const term = `%${q}%`;
-    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
-    params.push(term, term);
-  }
-  params.push(limit, offset);
-
+exports.getPackTemplatesPaginated = async function (packId, limit, offset) {
+  const lim = Number(limit) || 20;
+  const off = Number(offset) || 0;
   const query = `
     SELECT 
-      pt.pack_template_id,
-      pt.pack_id,
-      pt.template_id,
-      pt.sort_order,
-      pt.created_at
-    FROM pack_templates pt
-    INNER JOIN templates t
-      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
-      AND t.archived_at IS NULL
-    WHERE pt.pack_id = ?
-    AND pt.archived_at IS NULL
-    ${searchClause}
-    ORDER BY pt.sort_order ASC
+      pack_template_id,
+      pack_id,
+      template_id,
+      sort_order,
+      created_at
+    FROM pack_templates
+    WHERE pack_id = ?
+    AND archived_at IS NULL
+    ORDER BY sort_order ASC
     LIMIT ? OFFSET ?
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, params);
+  return await mysqlQueryRunner.runQueryInSlave(query, [packId, lim, off]);
 };
 
-/** Count pack templates matching optional name/code search (same filter as paginated list). */
-exports.countPackTemplatesMatching = async function(packId, qRaw) {
+/**
+ * Templates whose name or code matches search (single-table). Used with pack link stitching in controller.
+ */
+exports.listTemplateIdsMatchingNameOrCode = async function (qRaw) {
   const q = qRaw != null && String(qRaw).trim() !== '' ? String(qRaw).trim() : null;
-  const params = [packId];
-  let searchClause = '';
-  if (q) {
-    const term = `%${q}%`;
-    searchClause = ' AND (t.template_name LIKE ? OR t.template_code LIKE ?) ';
-    params.push(term, term);
+  if (!q) {
+    return [];
   }
-
+  const term = `%${q}%`;
   const query = `
-    SELECT COUNT(*) AS cnt
-    FROM pack_templates pt
-    INNER JOIN templates t
-      ON t.template_id COLLATE utf8mb4_unicode_ci = pt.template_id COLLATE utf8mb4_unicode_ci
-      AND t.archived_at IS NULL
-    WHERE pt.pack_id = ?
-    AND pt.archived_at IS NULL
-    ${searchClause}
+    SELECT template_id
+    FROM templates
+    WHERE archived_at IS NULL
+    AND (template_name LIKE ? OR template_code LIKE ?)
   `;
-
-  const [row] = await mysqlQueryRunner.runQueryInSlave(query, params);
-  return row && row.cnt != null ? Number(row.cnt) : 0;
+  return await mysqlQueryRunner.runQueryInSlave(query, [term, term]);
 };
 
 exports.getTemplatesByIds = async function(templateIds) {

@@ -7,8 +7,18 @@ const ALACARTE_INR_PRICE_TIERS = [
   19, 29, 49, 99, 149, 199, 249, 299, 349, 399, 449, 499, 549, 599, 649, 699, 749, 799, 849, 899, 949, 999
 ];
 
+const HEX_COLOR = Joi.string()
+  .max(16)
+  .allow(null, '')
+  .pattern(/^#([0-9A-Fa-f]{6})$/)
+  .messages({ 'string.pattern.base': 'Must be a hex color like #D4A574' });
+
 const createPackSchema = Joi.object().keys({
   pack_name: Joi.string().max(255).required(),
+  description: Joi.string().max(20000).allow(null, ''),
+  featured_badge_title: Joi.string().max(160).allow(null, ''),
+  featured_badge_icon: Joi.string().max(128).allow(null, ''),
+  featured_badge_color: HEX_COLOR,
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).uri().allow(null),
   additional_data: Joi.object().allow(null),
@@ -17,6 +27,10 @@ const createPackSchema = Joi.object().keys({
 
 const updatePackSchema = Joi.object().keys({
   pack_name: Joi.string().max(255),
+  description: Joi.string().max(20000).allow(null, ''),
+  featured_badge_title: Joi.string().max(160).allow(null, ''),
+  featured_badge_icon: Joi.string().max(128).allow(null, ''),
+  featured_badge_color: HEX_COLOR,
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).uri().allow(null),
   additional_data: Joi.object().allow(null),
