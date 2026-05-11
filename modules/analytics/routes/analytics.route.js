@@ -89,6 +89,14 @@ module.exports = function(app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/analytics/templates/performance'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateTemplatePerformanceQuery,
+    AnalyticsCtrl.getTemplatePerformance
+  );
+
+  app.route(
     versionConfig.routePrefix + '/analytics/templates/summary'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

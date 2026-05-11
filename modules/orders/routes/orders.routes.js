@@ -30,6 +30,14 @@ module.exports = function (app) {
       ordersAnalyticsController.getOrdersVolumeSummary
     );
 
+  app
+    .route('/admin/orders/analytics/subscription-purchases-daily')
+    .get(
+      AuthMiddleware.isAdminUser,
+      ordersAnalyticsValidator.validateOrdersAnalyticsQuery,
+      ordersAnalyticsController.getSubscriptionPurchasesDaily
+    );
+
   app.route('/admin/orders/export').get(AuthMiddleware.isAdminUser, ordersController.exportAdminOrdersCsv);
 
   app

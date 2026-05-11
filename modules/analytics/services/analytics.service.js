@@ -462,6 +462,158 @@ class AnalyticsService {
   }
 
   /**
+   * Templates performance table: merge MySQL cohort (all active or active + created in range) with
+   * ClickHouse template_daily_stats for the metric window. Sorted by generations (or sort key) DESC; paginated.
+   */
+  static async getTemplatePerformanceTable(filters) {
+    const {
+      start_date,
+      end_date,
+      start_time,
+      end_time,
+      cohort,
+      page = 1,
+      limit = 100,
+      sort = 'generations'
+    } = filters;
+
+    const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
+
+    let templateIds = [];
+    if (cohort === 'created_in_range') {
+      const startUtc = moment.utc(`${start_date} ${start_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
+      const endUtc = moment.utc(`${end_date} ${end_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
+      templateIds = await TemplateModel.listActiveTemplateIdsCreatedBetweenForAnalytics(startUtc, endUtc);
+    } else {
+      templateIds = await TemplateModel.listActiveTemplateIdsForAnalytics();
+    }
+
+    if (!templateIds.length) {
+      return {
+        data: [],
+        meta: {
+          total: 0,
+          page: Math.max(1, parseInt(page, 10) || 1),
+          limit: Math.min(500, Math.max(1, parseInt(limit, 10) || 100)),
+          cohort,
+          sort: 'generations'
+        }
+      };
+    }
+
+    const BATCH = 400;
+    const aggMap = new Map();
+    for (let i = 0; i < templateIds.length; i += BATCH) {
+      const batch = templateIds.slice(i, i + BATCH);
+      const rows = await AnalyticsModel.getTemplatePerformanceAggregatesBatch(whereConditions, batch);
+      for (const r of rows || []) {
+        if (!r.template_id) continue;
+        aggMap.set(r.template_id, {
+          views: Number(r.views) || 0,
+          generations: Number(r.generations) || 0,
+          downloads: Number(r.downloads) || 0,
+          successes: Number(r.successes) || 0,
+          failures: Number(r.failures) || 0
+        });
+      }
+    }
+
+    const merged = templateIds.map((tid) => {
+      const m = aggMap.get(tid) || {};
+      return {
+        template_id: tid,
+        views: m.views ?? 0,
+        generations: m.generations ?? 0,
+        downloads: m.downloads ?? 0,
+        successes: m.successes ?? 0,
+        failures: m.failures ?? 0
+      };
+    });
+
+    let sortKey = String(sort || 'generations').toLowerCase();
+    if (sortKey === 'tries') sortKey = 'generations';
+    if (!['generations', 'views', 'downloads'].includes(sortKey)) sortKey = 'generations';
+
+    merged.sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+
+    const safeLimit = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
+    const safePage = Math.max(1, parseInt(page, 10) || 1);
+    const offset = (safePage - 1) * safeLimit;
+    const total = merged.length;
+    const pageRows = merged.slice(offset, offset + safeLimit);
+
+    const ids = pageRows.map((r) => r.template_id);
+    const templates = ids.length ? await TemplateModel.getTemplatesByIdsForAnalytics(ids) : [];
+    const byId = {};
+    (templates || []).forEach((t) => {
+      byId[t.template_id] = t;
+    });
+
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const purchaseRows = ids.length
+      ? await AnalyticsModel.getOrderCompletedStatsByTemplateIdsRaw(tsRaw, ids)
+      : [];
+    const purchaseById = {};
+    (purchaseRows || []).forEach((r) => {
+      if (!r.template_id) return;
+      const currency = (r.currency && String(r.currency).trim().toUpperCase()) || 'INR';
+      const purchases = Number(r.purchases) || 0;
+      const revenue = Number(r.revenue) || 0;
+      if (!purchaseById[r.template_id]) purchaseById[r.template_id] = [];
+      purchaseById[r.template_id].push({ currency, purchases, revenue });
+    });
+
+    const data = pageRows.map((row) => {
+      const t = byId[row.template_id] || {};
+      const succ = row.successes || 0;
+      const fail = row.failures || 0;
+      const denom = succ + fail;
+      const success_rate = denom > 0 ? succ / denom : null;
+      const views = Number(row.views) || 0;
+      const breakdown = (purchaseById[row.template_id] || []).slice().sort((a, b) => {
+        if (b.purchases !== a.purchases) return b.purchases - a.purchases;
+        return b.revenue - a.revenue;
+      });
+      const totalPurchases = breakdown.reduce((acc, x) => acc + x.purchases, 0);
+      const primary = breakdown[0] || { currency: 'INR', purchases: 0, revenue: 0 };
+      const conversion_rate = views > 0 ? totalPurchases / views : null;
+      const revenue_per_view = views > 0 ? primary.revenue / views : null;
+      return {
+        template_id: row.template_id,
+        template_name: t.template_name ?? null,
+        template_code: t.template_code ?? null,
+        template_output_type: t.template_output_type ?? null,
+        created_at: t.created_at ?? null,
+        generations: row.generations,
+        views: row.views,
+        downloads: row.downloads,
+        successes: row.successes,
+        failures: row.failures,
+        success_rate,
+        alacarte_price: t.alacarte_price != null ? Number(t.alacarte_price) : null,
+        purchases: totalPurchases,
+        conversion_rate,
+        currency: primary.currency,
+        revenue: primary.revenue,
+        revenue_per_view,
+        is_multi_currency: breakdown.length > 1,
+        currency_breakdown: breakdown
+      };
+    });
+
+    return {
+      data,
+      meta: {
+        total,
+        page: safePage,
+        limit: safeLimit,
+        cohort,
+        sort: sortKey
+      }
+    };
+  }
+
+  /**
    * Per-template conversion: template_view (hub) vs order_completed with properties.template_id.
    *
    * Purchase/revenue rows come from raw events grouped by (template_id, currency)
