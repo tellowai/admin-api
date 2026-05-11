@@ -33,6 +33,7 @@ const {
   resolveWorkflowScenarioPublishErrors,
   VALID_WORKFLOW_TYPES: TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES
 } = require('../services/template.workflow.publish.validation');
+const ExploreSectionItemModel = require('../../explore-sections/models/explore-section-item.model');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -48,6 +49,11 @@ function computeAlacartePriceFromCredits(credits) {
   const rawInr = Math.floor((credits / 50) * 83.33);
   const tier = rawInr <= 49 ? 49 : (Math.floor(rawInr / 50) * 50) + 49;
   return Math.min(tier, 999);
+}
+
+/** Normalize DB/payload is_effects to boolean */
+function templateIsEffectsEnabled(value) {
+  return value === true || value === 1 || value === '1';
 }
 
 /**
@@ -3013,6 +3019,16 @@ exports.updateTemplate = async function (req, res) {
       });
     }
 
+    /** When is_effects flips, remove direct template rows from the wrong app_surface after save */
+    let surfaceToArchiveAfterIsEffectsChange = null;
+    if (templateData.is_effects !== undefined) {
+      const nextIsEffects = templateIsEffectsEnabled(templateData.is_effects);
+      const prevIsEffects = templateIsEffectsEnabled(existingTemplate.is_effects);
+      if (nextIsEffects !== prevIsEffects) {
+        surfaceToArchiveAfterIsEffectsChange = nextIsEffects ? 'explore' : 'effects';
+      }
+    }
+
     // Check if template_code is being updated and if it already exists for another template
     if (templateData.template_code && templateData.template_code !== existingTemplate.template_code) {
       const templateWithSameCode = await TemplateModel.getTemplateByCode(templateData.template_code);
@@ -3484,6 +3500,25 @@ exports.updateTemplate = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
       });
+    }
+
+    if (surfaceToArchiveAfterIsEffectsChange) {
+      try {
+        await ExploreSectionItemModel.archiveDirectTemplateItemsOnSurface(
+          templateId,
+          surfaceToArchiveAfterIsEffectsChange
+        );
+      } catch (syncErr) {
+        logger.error('Failed to archive explore section items after is_effects change', {
+          templateId,
+          surface: surfaceToArchiveAfterIsEffectsChange,
+          error: syncErr.message,
+          stack: syncErr.stack
+        });
+        return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
+          message: req.t('template:TEMPLATE_SECTION_SYNC_FAILED')
+        });
+      }
     }
 
     // Update Redis cache with fresh template data

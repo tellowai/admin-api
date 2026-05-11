@@ -109,6 +109,33 @@ exports.removeSectionItems = async function(sectionId, itemIds) {
 };
 
 /**
+ * Archive direct template section rows on Explore vs Effects surfaces (see explore_sections.app_surface).
+ * Used when a template's is_effects flag changes so it no longer appears on the wrong tab's sections.
+ *
+ * @param {string} templateId
+ * @param {'explore'|'effects'} appSurface - surface to remove placements from
+ * @returns {Promise<number>} affectedRows
+ */
+exports.archiveDirectTemplateItemsOnSurface = async function (templateId, appSurface) {
+  if (appSurface !== 'explore' && appSurface !== 'effects') {
+    throw new Error('archiveDirectTemplateItemsOnSurface: appSurface must be explore or effects');
+  }
+
+  const query = `
+    UPDATE explore_section_items esi
+    INNER JOIN explore_sections es ON es.section_id = esi.section_id AND es.archived_at IS NULL
+    SET esi.archived_at = NOW()
+    WHERE esi.resource_type = 'template'
+    AND esi.resource_id = ?
+    AND esi.archived_at IS NULL
+    AND es.app_surface = ?
+  `;
+
+  const result = await mysqlQueryRunner.runQueryInMaster(query, [templateId, appSurface]);
+  return result.affectedRows ?? 0;
+};
+
+/**
  * @param {string|number} collectionId
  * @param {{ is_effects?: boolean }} [options] - when true/false, join templates and limit by is_effects (Explore vs Effects parity)
  */
