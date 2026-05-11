@@ -4,6 +4,7 @@ const i18next = require('i18next');
 const config = require('../../../config/config');
 const AnalyticsService = require('../services/analytics.service');
 const TimezoneService = require('../services/timezone.service');
+const SubscriptionsAnalyticsModel = require('../models/subscriptions.analytics.model');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const AnalyticsErrorHandler = require('../middlewares/analytics.error.handler');
 const logger = require('../../../config/lib/logger');
@@ -801,7 +802,12 @@ class AnalyticsController {
       if (queryParams.currency) additionalFilters.currency = queryParams.currency;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const totalPurchases = await AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters);
+      const asOfUtcDatetime = `${utcFilters.end_date} ${utcFilters.end_time}`;
+
+      const [totalPurchases, activeSubscriptionsCount] = await Promise.all([
+        AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters),
+        SubscriptionsAnalyticsModel.countRecurringEntitledAt(asOfUtcDatetime)
+      ]);
 
       // Convert date range back to client timezone for response
       const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
@@ -814,6 +820,9 @@ class AnalyticsController {
         data: {
           purchases: {
             total_count: totalPurchases
+          },
+          active_subscriptions: {
+            total_count: activeSubscriptionsCount
           },
           date_range: convertedDateRange
         }
