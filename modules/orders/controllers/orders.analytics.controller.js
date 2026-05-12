@@ -70,9 +70,10 @@ function formatIsoDate(val) {
   return new Date(val).toISOString();
 }
 
-async function buildSubscriptionRowDtos(rawRows) {
+async function buildSubscriptionRowDtos(rawRows, options = {}) {
+  const { useMaster = false } = options;
   const ids = (rawRows || []).map((r) => r.provider_plan_id);
-  const planMap = await SubscriptionsAnalyticsModel.resolvePlanMetadataForProviderPlanIds(ids);
+  const planMap = await SubscriptionsAnalyticsModel.resolvePlanMetadataForProviderPlanIds(ids, { useMaster });
 
   return (rawRows || []).map((r) => {
     const skuKey = r.provider_plan_id != null ? String(r.provider_plan_id).trim() : '';
@@ -242,7 +243,7 @@ exports.getUserSubscriptionsTable = async function (req, res) {
     const q = req.validatedQuery;
     const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
     const tz = normalizeMysqlTimezone(tzRaw);
-    if (!TimezoneService.isValidTimezone(tzRaw)) {
+    if (!TimezoneService.isValidTimezone(tz)) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
@@ -267,9 +268,10 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       clientPlatform: clientPlatform || '',
       paymentPlanId,
       limit,
-      offset
+      offset,
+      useMaster: true
     });
-    const items = await buildSubscriptionRowDtos(rows);
+    const items = await buildSubscriptionRowDtos(rows, { useMaster: true });
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,

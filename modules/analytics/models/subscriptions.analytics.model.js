@@ -200,9 +200,13 @@ class SubscriptionsAnalyticsModel {
    * Resolve `payment_plans` metadata for subscription rows keyed by `provider_plan_id`
    * (numeric pp_id or store SKU via `payment_gateway_plans`).
    * @param {unknown[]} providerPlanIds
+   * @param {{ useMaster?: boolean }} [options] use primary DB for reads (admin / read-your-writes)
    * @returns {Promise<Map<string, { plan_name: string|null, billing_interval: string|null, plan_type: string|null }>>}
    */
-  static async resolvePlanMetadataForProviderPlanIds(providerPlanIds) {
+  static async resolvePlanMetadataForProviderPlanIds(providerPlanIds, options = {}) {
+    const useMaster = options.useMaster === true;
+    const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+
     const unique = [
       ...new Set(
         (providerPlanIds || [])
@@ -215,7 +219,7 @@ class SubscriptionsAnalyticsModel {
 
     const numericIds = unique.filter((id) => /^\d+$/.test(id)).map((id) => parseInt(id, 10));
     if (numericIds.length) {
-      const rows = await MysqlQueryRunner.runQueryInSlave(
+      const rows = await runQuery(
         'SELECT pp_id, plan_name, billing_interval, plan_type FROM payment_plans WHERE pp_id IN (?)',
         [numericIds]
       );
@@ -230,7 +234,7 @@ class SubscriptionsAnalyticsModel {
 
     const stringSkus = unique.filter((id) => !/^\d+$/.test(id));
     if (stringSkus.length) {
-      const rows = await MysqlQueryRunner.runQueryInSlave(
+      const rows = await runQuery(
         `SELECT pp.plan_name, pp.billing_interval, pp.plan_type,
                 pgp.pg_plan_id, pgp.pg_plan_id_ios, pgp.pg_plan_id_android
          FROM payment_gateway_plans pgp
@@ -273,10 +277,12 @@ class SubscriptionsAnalyticsModel {
    * @param {number|null} [opts.paymentPlanId] internal `payment_plans.pp_id` — matches numeric `provider_plan_id` or gateway SKU rows for that plan
    * @param {number} opts.limit
    * @param {number} opts.offset
+   * @param {boolean} [opts.useMaster] read from primary (avoids replica lag after admin writes / seeds)
    * @returns {Promise<{ rows: object[], total: number }>}
    */
   static async listUserSubscriptionsForAdminRange(opts) {
-    const { startCal, endCal, tz, clientPlatform = '', paymentPlanId = null, limit, offset } = opts;
+    const { startCal, endCal, tz, clientPlatform = '', paymentPlanId = null, limit, offset, useMaster = false } = opts;
+    const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
     const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
 
     const pf = clientPlatform != null ? String(clientPlatform).trim().toLowerCase() : '';
@@ -317,7 +323,6 @@ class SubscriptionsAnalyticsModel {
           NULLIF(TRIM(u.display_name), ''),
           NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
           NULLIF(TRIM(u.email), ''),
-          NULLIF(TRIM(u.username), ''),
           CAST(s.user_id AS CHAR)
         ) AS user_name,
         s.provider_plan_id,
@@ -371,7 +376,7 @@ class SubscriptionsAnalyticsModel {
       ${platformClause.sql}
     `;
 
-    const countRows = await MysqlQueryRunner.runQueryInSlave(countQuery, [...innerParams, ...platformClause.params]);
+    const countRows = await runQuery(countQuery, [...innerParams, ...platformClause.params]);
     const total = Number(countRows[0]?.cnt || 0) || 0;
 
     const listQuery = `
@@ -384,12 +389,7 @@ class SubscriptionsAnalyticsModel {
       LIMIT ? OFFSET ?
     `;
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(listQuery, [
-      ...innerParams,
-      ...platformClause.params,
-      limit,
-      offset
-    ]);
+    const rows = await runQuery(listQuery, [...innerParams, ...platformClause.params, limit, offset]);
 
     return { rows: rows || [], total };
   }
