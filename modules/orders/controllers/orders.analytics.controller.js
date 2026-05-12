@@ -70,19 +70,62 @@ function formatIsoDate(val) {
   return new Date(val).toISOString();
 }
 
-async function buildSubscriptionRowDtos(rawRows, options = {}) {
-  const { useMaster = false } = options;
-  const ids = (rawRows || []).map((r) => r.provider_plan_id);
-  const planMap = await SubscriptionsAnalyticsModel.resolvePlanMetadataForProviderPlanIds(ids, { useMaster });
+function parseSubscriptionAdditionalData(raw) {
+  if (raw == null || raw === '') return null;
+  if (Buffer.isBuffer(raw)) {
+    try {
+      return JSON.parse(raw.toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
+/**
+ * Admin table: Renewal vs initial vs upgrade vs one-time, from `subscriptions.additional_data`
+ * and `payment_type` (renewal rows set `previous_subscription_id` in subscription.service).
+ */
+function classifySubscriptionEventType(row) {
+  const data = parseSubscriptionAdditionalData(row.subscription_additional_data);
+  if (data && typeof data === 'object') {
+    const prev = data.previous_subscription_id;
+    if (prev != null && String(prev).trim() !== '') {
+      return 'Renewal';
+    }
+    const rc = data.renewal_count;
+    if (rc != null && Number(rc) > 0) {
+      return 'Renewal';
+    }
+    const notes = data.notes;
+    if (notes && typeof notes === 'object' && notes.type === 'upgrade') {
+      return 'Upgrade';
+    }
+  }
+
+  const pt = String(row.payment_type || '').toLowerCase();
+  if (pt === 'one_time' || pt === 'onetime') {
+    return 'One-time';
+  }
+
+  return 'Subscription initial';
+}
+
+function buildSubscriptionRowDtos(rawRows) {
   return (rawRows || []).map((r) => {
-    const skuKey = r.provider_plan_id != null ? String(r.provider_plan_id).trim() : '';
-    const planMeta = skuKey ? planMap.get(skuKey) || null : null;
     return {
       subscription_id: r.subscription_id,
       user_id: r.user_id,
       user_name: r.user_name,
-      plan_name: (planMeta && planMeta.plan_name) || (skuKey || null),
+      subscription_event_type: classifySubscriptionEventType(r),
       purchase_or_start_at: formatIsoDate(r.purchase_or_start_at),
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
       payment_platform: formatPlatformLabel(r.linked_client_platform),
@@ -208,7 +251,16 @@ exports.getOrdersVolumeSummary = async function (req, res) {
   }
 };
 
-/** GET /admin/orders/analytics/subscription-purchases-daily — completed subscription orders per calendar day in tz. */
+/**
+ * GET /admin/orders/analytics/subscription-purchases-daily
+ * Recurring subscription events per calendar day in tz, split into:
+ *   - `initial`  → first-time recurring subscription rows
+ *   - `renewal`  → rows tagged with previous_subscription_id / renewal_count > 0
+ *   - `count`    → initial + renewal (for back-compat with the single-bar chart)
+ *
+ * Sourced from `subscriptions` (not `orders`) so RC/Apple/Google renewals,
+ * which don't always create a fresh `orders` row, are included.
+ */
 exports.getSubscriptionPurchasesDaily = async function (req, res) {
   try {
     const q = req.validatedQuery;
@@ -220,14 +272,11 @@ exports.getSubscriptionPurchasesDaily = async function (req, res) {
 
     const startCal = toCalendarDate(q.start_date);
     const endCal = toCalendarDate(q.end_date);
-    const paymentGateway =
-      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
 
-    const data = await OrdersAnalyticsModel.getSubscriptionPurchasesDaily({
+    const data = await SubscriptionsAnalyticsModel.getSubscriptionEventsDaily({
       startCal,
       endCal,
-      tz,
-      paymentGateway: paymentGateway || undefined
+      tz
     });
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data });
@@ -271,7 +320,7 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       offset,
       useMaster: true
     });
-    const items = await buildSubscriptionRowDtos(rows, { useMaster: true });
+    const items = buildSubscriptionRowDtos(rows);
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,
