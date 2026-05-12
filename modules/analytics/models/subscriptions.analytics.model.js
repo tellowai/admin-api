@@ -22,29 +22,44 @@ const ALIVE_STATUSES = Object.freeze([
 /**
  * Recurring subscriptions entitled to access at a point in time (UTC),
  * aligned with api subscription.model recurringRowIsEntitled semantics.
+ *
+ * Counts are **one per user**: among recurring rows with
+ * `COALESCE(start_at, created_at) <= as_of`, only each user's latest row
+ * (by `created_at DESC`, `subscription_id DESC`) is considered, then the same
+ * status / period-end rules as before apply.
  */
 class SubscriptionsAnalyticsModel {
   /**
    * Recurring subscriptions whose entitlement window overlaps [rangeStartUtc, rangeEndUtc]
    * (UTC). Uses the same status / period-end rules as {@link countRecurringEntitledAt}, but
    * counts rows active for any instant in the range instead of only at range end.
+   * One row per user (latest recurring row as of range end).
    */
   static async countRecurringEntitledOverlappingRange(rangeStartUtcDatetime, rangeEndUtcDatetime) {
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
     const query = `
+      WITH ranked AS (
+        SELECT s.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.user_id
+            ORDER BY s.created_at DESC, s.subscription_id DESC
+          ) AS rn
+        FROM subscriptions s
+        WHERE s.payment_type = 'recurring'
+          AND COALESCE(s.start_at, s.created_at) <= ?
+      )
       SELECT COUNT(*) AS cnt
-      FROM subscriptions
-      WHERE payment_type = 'recurring'
-        AND COALESCE(start_at, created_at) <= ?
+      FROM ranked r
+      WHERE r.rn = 1
         AND (
-          COALESCE(current_period_end, renews_at, end_at) IS NULL
-          OR COALESCE(current_period_end, renews_at, end_at) > ?
+          COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
+          OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
         )
         AND (
-          status IN (${aliveCsv})
+          r.status IN (${aliveCsv})
           OR (
-            status = 'cancelled'
-            AND COALESCE(current_period_end, renews_at, end_at) IS NOT NULL
+            r.status = 'cancelled'
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
           )
         )
     `;
@@ -59,22 +74,31 @@ class SubscriptionsAnalyticsModel {
   static async countRecurringEntitledAt(asOfUtcDatetime) {
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
     const query = `
+      WITH ranked AS (
+        SELECT s.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.user_id
+            ORDER BY s.created_at DESC, s.subscription_id DESC
+          ) AS rn
+        FROM subscriptions s
+        WHERE s.payment_type = 'recurring'
+          AND COALESCE(s.start_at, s.created_at) <= ?
+      )
       SELECT COUNT(*) AS cnt
-      FROM subscriptions
-      WHERE payment_type = 'recurring'
-        AND COALESCE(start_at, created_at) <= ?
+      FROM ranked r
+      WHERE r.rn = 1
         AND (
           (
-            status IN (${aliveCsv})
+            r.status IN (${aliveCsv})
             AND (
-              COALESCE(current_period_end, renews_at, end_at) IS NULL
-              OR COALESCE(current_period_end, renews_at, end_at) > ?
+              COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
+              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
             )
           )
           OR (
-            status = 'cancelled'
-            AND COALESCE(current_period_end, renews_at, end_at) IS NOT NULL
-            AND COALESCE(current_period_end, renews_at, end_at) > ?
+            r.status = 'cancelled'
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
           )
         )
     `;
@@ -88,9 +112,8 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * For each calendar day in the supplied list, count recurring subscriptions
-   * that were entitled at that day's "as-of" UTC instant (typically end-of-day
-   * in the client timezone). Uses the same status / period-end rules as
+   * For each calendar day in the supplied list, count **users** whose latest
+   * recurring subscription (as of that instant) was entitled — same rules as
    * {@link countRecurringEntitledAt} but computes all snapshots in one query.
    *
    * @param {{ date: string, asOfUtc: string }[]} days
@@ -105,27 +128,44 @@ class SubscriptionsAnalyticsModel {
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
     const dayUnion = days.map(() => 'SELECT ? AS day_utc').join(' UNION ALL ');
 
-    // LEFT JOIN over a synthetic `days` relation so empty days come back as 0.
     const query = `
-      SELECT d.day_utc, COUNT(s.subscription_id) AS cnt
-      FROM (${dayUnion}) AS d
-      LEFT JOIN subscriptions s
-        ON s.payment_type = 'recurring'
-        AND COALESCE(s.start_at, s.created_at) <= d.day_utc
-        AND (
-          (
-            s.status IN (${aliveCsv})
-            AND (
-              COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
-              OR COALESCE(s.current_period_end, s.renews_at, s.end_at) > d.day_utc
+      WITH days AS (
+        ${dayUnion}
+      ),
+      ranked AS (
+        SELECT d.day_utc,
+          s.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY d.day_utc, s.user_id
+            ORDER BY s.created_at DESC, s.subscription_id DESC
+          ) AS rn
+        FROM days d
+        INNER JOIN subscriptions s
+          ON s.payment_type = 'recurring'
+          AND COALESCE(s.start_at, s.created_at) <= d.day_utc
+      ),
+      entitled_latest AS (
+        SELECT r.day_utc, r.subscription_id
+        FROM ranked r
+        WHERE r.rn = 1
+          AND (
+            (
+              r.status IN (${aliveCsv})
+              AND (
+                COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
+                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
+              )
+            )
+            OR (
+              r.status = 'cancelled'
+              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
+              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
             )
           )
-          OR (
-            s.status = 'cancelled'
-            AND COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NOT NULL
-            AND COALESCE(s.current_period_end, s.renews_at, s.end_at) > d.day_utc
-          )
-        )
+      )
+      SELECT d.day_utc, COUNT(e.subscription_id) AS cnt
+      FROM days d
+      LEFT JOIN entitled_latest e ON e.day_utc = d.day_utc
       GROUP BY d.day_utc
     `;
 

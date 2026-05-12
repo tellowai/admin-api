@@ -1778,9 +1778,10 @@ class AnalyticsController {
   }
 
   /**
-   * GET /analytics/subscriptions/active-daily — daily snapshot count of recurring
-   * subscriptions entitled at the END of each calendar day in the picked range
-   * (in the client timezone). One row per day, 0-filled for empty days.
+   * GET /analytics/subscriptions/active-daily — daily snapshot count of **users**
+   * whose latest recurring row (as of end-of-day) was entitled, at the END of
+   * each calendar day in the picked range (in the client timezone). One row per
+   * day, 0-filled for empty days.
    *
    * Same entitlement rules as `getPurchasesSummary`'s active-subscriptions count
    * (see {@link SubscriptionsAnalyticsModel.countRecurringEntitledAt}).
