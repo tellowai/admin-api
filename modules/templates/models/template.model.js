@@ -200,6 +200,7 @@ exports.getTemplatesByIdsForAnalytics = async function (templateIds) {
       alacarte_price,
       alacarte_original_price,
       credits,
+      created_at,
       thumb_frame_bucket,
       thumb_frame_asset_key,
       cf_r2_url
@@ -207,6 +208,38 @@ exports.getTemplatesByIdsForAnalytics = async function (templateIds) {
     WHERE template_id IN (${placeholders})
   `;
   return await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+};
+
+/**
+ * All non-archived templates with status = active (analytics performance table — cohort all_active).
+ */
+exports.listActiveTemplateIdsForAnalytics = async function () {
+  const query = `
+    SELECT template_id
+    FROM templates
+    WHERE archived_at IS NULL
+      AND status = 'active'
+    ORDER BY template_id ASC
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, []);
+  return (rows || []).map((r) => r.template_id).filter(Boolean);
+};
+
+/**
+ * Active templates whose created_at falls in [startUtc, endUtc] (inclusive), UTC MySQL DATETIME strings.
+ */
+exports.listActiveTemplateIdsCreatedBetweenForAnalytics = async function (startUtc, endUtc) {
+  const query = `
+    SELECT template_id
+    FROM templates
+    WHERE archived_at IS NULL
+      AND status = 'active'
+      AND created_at >= ?
+      AND created_at <= ?
+    ORDER BY template_id ASC
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [startUtc, endUtc]);
+  return (rows || []).map((r) => r.template_id).filter(Boolean);
 };
 
 exports.listArchivedTemplates = async function (pagination) {

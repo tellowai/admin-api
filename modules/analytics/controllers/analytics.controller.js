@@ -4,6 +4,7 @@ const i18next = require('i18next');
 const config = require('../../../config/config');
 const AnalyticsService = require('../services/analytics.service');
 const TimezoneService = require('../services/timezone.service');
+const SubscriptionsAnalyticsModel = require('../models/subscriptions.analytics.model');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const AnalyticsErrorHandler = require('../middlewares/analytics.error.handler');
 const logger = require('../../../config/lib/logger');
@@ -364,6 +365,36 @@ class AnalyticsController {
       return res.status(HTTP_STATUS_CODES.OK).json({ data });
     } catch (error) {
       logger.error('Error fetching template conversion metrics:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  /** Templates & performance: active cohort + hub aggregates for the metric window (paginated). */
+  static async getTemplatePerformance(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+      const result = await AnalyticsService.getTemplatePerformanceTable({
+        ...utcFilters,
+        cohort: queryParams.cohort,
+        page: queryParams.page,
+        limit: queryParams.limit,
+        sort: queryParams.sort || 'generations'
+      });
+      return res.status(HTTP_STATUS_CODES.OK).json(result);
+    } catch (error) {
+      logger.error('Error fetching template performance analytics:', {
         error: error.message,
         stack: error.stack,
         query: req.validatedQuery
@@ -771,7 +802,12 @@ class AnalyticsController {
       if (queryParams.currency) additionalFilters.currency = queryParams.currency;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const totalPurchases = await AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters);
+      const asOfUtcDatetime = `${utcFilters.end_date} ${utcFilters.end_time}`;
+
+      const [totalPurchases, activeSubscriptionsCount] = await Promise.all([
+        AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters),
+        SubscriptionsAnalyticsModel.countRecurringEntitledAt(asOfUtcDatetime)
+      ]);
 
       // Convert date range back to client timezone for response
       const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
@@ -784,6 +820,9 @@ class AnalyticsController {
         data: {
           purchases: {
             total_count: totalPurchases
+          },
+          active_subscriptions: {
+            total_count: activeSubscriptionsCount
           },
           date_range: convertedDateRange
         }
