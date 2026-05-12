@@ -153,7 +153,17 @@ module.exports = function(app) {
     AnalyticsValidator.validatePurchasesAnalyticsQuery,
     AnalyticsCtrl.getPurchasesSummary
   );
-  
+
+  // Daily snapshot of currently-entitled recurring subscriptions (one count per
+  // calendar day in the picked range, taken at end-of-day in the client tz).
+  app.route(
+    versionConfig.routePrefix + '/analytics/subscriptions/active-daily'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validatePurchasesAnalyticsQuery,
+    AnalyticsCtrl.getActiveSubscriptionsDaily
+  );
+
   // Revenue Analytics Routes
   app.route(
     versionConfig.routePrefix + '/analytics/revenue'
