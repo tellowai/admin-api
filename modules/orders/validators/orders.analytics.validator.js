@@ -31,6 +31,11 @@ const userSubscriptionsTableQuerySchema = Joi.object({
   tz: Joi.string().optional().allow(''),
   client_platform: Joi.string().valid('', 'ios', 'android', 'web').optional().allow(''),
   payment_plan_id: Joi.string().optional().allow('').pattern(/^\d*$/),
+  subscription_event_type: Joi.string()
+    .valid('', 'Renewal', 'Subscription initial', 'Upgrade', 'One-time')
+    .optional()
+    .allow(''),
+  subscription_status: Joi.string().trim().lowercase().max(64).optional().allow(''),
   page: Joi.number().integer().min(1).optional().default(1),
   limit: Joi.number().integer().min(1).max(100).optional().default(25)
 });
