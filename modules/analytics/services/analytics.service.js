@@ -462,7 +462,7 @@ class AnalyticsService {
   }
 
   /**
-   * Templates performance table: merge MySQL cohort (all active or active + created in range) with
+   * Templates performance table: merge MySQL cohort (`all_active` or `created_in_range`) with
    * ClickHouse template_daily_stats for the metric window. Sorted by generations (or sort key) DESC; paginated.
    */
   static async getTemplatePerformanceTable(filters) {
