@@ -342,8 +342,7 @@ class SubscriptionsAnalyticsModel {
   /**
    * Admin Purchases tab: subscriptions whose purchase/start instant falls in the UTC window
    * derived from [startCal, endCal] in `tz`, with optional filters and pagination.
-   * Rows are de-duplicated per `provider_subscription_id` (latest `start_at`/`created_at` wins) so
-   * renewal chains do not repeat the same user/subscription in the list.
+   * One row per `subscriptions` row in range (renewals appear as separate rows).
    *
    * @param {Object} opts
    * @param {string} opts.startCal YYYY-MM-DD
@@ -391,84 +390,57 @@ class SubscriptionsAnalyticsModel {
 
     const innerParams = [rangeStartUtc, rangeEndUtc, ...planClause.params];
 
-    // Dedupe per user: each user appears once with their latest subscription row in the window.
-    // Renewals (new row with same provider_subscription_id) and back-to-back upgrades all collapse
-    // to a single line aligned with the Active subscriptions snapshot semantics.
     const baseInner = `
       SELECT
-        ranked.subscription_id,
-        ranked.user_id,
-        ranked.user_name,
-        ranked.provider_plan_id,
-        ranked.subscription_provider,
-        ranked.payment_type,
-        ranked.status,
-        ranked.start_at,
-        ranked.created_at,
-        ranked.renews_at,
-        ranked.current_period_end,
-        ranked.end_at,
-        ranked.purchase_or_start_at,
-        ranked.linked_client_platform,
-        ranked.linked_order_gateway,
-        ranked.subscription_additional_data
-      FROM (
-        SELECT
-          s.subscription_id,
-          s.user_id,
-          COALESCE(
-            NULLIF(TRIM(u.display_name), ''),
-            NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
-            NULLIF(TRIM(u.email), ''),
-            CAST(s.user_id AS CHAR)
-          ) AS user_name,
-          s.provider_plan_id,
-          s.provider AS subscription_provider,
-          s.payment_type,
-          s.status,
-          s.start_at,
-          s.created_at,
-          s.renews_at,
-          s.current_period_end,
-          s.end_at,
-          COALESCE(s.start_at, s.created_at) AS purchase_or_start_at,
-          (
-            SELECT o.client_platform
-            FROM orders o
-            WHERE o.user_id = s.user_id
-              AND o.status = 'completed'
-              AND o.completed_at IS NOT NULL
-              AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-              AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-            ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
-              o.order_id DESC
-            LIMIT 1
-          ) AS linked_client_platform,
-          (
-            SELECT o.payment_gateway
-            FROM orders o
-            WHERE o.user_id = s.user_id
-              AND o.status = 'completed'
-              AND o.completed_at IS NOT NULL
-              AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-              AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-            ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
-              o.order_id DESC
-            LIMIT 1
-          ) AS linked_order_gateway,
-          s.additional_data AS subscription_additional_data,
-          ROW_NUMBER() OVER (
-            PARTITION BY s.user_id
-            ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
-          ) AS _dedupe_rn
-        FROM subscriptions s
-        INNER JOIN user u ON u.user_id = s.user_id
-        WHERE (u.DELETED_AT IS NULL)
-          AND COALESCE(s.start_at, s.created_at) >= ?
-          AND COALESCE(s.start_at, s.created_at) <= ?
-          ${planClause.sql}
-      ) ranked
-      WHERE ranked._dedupe_rn = 1
+        s.subscription_id,
+        s.user_id,
+        COALESCE(
+          NULLIF(TRIM(u.display_name), ''),
+          NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
+          NULLIF(TRIM(u.email), ''),
+          CAST(s.user_id AS CHAR)
+        ) AS user_name,
+        s.provider_plan_id,
+        s.provider AS subscription_provider,
+        s.payment_type,
+        s.status,
+        s.start_at,
+        s.created_at,
+        s.renews_at,
+        s.current_period_end,
+        s.end_at,
+        COALESCE(s.start_at, s.created_at) AS purchase_or_start_at,
+        (
+          SELECT o.client_platform
+          FROM orders o
+          WHERE o.user_id = s.user_id
+            AND o.status = 'completed'
+            AND o.completed_at IS NOT NULL
+            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            o.order_id DESC
+          LIMIT 1
+        ) AS linked_client_platform,
+        (
+          SELECT o.payment_gateway
+          FROM orders o
+          WHERE o.user_id = s.user_id
+            AND o.status = 'completed'
+            AND o.completed_at IS NOT NULL
+            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            o.order_id DESC
+          LIMIT 1
+        ) AS linked_order_gateway,
+        s.additional_data AS subscription_additional_data
+      FROM subscriptions s
+      INNER JOIN user u ON u.user_id = s.user_id
+      WHERE (u.DELETED_AT IS NULL)
+        AND COALESCE(s.start_at, s.created_at) >= ?
+        AND COALESCE(s.start_at, s.created_at) <= ?
+        ${planClause.sql}
     `;
 
     const countQuery = `
