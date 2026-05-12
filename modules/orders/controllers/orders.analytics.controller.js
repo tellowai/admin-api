@@ -310,12 +310,23 @@ exports.getUserSubscriptionsTable = async function (req, res) {
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 25));
     const offset = (page - 1) * limit;
 
+    const subscriptionEventType =
+      q.subscription_event_type != null && String(q.subscription_event_type).trim() !== ''
+        ? String(q.subscription_event_type).trim()
+        : '';
+    const subscriptionStatus =
+      q.subscription_status != null && String(q.subscription_status).trim() !== ''
+        ? String(q.subscription_status).trim().toLowerCase()
+        : '';
+
     const { rows, total } = await SubscriptionsAnalyticsModel.listUserSubscriptionsForAdminRange({
       startCal,
       endCal,
       tz,
       clientPlatform: clientPlatform || '',
       paymentPlanId,
+      subscriptionEventType,
+      subscriptionDisplayStatus: subscriptionStatus,
       limit,
       offset,
       useMaster: true

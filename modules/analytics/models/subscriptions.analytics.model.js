@@ -350,13 +350,26 @@ class SubscriptionsAnalyticsModel {
    * @param {string} opts.tz IANA
    * @param {string} [opts.clientPlatform] '' | 'ios' | 'android' | 'web'
    * @param {number|null} [opts.paymentPlanId] internal `payment_plans.pp_id` — matches numeric `provider_plan_id` or gateway SKU rows for that plan
+   * @param {string} [opts.subscriptionEventType] '' | Renewal | Subscription initial | Upgrade | One-time (matches admin DTO classification)
+   * @param {string} [opts.subscriptionDisplayStatus] lowercase display status (matches {@link orders.analytics.controller} display rules)
    * @param {number} opts.limit
    * @param {number} opts.offset
    * @param {boolean} [opts.useMaster] read from primary (avoids replica lag after admin writes / seeds)
    * @returns {Promise<{ rows: object[], total: number }>}
    */
   static async listUserSubscriptionsForAdminRange(opts) {
-    const { startCal, endCal, tz, clientPlatform = '', paymentPlanId = null, limit, offset, useMaster = false } = opts;
+    const {
+      startCal,
+      endCal,
+      tz,
+      clientPlatform = '',
+      paymentPlanId = null,
+      subscriptionEventType = '',
+      subscriptionDisplayStatus = '',
+      limit,
+      offset,
+      useMaster = false
+    } = opts;
     const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
     const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
 
@@ -365,7 +378,7 @@ class SubscriptionsAnalyticsModel {
     const platformClause =
       pf === ''
         ? { sql: '', params: [] }
-        : { sql: ' AND linked_client_platform = ? ', params: [pf] };
+        : { sql: ' AND t.linked_client_platform = ? ', params: [pf] };
 
     let planClause = { sql: '', params: [] };
     const ppId = paymentPlanId != null && Number.isFinite(Number(paymentPlanId)) ? Number(paymentPlanId) : null;
@@ -388,9 +401,16 @@ class SubscriptionsAnalyticsModel {
       };
     }
 
+    const rawEt = subscriptionEventType != null ? String(subscriptionEventType).trim() : '';
+    const et = ['Renewal', 'Subscription initial', 'Upgrade', 'One-time'].includes(rawEt) ? rawEt : '';
+    const eventClause = et ? { sql: ' AND t._event_type = ? ', params: [et] } : { sql: '', params: [] };
+
+    const rawSt = subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
+    const statusClause = rawSt ? { sql: ' AND t._display_status = ? ', params: [rawSt] } : { sql: '', params: [] };
+
     const innerParams = [rangeStartUtc, rangeEndUtc, ...planClause.params];
 
-    const baseInner = `
+    const baseRowsSelect = `
       SELECT
         s.subscription_id,
         s.user_id,
@@ -443,29 +463,75 @@ class SubscriptionsAnalyticsModel {
         ${planClause.sql}
     `;
 
+    const augmentedFrom = `
+      SELECT
+        inner_sub.*,
+        (
+          CASE
+            WHEN JSON_VALID(inner_sub.subscription_additional_data) AND (
+              (
+                JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.previous_subscription_id')) IS NOT NULL
+                AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.previous_subscription_id'))) <> ''
+                AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.previous_subscription_id')))) <> 'null'
+              )
+              OR IFNULL(
+                CAST(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.renewal_count'))), '') AS UNSIGNED),
+                0
+              ) > 0
+            ) THEN 'Renewal'
+            WHEN JSON_VALID(inner_sub.subscription_additional_data)
+              AND JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.notes.type')) = 'upgrade' THEN 'Upgrade'
+            WHEN LOWER(TRIM(COALESCE(inner_sub.payment_type, ''))) IN ('one_time', 'onetime') THEN 'One-time'
+            ELSE 'Subscription initial'
+          END
+        ) AS _event_type,
+        (
+          CASE
+            WHEN LOWER(TRIM(COALESCE(inner_sub.status, ''))) IN (
+              'active','renewed','pending','trial','paused','upgraded',
+              'active_non_recurring','upgraded_non_recurring','pending_otp_verification_for_upgrade'
+            )
+            AND COALESCE(inner_sub.current_period_end, inner_sub.renews_at, inner_sub.end_at) IS NOT NULL
+            AND COALESCE(inner_sub.current_period_end, inner_sub.renews_at, inner_sub.end_at) <= UTC_TIMESTAMP()
+              THEN 'expired'
+            WHEN inner_sub.status IS NULL OR TRIM(COALESCE(inner_sub.status, '')) = '' THEN 'unknown'
+            ELSE LOWER(TRIM(inner_sub.status))
+          END
+        ) AS _display_status
+      FROM (
+        ${baseRowsSelect}
+      ) inner_sub
+    `;
+
+    const filterParams = [...eventClause.params, ...statusClause.params];
+
     const countQuery = `
       SELECT COUNT(*) AS cnt
       FROM (
-        ${baseInner}
+        ${augmentedFrom}
       ) t
       WHERE 1=1
       ${platformClause.sql}
+      ${eventClause.sql}
+      ${statusClause.sql}
     `;
 
-    const countRows = await runQuery(countQuery, [...innerParams, ...platformClause.params]);
+    const countRows = await runQuery(countQuery, [...innerParams, ...platformClause.params, ...filterParams]);
     const total = Number(countRows[0]?.cnt || 0) || 0;
 
     const listQuery = `
       SELECT * FROM (
-        ${baseInner}
+        ${augmentedFrom}
       ) t
       WHERE 1=1
       ${platformClause.sql}
+      ${eventClause.sql}
+      ${statusClause.sql}
       ORDER BY t.purchase_or_start_at DESC, t.subscription_id DESC
       LIMIT ? OFFSET ?
     `;
 
-    const rows = await runQuery(listQuery, [...innerParams, ...platformClause.params, limit, offset]);
+    const rows = await runQuery(listQuery, [...innerParams, ...platformClause.params, ...filterParams, limit, offset]);
 
     return { rows: rows || [], total };
   }
