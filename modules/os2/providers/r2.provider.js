@@ -5,7 +5,8 @@ const {
   PutObjectCommand,
   GetObjectCommand,
   CopyObjectCommand,
-  HeadObjectCommand
+  HeadObjectCommand,
+  DeleteObjectCommand
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
@@ -197,6 +198,33 @@ class R2StorageProvider extends StorageProvider {
     }
     const bytes = await response.Body.transformToByteArray();
     return Buffer.from(bytes);
+  }
+
+  async deleteObject(key) {
+    if (!key || !String(key).trim()) return;
+    const command = new DeleteObjectCommand({
+      Bucket: this.bucket,
+      Key: key.startsWith('/') ? key.slice(1) : key
+    });
+    await this.client.send(command);
+  }
+
+  /**
+   * Remove an object from R2. Bucket may be an alias ('public' / 'private' / 'ephemeral') or the real bucket name.
+   */
+  async deleteObjectFromBucket(bucket, key) {
+    if (!key || !String(key).trim()) return;
+    let targetBucket = bucket;
+    if (bucket === 'public') targetBucket = this.publicBucket;
+    else if (bucket === 'private') targetBucket = this.bucket;
+    else if (bucket === 'ephemeral') targetBucket = this.ephemeral.bucket;
+    else targetBucket = this.resolveBucketName(bucket);
+    const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+    const command = new DeleteObjectCommand({
+      Bucket: targetBucket,
+      Key: cleanKey
+    });
+    await this.client.send(command);
   }
 
   async generatePresignedPublicBucketUploadUrl(key, options = {}) {
