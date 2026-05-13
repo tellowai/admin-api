@@ -82,6 +82,20 @@ exports.listTemplates = async function (pagination) {
     conditions.push('(is_effects IS NULL OR is_effects = 0 OR is_effects = FALSE)');
   }
 
+  const searchText =
+    pagination.q != null && String(pagination.q).trim() !== ''
+      ? String(pagination.q).trim()
+      : pagination.search != null && String(pagination.search).trim() !== ''
+        ? String(pagination.search).trim()
+        : '';
+  if (searchText) {
+    const like = `%${searchText}%`;
+    conditions.push(
+      '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))'
+    );
+    params.push(like, like, like);
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `
