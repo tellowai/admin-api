@@ -689,9 +689,14 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
  *
  * @apiQuery {Number} [page=1] Page number
  * @apiQuery {Number} [limit=10] Items per page
+ * @apiQuery {String} [q] Search template name, code, or prompt (same semantics as /templates/search)
  */
 exports.listTemplates = async function (req, res) {
   try {
+    const qRaw = req.query.q != null ? req.query.q : req.query.search;
+    const listSearch =
+      typeof qRaw === 'string' && qRaw.trim() !== '' ? qRaw.trim() : undefined;
+
     const billing =
       req.query.billing === 'free' || req.query.billing === 'paid' ? req.query.billing : undefined;
     const wf = req.query.template_workflow_type;
@@ -716,7 +721,8 @@ exports.listTemplates = async function (req, res) {
       template_workflow_type: templateWorkflowType,
       is_effects: isEffectsFilter,
       sort_by: req.query.sort_by || undefined,
-      sort_dir: req.query.sort_dir || undefined
+      sort_dir: req.query.sort_dir || undefined,
+      ...(listSearch ? { q: listSearch } : {})
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
