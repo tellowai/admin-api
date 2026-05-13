@@ -16,6 +16,15 @@ class StorageProvider {
     throw new Error('Method not implemented');
   }
 
+  /**
+   * Delete object from a bucket (name or alias such as 'public' / 'private').
+   * @param {string} bucket
+   * @param {string} key
+   */
+  async deleteObjectFromBucket(bucket, key) {
+    throw new Error('Method not implemented');
+  }
+
   async generatePresignedDownloadUrlFromBucket(bucket, key, options) {
     throw new Error('Method not implemented');
   }
