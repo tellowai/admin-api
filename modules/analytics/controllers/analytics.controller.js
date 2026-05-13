@@ -1,6 +1,7 @@
 'use strict';
 
 const i18next = require('i18next');
+const moment = require('moment-timezone');
 const config = require('../../../config/config');
 const AnalyticsService = require('../services/analytics.service');
 const TimezoneService = require('../services/timezone.service');
@@ -1772,6 +1773,57 @@ class AnalyticsController {
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || { series: [] } });
     } catch (error) {
       logger.error('Error fetching growth metrics overview:', { error: error.message, query: req.validatedQuery });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  /**
+   * GET /analytics/subscriptions/active-daily — daily snapshot count of **users**
+   * whose latest recurring row (as of end-of-day) was entitled, at the END of
+   * each calendar day in the picked range (in the client timezone). One row per
+   * day, 0-filled for empty days.
+   *
+   * Same entitlement rules as `getPurchasesSummary`'s active-subscriptions count
+   * (see {@link SubscriptionsAnalyticsModel.countRecurringEntitledAt}).
+   */
+  static async getActiveSubscriptionsDaily(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const tzRaw = queryParams.tz || TimezoneService.getDefaultTimezone();
+      if (!TimezoneService.isValidTimezone(tzRaw)) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+      }
+      const tz = tzRaw;
+
+      // Joi gives us `Date` objects; pull the calendar Y-M-D in the client tz.
+      const startCal = moment.tz(queryParams.start_date, tz).format('YYYY-MM-DD');
+      const endCal = moment.tz(queryParams.end_date, tz).format('YYYY-MM-DD');
+
+      // Build one entry per calendar day in [startCal, endCal] with that day's
+      // last-instant in the client tz, converted to UTC for the SQL `as-of`.
+      const days = [];
+      for (
+        let cursor = moment.tz(startCal, tz).startOf('day');
+        !cursor.isAfter(moment.tz(endCal, tz).startOf('day'));
+        cursor = cursor.clone().add(1, 'day')
+      ) {
+        const dateYmd = cursor.format('YYYY-MM-DD');
+        const asOfUtc = moment
+          .tz(`${dateYmd} 23:59:59.999`, tz)
+          .utc()
+          .format('YYYY-MM-DD HH:mm:ss.SSS');
+        days.push({ date: dateYmd, asOfUtc });
+      }
+
+      const daily = await SubscriptionsAnalyticsModel.countRecurringEntitledDaily(days);
+
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: { daily } });
+    } catch (error) {
+      logger.error('Error fetching active subscriptions daily:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }

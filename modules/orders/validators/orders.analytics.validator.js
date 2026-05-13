@@ -24,8 +24,36 @@ const ordersAnalyticsQuerySchema = Joi.object({
     .allow('')
 });
 
+/** Paginated subscription rows for Purchases analytics (same date/tz semantics as other order analytics). */
+const userSubscriptionsTableQuerySchema = Joi.object({
+  start_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
+  end_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
+  tz: Joi.string().optional().allow(''),
+  client_platform: Joi.string().valid('', 'ios', 'android', 'web').optional().allow(''),
+  payment_plan_id: Joi.string().optional().allow('').pattern(/^\d*$/),
+  subscription_event_type: Joi.string()
+    .valid('', 'Renewal', 'Subscription initial', 'Upgrade', 'One-time')
+    .optional()
+    .allow(''),
+  subscription_status: Joi.string().trim().lowercase().max(64).optional().allow(''),
+  page: Joi.number().integer().min(1).optional().default(1),
+  limit: Joi.number().integer().min(1).max(100).optional().default(25)
+});
+
 exports.validateOrdersAnalyticsQuery = function (req, res, next) {
   const payloadValidation = validationCtrl.validate(ordersAnalyticsQuerySchema, req.query);
+  if (payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+  req.validatedQuery = payloadValidation.value;
+  return next(null);
+};
+
+exports.validateUserSubscriptionsTableQuery = function (req, res, next) {
+  const payloadValidation = validationCtrl.validate(userSubscriptionsTableQuerySchema, req.query);
   if (payloadValidation.error && payloadValidation.error.length) {
     return res.status(HTTP_CODES.BAD_REQUEST).json({
       message: req.t('validation:VALIDATION_FAILED'),
