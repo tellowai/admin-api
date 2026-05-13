@@ -1477,7 +1477,7 @@ class AnalyticsService {
    * - Template views: `template_view` + object_type=template (raw hub, calendar in client TZ).
    * - Orders: `order_created` / `order_completed` (same optional filters as orders-funnel).
    * - Commerce: purchase + commerce (ARPPU inputs).
-   * - ARPPU / avg cart: derived in JS from commerce + order columns.
+   * - ARPPU / average order value (AOV): derived in JS from commerce + order columns.
    */
   static async getGrowthMetricsOverview(queryParams) {
     const tz = TimezoneService.normalizeTimezoneAlias(queryParams.tz || 'UTC');
@@ -1550,7 +1550,7 @@ class AnalyticsService {
       const payers = x.paying_users_commerce;
       const arppu = payers > 0 ? Math.round((x.gross_revenue_commerce / payers) * 100) / 100 : null;
       const completed = x.orders_completed;
-      const avgCartPaid =
+      const avgOrderValue =
         completed > 0 ? Math.round((x.revenue_order_completed / completed) * 100) / 100 : null;
       return {
         date: d,
@@ -1562,7 +1562,7 @@ class AnalyticsService {
         gross_revenue_commerce: Math.round(x.gross_revenue_commerce * 100) / 100,
         paying_users_commerce: payers,
         arppu_commerce: arppu,
-        avg_cart_value_paid: avgCartPaid
+        avg_order_value: avgOrderValue
       };
     });
 
@@ -1579,8 +1579,8 @@ class AnalyticsService {
         orders_completed: 'order_completed events (object_type=order), client calendar day.',
         arppu_commerce:
           'Gross revenue from commerce purchase events / distinct user_ids with revenue>0 that day.',
-        avg_cart_value_paid:
-          'Sum of amount on order_completed / count(order_completed) for that day (same filters as orders).'
+        avg_order_value:
+          'Average order value: sum of amount on order_completed divided by count of order_completed that day (completed orders only; same filters as orders).'
       }
     };
   }

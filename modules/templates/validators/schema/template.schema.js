@@ -61,6 +61,9 @@ const customTextInputFieldSchema = Joi.object({
   text_casing: Joi.string()
     .valid('none', 'uppercase', 'lowercase', 'capitalize_first', 'title_case', 'sentence_case')
     .optional(),
+  /** When true, `text_output_template` replaces the default line for AE (evaluated in workers). */
+  use_custom_ae_text: Joi.boolean().optional(),
+  text_output_template: Joi.string().allow('', null).max(4000).optional(),
   is_optional: Joi.boolean().optional(),
   new_field: Joi.object({
     field_code: Joi.string().required(),

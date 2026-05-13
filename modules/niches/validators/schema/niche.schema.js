@@ -60,7 +60,9 @@ const matchCustomTextInputFieldsSchema = Joi.object().keys({
       user_input_field_name: Joi.string().required(),
       text_casing: Joi.string()
         .valid('none', 'uppercase', 'lowercase', 'capitalize_first', 'title_case', 'sentence_case')
-        .optional()
+        .optional(),
+      use_custom_ae_text: Joi.boolean().optional(),
+      text_output_template: Joi.string().allow('', null).max(4000).optional()
     })
   ).min(1).required()
 });

@@ -1753,7 +1753,7 @@ class AnalyticsController {
   }
 
   /**
-   * GET /analytics/growth-metrics/overview — parallel hub/spoke reads, merged daily series.
+   * GET /analytics/growth-metrics/overview — daily series (installs, views, orders, ARPPU, average order value).
    */
   static async getGrowthMetricsOverview(req, res) {
     try {
