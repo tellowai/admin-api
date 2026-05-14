@@ -38,7 +38,8 @@ const updatePackSchema = Joi.object().keys({
   language_code: Joi.string().max(10).allow(null).optional(),
   credits: Joi.number().integer().min(1).optional(),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
-  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
+  /** Compare-at list price for pack storefront (strike-through); not payment tiers — may differ from template sums. */
+  alacarte_original_price: Joi.number().integer().positive().max(9999999).allow(null).optional(),
   people_used_count: Joi.number().integer().min(0).max(9999999).allow(null).optional()
 });
 
