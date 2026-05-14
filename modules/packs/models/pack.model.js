@@ -46,6 +46,22 @@ exports.createPack = async function(packData) {
   return packId;
 };
 
+/**
+ * Minimal pack rows by id for admin orders / analytics (includes archived packs).
+ */
+exports.getPacksByIdsForAnalytics = async function (packIds) {
+  if (!Array.isArray(packIds) || packIds.length === 0) {
+    return [];
+  }
+  const placeholders = packIds.map(() => '?').join(',');
+  const query = `
+    SELECT pack_id, pack_name
+    FROM packs
+    WHERE pack_id IN (${placeholders})
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, packIds);
+};
+
 exports.getPack = async function(packId) {
   const query = `
     SELECT 

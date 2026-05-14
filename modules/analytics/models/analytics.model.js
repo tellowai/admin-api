@@ -222,6 +222,92 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  /** Commerce purchase counts by client-local calendar day (`revenue_mv` semantics on raw). */
+  static async queryPurchasesCommerceDailyClientTz(whereClause, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Commerce purchases grouped by dimension, bucketed in client TZ. */
+  static async queryPurchasesCommerceDailyGroupedClientTz(whereClause, groupKeyExpr, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        ${groupKeyExpr} AS group_key,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date, group_key
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryPurchasesCommerceCountRaw(whereClause) {
+    const query = `
+      SELECT count() AS total_count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return Number(result.data?.[0]?.total_count) || 0;
+  }
+
+  /** Daily revenue (`sum(revenue)`) in client TZ — `revenue_mv` semantics on raw. */
+  static async queryRevenueCommerceDailyClientTz(whereClause, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        sum(ifNull(revenue, 0)) AS amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryRevenueCommerceDailyGroupedClientTz(whereClause, groupKeyExpr, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        ${groupKeyExpr} AS group_key,
+        sum(ifNull(revenue, 0)) AS amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date, group_key
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async queryRevenueCommerceSumRaw(whereClause) {
+    const query = `
+      SELECT sum(ifNull(revenue, 0)) AS total_amount
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    const n = Number(result.data?.[0]?.total_amount);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   static async queryRevenueTotalStats(whereConditions) {
     const query = `
       SELECT
@@ -831,6 +917,31 @@ error_category,
   }
 
   /**
+   * Same failure rows as `payment_failures_mv`, but bucket `date` in the **client**
+   * IANA timezone — matches `queryOrdersFunnelClickhouseDaily` so the Payment Failures
+   * combo chart aligns with "Orders Created" (MV `report_date` is UTC `toDate(timestamp)`).
+   *
+   * @param {string} whereClause  Full WHERE body (timestamp window + event predicate + filters)
+   * @param {string} groupKeyExpr Safe SQL expression for GROUP BY (built server-side from allowlist)
+   * @param {string} clientTz     IANA tz, escaped for SQL string literal
+   */
+  static async queryPaymentFailuresDailyGroupedClientTz(whereClause, groupKeyExpr, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        ${groupKeyExpr} AS group_key,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date, group_key
+      ORDER BY date ASC, count DESC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
    * Top-N breakdown by any allowed dimension. Used for bar/pie charts
    * (category, layer, gateway, error_code, product_classification, ...).
    */
@@ -845,6 +956,75 @@ error_category,
       FROM ${ANALYTICS_CONSTANTS.TABLES.PAYMENT_FAILURES_DAILY_STATS}
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY ${groupByColumn}
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Ungrouped daily counts in client TZ (same predicate as {@link queryPaymentFailuresDailyGroupedClientTz}). */
+  static async queryPaymentFailuresDailyClientTz(whereClause, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        count() AS count,
+        uniq(properties['correlation_id']) AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Summary totals over raw failure rows in a UTC timestamp window (client calendar semantics). */
+  static async queryPaymentFailuresSummaryRaw(whereClause) {
+    const query = `
+      SELECT
+        count() AS total_failures,
+        uniq(ifNull(user_id, '')) AS unique_users,
+        uniq(ifNull(device_id, '')) AS unique_devices,
+        uniq(properties['correlation_id']) AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || null;
+  }
+
+  /** Top-N breakdown on raw rows (client-calendar window in {@code whereClause}). */
+  static async queryPaymentFailuresBreakdownRaw(whereClause, groupKeyExpr, limit = 20) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+    const query = `
+      SELECT
+        ${groupKeyExpr} AS group_key,
+        count() AS count,
+        uniq(ifNull(user_id, '')) AS unique_users,
+        uniq(properties['correlation_id']) AS unique_attempts
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY group_key
+      ORDER BY count DESC
+      LIMIT ${safeLimit}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Two-dimensional breakdown on raw rows. */
+  static async queryPaymentFailuresMatrixRaw(whereClause, rowKeyExpr, colKeyExpr, limit = 200) {
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 200), 500);
+    const query = `
+      SELECT
+        ${rowKeyExpr} AS row_key,
+        ${colKeyExpr} AS col_key,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY row_key, col_key
       ORDER BY count DESC
       LIMIT ${safeLimit}
     `;
@@ -870,8 +1050,10 @@ error_category,
    *
    * Pagination is `LIMIT/OFFSET` so the UI can drive a load-more button
    * instead of pulling every group at once.
+   *
+   * @param {string} whereClause  Full WHERE body (AND-joined, no leading WHERE)
    */
-  static async queryPaymentFailuresMessageGroups(whereConditions, limit = 25, offset = 0) {
+  static async queryPaymentFailuresMessageGroups(whereClause, limit = 25, offset = 0) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 25), 200);
     const safeOffset = Math.min(Math.max(0, parseInt(offset, 10) || 0), 5000);
     const query = `
@@ -887,7 +1069,7 @@ error_category,
         uniq(properties['correlation_id'])          AS unique_attempts,
         max(timestamp)                              AS last_seen
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      WHERE ${whereConditions.join(' AND ')}
+      WHERE ${whereClause}
       GROUP BY
         event_name, payment_gateway, failure_category,
         error_code, response_code, error_message
@@ -904,8 +1086,10 @@ error_category,
    * via limit/offset. Returned rows mirror the MV's filterable dims plus
    * the raw text fields the MV drops, so the admin UI can show a "log
    * tail" of failures without blowing up cardinality on the spoke.
+   *
+   * @param {string} whereClause  Full WHERE body (AND-joined, no leading WHERE)
    */
-  static async queryPaymentFailuresSamples(whereConditions, limit = 50, offset = 0) {
+  static async queryPaymentFailuresSamples(whereClause, limit = 50, offset = 0) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 200);
     const safeOffset = Math.min(Math.max(0, parseInt(offset, 10) || 0), 5000);
     const query = `
@@ -943,7 +1127,7 @@ error_category,
         properties['source_screen']                 AS source_screen,
         properties['template_id']                   AS template_id
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      WHERE ${whereConditions.join(' AND ')}
+      WHERE ${whereClause}
       ORDER BY timestamp DESC
       LIMIT ${safeLimit}
       OFFSET ${safeOffset}

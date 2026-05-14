@@ -2,10 +2,8 @@
 
 const Joi = require('@hapi/joi');
 
-/** Must match modules/templates/validators/schema/template.schema.js */
-const ALACARTE_INR_PRICE_TIERS = [
-  19, 29, 49, 99, 149, 199, 249, 299, 349, 399, 449, 499, 549, 599, 649, 699, 749, 799, 849, 899, 949, 999
-];
+/** Must match modules/templates/validators/schema/template.schema.js — 9, 19, …, 999 */
+const ALACARTE_INR_PRICE_TIERS = Array.from({ length: 100 }, (_, i) => 9 + i * 10);
 
 const HEX_COLOR = Joi.string()
   .max(16)

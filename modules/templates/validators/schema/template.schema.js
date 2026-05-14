@@ -3,9 +3,8 @@
 const Joi = require('@hapi/joi');
 
 /** INR tiers for template à la carte pricing (admin dropdown + API validation). */
-const ALACARTE_INR_PRICE_TIERS = [
-  19, 29, 49, 99, 149, 199, 249, 299, 349, 399, 449, 499, 549, 599, 649, 699, 749, 799, 849, 899, 949, 999
-];
+/** 9, 19, 29, …, 999 (₹10 steps) */
+const ALACARTE_INR_PRICE_TIERS = Array.from({ length: 100 }, (_, i) => 9 + i * 10);
 
 // Custom validation for word count
 const wordCountValidation = (value, helpers) => {
