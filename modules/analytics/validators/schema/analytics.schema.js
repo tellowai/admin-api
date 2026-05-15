@@ -51,7 +51,26 @@ const templatePerformanceAnalyticsSchema = templateAnalyticsSchema.keys({
   cohort: Joi.string().valid('all_active', 'created_in_range').required(),
   page: Joi.number().integer().min(1).optional(),
   limit: Joi.number().integer().min(1).max(500).optional(),
-  sort: Joi.string().valid('generations', 'tries', 'views', 'downloads').optional()
+  sort: Joi.string()
+    .valid(
+      'generations',
+      'tries',
+      'views',
+      'downloads',
+      'successes',
+      'failures',
+      'success_rate',
+      'template_name',
+      'template_code',
+      'created_at',
+      'alacarte_price',
+      'purchases',
+      'revenue',
+      'conversion_rate',
+      'revenue_per_view'
+    )
+    .optional(),
+  sort_dir: Joi.string().valid('asc', 'desc').optional()
 });
 
 const signupAnalyticsSchema = Joi.object().keys({
