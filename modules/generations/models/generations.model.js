@@ -268,7 +268,8 @@ exports.getResourceGenerationsByIds = async function (generationIds) {
       user_id,
       template_id,
       media_type,
-      created_at
+      created_at,
+      entitlement_id
     FROM resource_generations
     WHERE resource_generation_id IN (${formattedIds})
   `;
@@ -435,6 +436,19 @@ exports.getMediaGenerationsByIds = async function (mediaGenerationIds) {
       media_type,
       updated_at,
       completed_at
+    FROM media_generations
+    WHERE media_generation_id IN (?)
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [mediaGenerationIds]);
+};
+
+/**
+ * entitlement_id per media_generation_id (MySQL source of truth for admin cards).
+ */
+exports.getMediaGenerationEntitlementsByMediaIds = async function (mediaGenerationIds) {
+  if (!mediaGenerationIds || mediaGenerationIds.length === 0) return [];
+  const query = `
+    SELECT media_generation_id, entitlement_id
     FROM media_generations
     WHERE media_generation_id IN (?)
   `;

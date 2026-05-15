@@ -11,8 +11,17 @@ const ScriptFontModel = require('../../script-fonts/models/script.font.model');
 
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
 const TEMPLATE_WORKFLOW_TYPE_ENUM = ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'];
+/** List/search: exact `templates.template_type` match */
+const TEMPLATE_TYPE_FILTER_ENUM = ['free', 'standard', 'premium', 'exclusive', 'ai'];
 
-/** Whitelist ORDER BY columns for list / search (SQL identifiers only). */
+function applyTemplateTypeFilter(conditions, params, filter) {
+  if (!filter || !TEMPLATE_TYPE_FILTER_ENUM.includes(filter)) {
+    return;
+  }
+  conditions.push('template_type = ?');
+  params.push(filter);
+}
+
 const TEMPLATE_LIST_SORT_COLUMNS = {
   updated_at: 'updated_at',
   created_at: 'created_at',
@@ -23,6 +32,7 @@ const TEMPLATE_LIST_SORT_COLUMNS = {
   status: 'status'
 };
 
+/** Whitelist ORDER BY columns for list / search (SQL identifiers only). */
 function resolveTemplateListOrderBy(sortBy, sortDir, fallbackColumn) {
   const d = String(sortDir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
   const key = String(sortBy || '').toLowerCase();
@@ -57,6 +67,8 @@ exports.listTemplates = async function (pagination) {
   } else if (pagination.billing === 'paid') {
     conditions.push("(template_type IS NOT NULL AND template_type <> 'free')");
   }
+
+  applyTemplateTypeFilter(conditions, params, pagination.template_type_filter);
 
   if (pagination.template_workflow_type && TEMPLATE_WORKFLOW_TYPE_ENUM.includes(pagination.template_workflow_type)) {
     conditions.push('template_workflow_type = ?');
@@ -377,12 +389,18 @@ exports.searchTemplates = async function (
   platform = null,
   billing = null,
   template_workflow_type = null,
+  template_type_filter = null,
+  sort_by = null,
+  sort_dir = null,
   extra = {}
 ) {
-  const offset = (page - 1) * limit;
   const nameOnly = !!(extra && extra.nameOnly);
-  const sortBy = extra && extra.sortBy;
-  const sortDir = extra && extra.sortDir;
+  const sortByEffective =
+    sort_by != null && String(sort_by).trim() !== '' ? sort_by : (extra && extra.sortBy);
+  const sortDirEffective =
+    sort_dir != null && String(sort_dir).trim() !== '' ? sort_dir : (extra && extra.sortDir);
+
+  const offset = (page - 1) * limit;
 
   const like = `%${searchQuery}%`;
   const conditions = ['archived_at IS NULL'];
@@ -421,6 +439,8 @@ exports.searchTemplates = async function (
   } else if (billing === 'paid') {
     conditions.push("(template_type IS NOT NULL AND template_type <> 'free')");
   }
+
+  applyTemplateTypeFilter(conditions, params, template_type_filter);
 
   if (template_workflow_type && TEMPLATE_WORKFLOW_TYPE_ENUM.includes(template_workflow_type)) {
     conditions.push('template_workflow_type = ?');
@@ -484,7 +504,7 @@ exports.searchTemplates = async function (
       updated_at
     FROM templates
     WHERE ${conditions.join(' AND ')}
-    ORDER BY ${resolveTemplateListOrderBy(sortBy, sortDir, 'created_at')}
+    ORDER BY ${resolveTemplateListOrderBy(sortByEffective, sortDirEffective, 'created_at')}
     LIMIT ? OFFSET ?
   `;
 
