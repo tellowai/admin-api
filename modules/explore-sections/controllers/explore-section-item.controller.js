@@ -2,12 +2,65 @@
 
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const ExploreSectionItemModel = require('../models/explore-section-item.model');
+const ExploreSectionModel = require('../models/explore-section.model');
 const ExploreSectionErrorHandler = require('../middlewares/explore-section.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const config = require('../../../config/config');
+
+/**
+ * Validate that the items being added to a pack section obey the per-ui_type rules.
+ *   - pack_templates  → exactly 1 pack total (existing + incoming); no other resource types.
+ *   - list_of_packs   → packs only; multiple allowed.
+ * Non-pack sections are unaffected. The first violation found is returned so the
+ * admin UI can render a clear toast.
+ *
+ * Returns { ok: true } or { ok: false, status, messageKey, defaultMessage }.
+ */
+async function validatePackSectionItemRules(sectionId, items, t) {
+  const section = await ExploreSectionModel.getExploreSectionById(sectionId);
+  if (!section) {
+    return {
+      ok: false,
+      status: HTTP_STATUS_CODES.NOT_FOUND,
+      message: t('explore_section:EXPLORE_SECTION_NOT_FOUND_FOR_ITEMS', {
+        defaultValue: 'Cannot add items: parent section was not found or has been archived',
+      }),
+    };
+  }
+  if (section.section_type !== 'pack') return { ok: true, section };
+
+  // Pack sections only accept pack items.
+  const nonPack = items.find((i) => i.resource_type !== 'pack');
+  if (nonPack) {
+    return {
+      ok: false,
+      status: HTTP_STATUS_CODES.BAD_REQUEST,
+      message: t('explore_section:EXPLORE_SECTION_ITEMS_PACK_ONLY', {
+        defaultValue: 'This section only allows packs. Please add pack items only.',
+      }),
+    };
+  }
+
+  if (section.ui_type === 'pack_templates') {
+    const existingPackCount = await ExploreSectionItemModel.countSectionItems(sectionId, 'pack');
+    const incomingPackCount = items.length;
+    if (existingPackCount + incomingPackCount > 1) {
+      return {
+        ok: false,
+        status: HTTP_STATUS_CODES.BAD_REQUEST,
+        message: t('explore_section:EXPLORE_SECTION_ITEMS_PACK_TEMPLATES_LIMIT', {
+          defaultValue:
+            'Sections of type PACK_TEMPLATES can contain only one pack. Remove the existing pack before adding a new one.',
+        }),
+      };
+    }
+  }
+
+  return { ok: true, section };
+}
 
 /**
  * @api {get} /explore-sections/:sectionId/items List section items
@@ -35,10 +88,15 @@ exports.listSectionItems = async function(req, res) {
       .filter(item => item.resource_type === 'collection')
       .map(item => item.resource_id);
 
-    // Fetch templates and collections in parallel
-    const [templates, collections] = await Promise.all([
+    const packIds = items
+      .filter(item => item.resource_type === 'pack')
+      .map(item => item.resource_id);
+
+    // Fetch templates, collections, and packs in parallel
+    const [templates, collections, packs] = await Promise.all([
       ExploreSectionItemModel.getTemplatesForItems(templateIds),
-      ExploreSectionItemModel.getCollectionsForItems(collectionIds)
+      ExploreSectionItemModel.getCollectionsForItems(collectionIds),
+      ExploreSectionItemModel.getPacksForItems(packIds)
     ]);
 
     // Create lookup maps for faster access
@@ -49,6 +107,11 @@ exports.listSectionItems = async function(req, res) {
 
     const collectionMap = collections.reduce((acc, c) => {
       acc[c.collection_id] = c;
+      return acc;
+    }, {});
+
+    const packMap = packs.reduce((acc, p) => {
+      acc[p.pack_id] = p;
       return acc;
     }, {});
 
@@ -79,6 +142,16 @@ exports.listSectionItems = async function(req, res) {
           if (collection.resource_image_key) {
             enrichedItem.resource_image_url = `${config.os2.r2.public.bucketUrl}/${collection.resource_image_key}`;
             enrichedItem.r2_url = `${config.os2.r2.public.bucketUrl}/${collection.resource_image_key}`;
+          }
+        }
+      } else if (item.resource_type === 'pack') {
+        const pack = packMap[item.resource_id];
+        if (pack) {
+          enrichedItem.resource_name = pack.pack_name;
+          enrichedItem.resource_image_key = pack.resource_image_key;
+          if (pack.resource_image_key) {
+            enrichedItem.resource_image_url = `${config.os2.r2.public.bucketUrl}/${pack.resource_image_key}`;
+            enrichedItem.r2_url = `${config.os2.r2.public.bucketUrl}/${pack.resource_image_key}`;
           }
         }
       }
@@ -119,6 +192,13 @@ exports.addSectionItems = async function(req, res) {
         message: req.t('validation:VALIDATION_FAILED'),
         data: [{ path: 'section_id', message: 'Each item section_id must match the section in the URL' }]
       });
+    }
+
+    // Enforce per-(section_type, ui_type) rules. Today: only pack sections have rules
+    // (pack_templates = exactly 1 pack, list_of_packs = packs only, multi allowed).
+    const ruleResult = await validatePackSectionItemRules(sectionId, items, req.t);
+    if (!ruleResult.ok) {
+      return res.status(ruleResult.status).json({ message: ruleResult.message });
     }
 
     const existingItems = await ExploreSectionItemModel.getExistingItems(sectionId, items);

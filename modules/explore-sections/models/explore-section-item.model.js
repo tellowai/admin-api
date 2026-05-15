@@ -57,6 +57,46 @@ exports.getCollectionsForItems = async function(collectionIds) {
   return await mysqlQueryRunner.runQueryInSlave(query, [collectionIds]);
 };
 
+/**
+ * Hydrate pack rows for the admin section-items list. Keeps the same column
+ * shape as templates/collections so the controller can enrich uniformly.
+ */
+exports.getPacksForItems = async function(packIds) {
+  if (!packIds.length) return [];
+
+  const query = `
+    SELECT
+      pack_id,
+      pack_name,
+      thumbnail_cf_r2_key as resource_image_key
+    FROM packs
+    WHERE pack_id IN (?)
+      AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, [packIds]);
+};
+
+/**
+ * Count non-archived items in a section, optionally narrowed to a resource_type.
+ * Used to enforce per-ui_type rules (e.g. pack_templates allows exactly one pack).
+ */
+exports.countSectionItems = async function(sectionId, resourceType = null) {
+  let query = `
+    SELECT COUNT(*) AS cnt
+    FROM explore_section_items
+    WHERE section_id = ?
+      AND archived_at IS NULL
+  `;
+  const params = [sectionId];
+  if (resourceType) {
+    query += ` AND resource_type = ?`;
+    params.push(resourceType);
+  }
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, params);
+  return rows && rows[0] ? Number(rows[0].cnt) || 0 : 0;
+};
+
 exports.getExistingItems = async function(sectionId, items) {
   const conditions = items.map(item => 
     `(section_id = ? AND resource_type = ? AND resource_id = ? AND archived_at IS NULL)`

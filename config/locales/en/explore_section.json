@@ -14,5 +14,8 @@
   "EXPLORE_SECTION_ITEMS_REQUIRED": "Please provide at least one item ID to remove",
   "EXPLORE_SECTION_ITEMS_SORT_ORDER_UPDATED": "Section item order updated successfully",
   "EXPLORE_SECTION_ITEMS_SORT_ORDER_MISMATCH": "Item list is out of date — refresh and try again",
-  "COLLECTION_HAS_NO_TEMPLATES": "The selected collection has no templates"
+  "COLLECTION_HAS_NO_TEMPLATES": "The selected collection has no templates",
+  "EXPLORE_SECTION_ITEMS_PACK_ONLY": "This section only allows packs. Please add pack items only.",
+  "EXPLORE_SECTION_ITEMS_PACK_TEMPLATES_LIMIT": "Sections of type PACK_TEMPLATES can contain only one pack. Remove the existing pack before adding a new one.",
+  "EXPLORE_SECTION_NOT_FOUND_FOR_ITEMS": "Cannot add items: parent section was not found or has been archived"
 } 

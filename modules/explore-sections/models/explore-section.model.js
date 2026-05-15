@@ -93,6 +93,30 @@ exports.updateExploreSection = async function(sectionId, sectionData) {
   return result.affectedRows > 0;
 };
 
+/**
+ * Get a single explore section's meta (no items, no joins). Used to enforce
+ * item-type rules per (section_type, ui_type) inside the item controllers.
+ * Returns null when archived/missing.
+ */
+exports.getExploreSectionById = async function(sectionId) {
+  const query = `
+    SELECT
+      section_id,
+      section_name,
+      section_type,
+      ui_type,
+      section_items_type,
+      app_surface,
+      status
+    FROM explore_sections
+    WHERE section_id = ?
+      AND archived_at IS NULL
+    LIMIT 1
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [sectionId]);
+  return rows && rows.length ? rows[0] : null;
+};
+
 exports.archiveExploreSection = async function(sectionId) {
   const query = `
     UPDATE explore_sections 
