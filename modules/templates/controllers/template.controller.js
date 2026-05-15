@@ -57,6 +57,42 @@ function templateIsEffectsEnabled(value) {
 }
 
 /**
+ * Merge hub export download counts from ClickHouse (template_daily_stats) for the last 7 UTC calendar days.
+ * Sets `hub_downloads` on each template (number, or null if merge fails).
+ */
+async function mergeHubDownloadsLast7dUtcIntoTemplates(templates) {
+  if (!Array.isArray(templates) || templates.length === 0) return;
+  try {
+    const AnalyticsService = require('../../analytics/services/analytics.service');
+    const AnalyticsModel = require('../../analytics/models/analytics.model');
+    const moment = require('moment-timezone');
+    const endDate = moment.utc().format('YYYY-MM-DD');
+    const startDate = moment.utc().subtract(6, 'days').format('YYYY-MM-DD');
+    const whereConditions = AnalyticsService.buildMVTemplateConditions(startDate, endDate, {});
+    const templateIds = templates.map((t) => t.template_id).filter(Boolean);
+    const BATCH = 400;
+    const aggMap = new Map();
+    for (let i = 0; i < templateIds.length; i += BATCH) {
+      const batch = templateIds.slice(i, i + BATCH);
+      const rows = await AnalyticsModel.getTemplatePerformanceAggregatesBatch(whereConditions, batch);
+      for (const r of rows || []) {
+        if (r && r.template_id) {
+          aggMap.set(r.template_id, Number(r.downloads) || 0);
+        }
+      }
+    }
+    for (const t of templates) {
+      t.hub_downloads = aggMap.has(t.template_id) ? aggMap.get(t.template_id) : 0;
+    }
+  } catch (err) {
+    logger.warn('mergeHubDownloadsLast7dUtcIntoTemplates skipped', { message: err.message });
+    for (const t of templates) {
+      if (t.hub_downloads === undefined) t.hub_downloads = null;
+    }
+  }
+}
+
+/**
  * Image templates use cf_r2_* as the cover/preview asset; thumb_frame_* must match.
  * Video templates keep cf_r2_* as preview video and may use a separate extracted thumb_frame_*.
  * @param {Object} templateData - Payload merged for create/update (mutated)
@@ -81,6 +117,62 @@ function syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate =
   } else {
     templateData.thumb_frame_asset_key = null;
     templateData.thumb_frame_bucket = null;
+  }
+}
+
+/** @returns {{ bucket: string, key: string } | null} */
+function normalizedTemplateMediaRef(bucket, key) {
+  const k = key != null && String(key).trim() !== '' ? String(key).trim() : null;
+  if (!k) return null;
+  const b = bucket != null && String(bucket).trim() !== '' ? String(bucket).trim() : 'public';
+  return { bucket: b, key: k };
+}
+
+async function deletePriorTemplateR2ObjectOnce(storage, dedupe, oldRef, label) {
+  if (!oldRef) return;
+  const sig = `${oldRef.bucket}::${oldRef.key}`;
+  if (dedupe.has(sig)) return;
+  dedupe.add(sig);
+  try {
+    await storage.deleteObjectFromBucket(oldRef.bucket, oldRef.key);
+  } catch (err) {
+    logger.warn('Failed to delete prior template asset from R2', {
+      label,
+      bucket: oldRef.bucket,
+      key: oldRef.key,
+      error: err.message
+    });
+  }
+}
+
+/**
+ * After a successful DB update, remove replaced-or-cleared preview assets from R2.
+ * Uses existingTemplate + patch (templateData) to detect cf_r2 / thumb_frame changes.
+ */
+async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData) {
+  try {
+    const storage = StorageFactory.getProvider();
+    const dedupe = new Set();
+
+    const oldCf = normalizedTemplateMediaRef(existingTemplate.cf_r2_bucket, existingTemplate.cf_r2_key);
+    const newCf = normalizedTemplateMediaRef(
+      templateData.cf_r2_bucket !== undefined ? templateData.cf_r2_bucket : existingTemplate.cf_r2_bucket,
+      templateData.cf_r2_key !== undefined ? templateData.cf_r2_key : existingTemplate.cf_r2_key
+    );
+    if (oldCf && (!newCf || oldCf.bucket !== newCf.bucket || oldCf.key !== newCf.key)) {
+      await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldCf, 'cf_r2');
+    }
+
+    const oldThumb = normalizedTemplateMediaRef(existingTemplate.thumb_frame_bucket, existingTemplate.thumb_frame_asset_key);
+    const newThumb = normalizedTemplateMediaRef(
+      templateData.thumb_frame_bucket !== undefined ? templateData.thumb_frame_bucket : existingTemplate.thumb_frame_bucket,
+      templateData.thumb_frame_asset_key !== undefined ? templateData.thumb_frame_asset_key : existingTemplate.thumb_frame_asset_key
+    );
+    if (oldThumb && (!newThumb || oldThumb.bucket !== newThumb.bucket || oldThumb.key !== newThumb.key)) {
+      await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldThumb, 'thumb_frame');
+    }
+  } catch (err) {
+    logger.warn('deleteOrphanedTemplateR2MediaAfterUpdate failed', { error: err.message });
   }
 }
 
@@ -588,7 +680,15 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
 }
 
 
-const TEMPLATE_LIST_SORT_BY = ['updated_at', 'created_at', 'template_name', 'credits', 'alacarte_price'];
+const TEMPLATE_LIST_SORT_BY = [
+  'updated_at',
+  'created_at',
+  'template_name',
+  'template_code',
+  'credits',
+  'alacarte_price',
+  'status'
+];
 
 function parseTemplateListSort(query) {
   const sortBy = TEMPLATE_LIST_SORT_BY.includes(query.sort_by) ? query.sort_by : 'updated_at';
@@ -605,9 +705,14 @@ function parseTemplateListSort(query) {
  *
  * @apiQuery {Number} [page=1] Page number
  * @apiQuery {Number} [limit=10] Items per page
+ * @apiQuery {String} [q] Search template name, code, or prompt (same semantics as /templates/search)
  */
 exports.listTemplates = async function (req, res) {
   try {
+    const qRaw = req.query.q != null ? req.query.q : req.query.search;
+    const listSearch =
+      typeof qRaw === 'string' && qRaw.trim() !== '' ? qRaw.trim() : undefined;
+
     const billing =
       req.query.billing === 'free' || req.query.billing === 'paid' ? req.query.billing : undefined;
     const wf = req.query.template_workflow_type;
@@ -636,7 +741,8 @@ exports.listTemplates = async function (req, res) {
       template_workflow_type: templateWorkflowType,
       template_type_filter: templateTypeFilter,
       is_effects: isEffectsFilter,
-      ...listSort
+      ...listSort,
+      ...(listSearch ? { q: listSearch } : {})
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
@@ -858,6 +964,10 @@ exports.listTemplates = async function (req, res) {
           });
         }
       }));
+    }
+
+    if (templates.length) {
+      await mergeHubDownloadsLast7dUtcIntoTemplates(templates);
     }
 
     return res.status(HTTP_STATUS_CODES.OK).json({
@@ -1217,6 +1327,10 @@ exports.listArchivedTemplates = async function (req, res) {
       }));
     }
 
+    if (templates.length) {
+      await mergeHubDownloadsLast7dUtcIntoTemplates(templates);
+    }
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: templates
     });
@@ -1261,6 +1375,11 @@ exports.searchTemplates = async function (req, res) {
     const templateTypeFilter =
       ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : null;
     const listSort = parseTemplateListSort(req.query);
+    const nameOnly =
+      req.query.name_only === 'true' ||
+      req.query.name_only === true ||
+      req.query.name_only === '1' ||
+      req.query.name_only === 1;
     const templates = await TemplateModel.searchTemplates(
       q,
       paginationParams.page,
@@ -1273,7 +1392,8 @@ exports.searchTemplates = async function (req, res) {
       template_workflow_type_param,
       templateTypeFilter,
       listSort.sort_by,
-      listSort.sort_dir
+      listSort.sort_dir,
+      { nameOnly }
     );
 
     // Batch fetch related data (no queries in loop); stitch in controller
@@ -1404,6 +1524,10 @@ exports.searchTemplates = async function (req, res) {
           });
         }
       }));
+    }
+
+    if (templates.length) {
+      await mergeHubDownloadsLast7dUtcIntoTemplates(templates);
     }
 
     return res.status(HTTP_STATUS_CODES.OK).json({
@@ -3522,6 +3646,8 @@ exports.updateTemplate = async function (req, res) {
         message: req.t('template:TEMPLATE_NOT_FOUND')
       });
     }
+
+    await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData);
 
     if (surfaceToArchiveAfterIsEffectsChange) {
       try {

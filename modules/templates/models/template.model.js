@@ -26,15 +26,18 @@ const TEMPLATE_LIST_SORT_COLUMNS = {
   updated_at: 'updated_at',
   created_at: 'created_at',
   template_name: 'template_name',
+  template_code: 'template_code',
+  alacarte_price: 'alacarte_price',
   credits: 'credits',
-  alacarte_price: 'alacarte_price'
+  status: 'status'
 };
 
-/** Whitelisted ORDER BY for admin list/search (default: updated_at DESC). */
-function buildListOrderByClause(sortBy, sortDir) {
-  const col = TEMPLATE_LIST_SORT_COLUMNS[sortBy] || TEMPLATE_LIST_SORT_COLUMNS.updated_at;
-  const dir = sortDir === 'asc' ? 'ASC' : 'DESC';
-  return `ORDER BY ${col} ${dir}, template_id ${dir}`;
+/** Whitelist ORDER BY columns for list / search (SQL identifiers only). */
+function resolveTemplateListOrderBy(sortBy, sortDir, fallbackColumn) {
+  const d = String(sortDir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const key = String(sortBy || '').toLowerCase();
+  const col = TEMPLATE_LIST_SORT_COLUMNS[key] || fallbackColumn;
+  return `${col} ${d}, template_id DESC`;
 }
 
 exports.listTemplates = async function (pagination) {
@@ -91,6 +94,20 @@ exports.listTemplates = async function (pagination) {
     conditions.push('(is_effects IS NULL OR is_effects = 0 OR is_effects = FALSE)');
   }
 
+  const searchText =
+    pagination.q != null && String(pagination.q).trim() !== ''
+      ? String(pagination.q).trim()
+      : pagination.search != null && String(pagination.search).trim() !== ''
+        ? String(pagination.search).trim()
+        : '';
+  if (searchText) {
+    const like = `%${searchText}%`;
+    conditions.push(
+      '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))'
+    );
+    params.push(like, like, like);
+  }
+
   params.push(pagination.limit, pagination.offset);
 
   const query = `
@@ -142,7 +159,7 @@ exports.listTemplates = async function (pagination) {
       updated_at
     FROM templates
     WHERE ${conditions.join(' AND ')}
-    ${buildListOrderByClause(pagination.sort_by, pagination.sort_dir)}
+    ORDER BY ${resolveTemplateListOrderBy(pagination.sort_by, pagination.sort_dir, 'updated_at')}
     LIMIT ? OFFSET ?
   `;
 
@@ -374,14 +391,30 @@ exports.searchTemplates = async function (
   template_workflow_type = null,
   template_type_filter = null,
   sort_by = null,
-  sort_dir = null
+  sort_dir = null,
+  extra = {}
 ) {
+  const nameOnly = !!(extra && extra.nameOnly);
+  const sortByEffective =
+    sort_by != null && String(sort_by).trim() !== '' ? sort_by : (extra && extra.sortBy);
+  const sortDirEffective =
+    sort_dir != null && String(sort_dir).trim() !== '' ? sort_dir : (extra && extra.sortDir);
+
   const offset = (page - 1) * limit;
-  const conditions = [
-    '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))',
-    'archived_at IS NULL'
-  ];
-  const params = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
+
+  const like = `%${searchQuery}%`;
+  const conditions = ['archived_at IS NULL'];
+  const params = [];
+
+  if (nameOnly) {
+    conditions.unshift('LOWER(template_name) LIKE LOWER(?)');
+    params.push(like);
+  } else {
+    conditions.unshift(
+      '(LOWER(template_name) LIKE LOWER(?) OR LOWER(template_code) LIKE LOWER(?) OR LOWER(prompt) LIKE LOWER(?))'
+    );
+    params.push(like, like, like);
+  }
 
   if (status && TEMPLATE_STATUS_ENUM.includes(status)) {
     conditions.push('status = ?');
@@ -471,7 +504,7 @@ exports.searchTemplates = async function (
       updated_at
     FROM templates
     WHERE ${conditions.join(' AND ')}
-    ${buildListOrderByClause(sort_by, sort_dir)}
+    ORDER BY ${resolveTemplateListOrderBy(sortByEffective, sortDirEffective, 'created_at')}
     LIMIT ? OFFSET ?
   `;
 

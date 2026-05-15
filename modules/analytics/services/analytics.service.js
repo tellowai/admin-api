@@ -660,8 +660,49 @@ class AnalyticsService {
   }
 
   /**
+   * One row for GET /analytics/templates/performance (MySQL template + CH metrics + purchase breakdown).
+   */
+  static buildTemplatePerformanceTableRow(metricsRow, t, purchaseById) {
+    const succ = metricsRow.successes || 0;
+    const fail = metricsRow.failures || 0;
+    const denom = succ + fail;
+    const success_rate = denom > 0 ? succ / denom : null;
+    const views = Number(metricsRow.views) || 0;
+    const breakdown = (purchaseById[metricsRow.template_id] || []).slice().sort((a, b) => {
+      if (b.purchases !== a.purchases) return b.purchases - a.purchases;
+      return b.revenue - a.revenue;
+    });
+    const totalPurchases = breakdown.reduce((acc, x) => acc + x.purchases, 0);
+    const primary = breakdown[0] || { currency: 'INR', purchases: 0, revenue: 0 };
+    const conversion_rate = views > 0 ? totalPurchases / views : null;
+    const revenue_per_view = views > 0 ? primary.revenue / views : null;
+    return {
+      template_id: metricsRow.template_id,
+      template_name: t.template_name ?? null,
+      template_code: t.template_code ?? null,
+      template_output_type: t.template_output_type ?? null,
+      created_at: t.created_at ?? null,
+      generations: metricsRow.generations,
+      views: metricsRow.views,
+      downloads: metricsRow.downloads,
+      successes: metricsRow.successes,
+      failures: metricsRow.failures,
+      success_rate,
+      alacarte_price: t.alacarte_price != null ? Number(t.alacarte_price) : null,
+      purchases: totalPurchases,
+      conversion_rate,
+      currency: primary.currency,
+      revenue: primary.revenue,
+      revenue_per_view,
+      is_multi_currency: breakdown.length > 1,
+      currency_breakdown: breakdown
+    };
+  }
+
+  /**
    * Templates performance table: merge MySQL cohort (`all_active` or `created_in_range`) with
-   * ClickHouse template_daily_stats for the metric window. Sorted by generations (or sort key) DESC; paginated.
+   * ClickHouse template_daily_stats for the metric window.
+   * Sorting applies to the full cohort after merge (then paginated).
    */
   static async getTemplatePerformanceTable(filters) {
     const {
@@ -672,13 +713,23 @@ class AnalyticsService {
       cohort,
       page = 1,
       limit = 100,
-      sort = 'generations'
+      sort = 'generations',
+      sort_dir: sortDirRaw
     } = filters;
+
+    const sortDir = String(sortDirRaw || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
     const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
 
+    const singleId =
+      filters.template_id != null && String(filters.template_id).trim()
+        ? String(filters.template_id).trim()
+        : null;
+
     let templateIds = [];
-    if (cohort === 'created_in_range') {
+    if (singleId) {
+      templateIds = [singleId];
+    } else if (cohort === 'created_in_range') {
       const startUtc = moment.utc(`${start_date} ${start_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
       const endUtc = moment.utc(`${end_date} ${end_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
       templateIds = await TemplateModel.listActiveTemplateIdsCreatedBetweenForAnalytics(startUtc, endUtc);
@@ -694,7 +745,8 @@ class AnalyticsService {
           page: Math.max(1, parseInt(page, 10) || 1),
           limit: Math.min(500, Math.max(1, parseInt(limit, 10) || 100)),
           cohort,
-          sort: 'generations'
+          sort: 'generations',
+          sort_dir: sortDir
         }
       };
     }
@@ -728,85 +780,114 @@ class AnalyticsService {
       };
     });
 
+    const byId = {};
+    for (let i = 0; i < templateIds.length; i += BATCH) {
+      const batch = templateIds.slice(i, i + BATCH);
+      if (!batch.length) continue;
+      const templates = await TemplateModel.getTemplatesByIdsForAnalytics(batch);
+      (templates || []).forEach((t) => {
+        byId[t.template_id] = t;
+      });
+    }
+
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const purchaseById = {};
+    for (let i = 0; i < templateIds.length; i += BATCH) {
+      const batch = templateIds.slice(i, i + BATCH);
+      if (!batch.length) continue;
+      const purchaseRows = await AnalyticsModel.getOrderCompletedStatsByTemplateIdsRaw(tsRaw, batch);
+      (purchaseRows || []).forEach((r) => {
+        if (!r.template_id) return;
+        const currency = (r.currency && String(r.currency).trim().toUpperCase()) || 'INR';
+        const purchases = Number(r.purchases) || 0;
+        const revenue = Number(r.revenue) || 0;
+        if (!purchaseById[r.template_id]) purchaseById[r.template_id] = [];
+        purchaseById[r.template_id].push({ currency, purchases, revenue });
+      });
+    }
+
+    const fullData = merged.map((row) =>
+      this.buildTemplatePerformanceTableRow(row, byId[row.template_id] || {}, purchaseById)
+    );
+
     let sortKey = String(sort || 'generations').toLowerCase();
     if (sortKey === 'tries') sortKey = 'generations';
-    if (!['generations', 'views', 'downloads'].includes(sortKey)) sortKey = 'generations';
+    const allowedSort = new Set([
+      'generations',
+      'views',
+      'downloads',
+      'successes',
+      'failures',
+      'success_rate',
+      'template_name',
+      'template_code',
+      'created_at',
+      'alacarte_price',
+      'purchases',
+      'revenue',
+      'conversion_rate',
+      'revenue_per_view'
+    ]);
+    if (!allowedSort.has(sortKey)) sortKey = 'generations';
 
-    merged.sort((a, b) => (b[sortKey] || 0) - (a[sortKey] || 0));
+    const dirMul = sortDir === 'asc' ? 1 : -1;
+
+    const sortValue = (row, key) => {
+      switch (key) {
+        case 'template_name':
+          return String(row.template_name || row.template_code || row.template_id || '').toLowerCase();
+        case 'template_code':
+          return String(row.template_code || '').toLowerCase();
+        case 'created_at':
+          return row.created_at ? new Date(row.created_at).getTime() : 0;
+        case 'success_rate':
+          return row.success_rate != null ? Number(row.success_rate) : -1;
+        case 'conversion_rate':
+          return row.conversion_rate != null ? Number(row.conversion_rate) : -1;
+        case 'revenue_per_view':
+          return row.revenue_per_view != null ? Number(row.revenue_per_view) : -1;
+        case 'alacarte_price':
+          return row.alacarte_price != null ? Number(row.alacarte_price) : -1;
+        default:
+          return Number(row[key] ?? 0);
+      }
+    };
+
+    fullData.sort((a, b) => {
+      const va = sortValue(a, sortKey);
+      const vb = sortValue(b, sortKey);
+      let c = 0;
+      if (typeof va === 'string' && typeof vb === 'string') {
+        c = va.localeCompare(vb);
+      } else {
+        c = (Number(va) || 0) - (Number(vb) || 0);
+      }
+      c *= dirMul;
+      if (c !== 0) return c;
+      return String(a.template_id).localeCompare(String(b.template_id));
+    });
 
     const safeLimit = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
     const safePage = Math.max(1, parseInt(page, 10) || 1);
     const offset = (safePage - 1) * safeLimit;
-    const total = merged.length;
-    const pageRows = merged.slice(offset, offset + safeLimit);
-
-    const ids = pageRows.map((r) => r.template_id);
-    const templates = ids.length ? await TemplateModel.getTemplatesByIdsForAnalytics(ids) : [];
-    const byId = {};
-    (templates || []).forEach((t) => {
-      byId[t.template_id] = t;
-    });
-
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
-    const purchaseRows = ids.length
-      ? await AnalyticsModel.getOrderCompletedStatsByTemplateIdsRaw(tsRaw, ids)
-      : [];
-    const purchaseById = {};
-    (purchaseRows || []).forEach((r) => {
-      if (!r.template_id) return;
-      const currency = (r.currency && String(r.currency).trim().toUpperCase()) || 'INR';
-      const purchases = Number(r.purchases) || 0;
-      const revenue = Number(r.revenue) || 0;
-      if (!purchaseById[r.template_id]) purchaseById[r.template_id] = [];
-      purchaseById[r.template_id].push({ currency, purchases, revenue });
-    });
-
-    const data = pageRows.map((row) => {
-      const t = byId[row.template_id] || {};
-      const succ = row.successes || 0;
-      const fail = row.failures || 0;
-      const denom = succ + fail;
-      const success_rate = denom > 0 ? succ / denom : null;
-      const views = Number(row.views) || 0;
-      const breakdown = (purchaseById[row.template_id] || []).slice().sort((a, b) => {
-        if (b.purchases !== a.purchases) return b.purchases - a.purchases;
-        return b.revenue - a.revenue;
-      });
-      const totalPurchases = breakdown.reduce((acc, x) => acc + x.purchases, 0);
-      const primary = breakdown[0] || { currency: 'INR', purchases: 0, revenue: 0 };
-      const conversion_rate = views > 0 ? totalPurchases / views : null;
-      const revenue_per_view = views > 0 ? primary.revenue / views : null;
-      return {
-        template_id: row.template_id,
-        template_name: t.template_name ?? null,
-        template_code: t.template_code ?? null,
-        template_output_type: t.template_output_type ?? null,
-        created_at: t.created_at ?? null,
-        generations: row.generations,
-        views: row.views,
-        downloads: row.downloads,
-        successes: row.successes,
-        failures: row.failures,
-        success_rate,
-        alacarte_price: t.alacarte_price != null ? Number(t.alacarte_price) : null,
-        purchases: totalPurchases,
-        conversion_rate,
-        currency: primary.currency,
-        revenue: primary.revenue,
-        revenue_per_view,
-        is_multi_currency: breakdown.length > 1,
-        currency_breakdown: breakdown
-      };
-    });
+    const total = fullData.length;
+    const pagesFromTotal = total > 0 ? Math.max(1, Math.ceil(total / safeLimit)) : 1;
+    let effectivePage = safePage;
+    if (total > 0 && safePage > pagesFromTotal) {
+      effectivePage = pagesFromTotal;
+    }
+    const effectiveOffset = (effectivePage - 1) * safeLimit;
+    const data = fullData.slice(effectiveOffset, effectiveOffset + safeLimit);
 
     return {
       data,
       meta: {
         total,
-        page: safePage,
+        page: effectivePage,
         limit: safeLimit,
         cohort,
-        sort: sortKey
+        sort: sortKey,
+        sort_dir: sortDir
       }
     };
   }
