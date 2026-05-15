@@ -207,13 +207,22 @@ class PackController {
         });
       }
 
-      const total = await PackModel.countPackTemplatesMatching(packId, q);
+      let total;
+      let packTemplates;
 
-      const packTemplates = await PackModel.getPackTemplatesPaginated(packId, {
-        limit,
-        offset,
-        q: q || undefined,
-      });
+      if (!q) {
+        total = await PackModel.countPackTemplates(packId);
+        packTemplates = await PackModel.getPackTemplatesPaginated(packId, limit, offset);
+      } else {
+        const [allLinks, matchRows] = await Promise.all([
+          PackModel.getPackTemplates(packId),
+          PackModel.listTemplateIdsMatchingNameOrCode(q),
+        ]);
+        const matchSet = new Set(matchRows.map((r) => r.template_id));
+        const filtered = allLinks.filter((l) => matchSet.has(l.template_id));
+        total = filtered.length;
+        packTemplates = filtered.slice(offset, offset + limit);
+      }
 
       if (!packTemplates.length) {
         return res.status(HTTP_STATUS_CODES.OK).json({
@@ -269,7 +278,7 @@ class PackController {
           total,
           page,
           limit,
-          has_more: combinedTemplates.length === limit,
+          has_more: offset + combinedTemplates.length < total,
         },
       });
     } catch (error) {

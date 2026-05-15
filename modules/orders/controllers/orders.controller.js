@@ -35,7 +35,7 @@ const MAX_EXPORT_ROWS = 25000;
 /** Skip ClickHouse enrichment on CSV export above this many rows (single IN clause). */
 const MAX_ORDERS_ANALYTICS_ENRICH = 2000;
 
-function mapRowToAdminOrder(o, planById, userById, templateNameById) {
+function mapRowToAdminOrder(o, planById, userById, templateNameById, packNameById) {
   const plan = o.payment_plan_id != null ? planById[o.payment_plan_id] : null;
   const planType = plan ? plan.plan_type : null;
   const billingInterval = plan ? plan.billing_interval : null;
@@ -43,6 +43,11 @@ function mapRowToAdminOrder(o, planById, userById, templateNameById) {
   const templateName =
     templateId && templateNameById && Object.prototype.hasOwnProperty.call(templateNameById, templateId)
       ? templateNameById[templateId]
+      : null;
+  const packId = orderTemplateStitch.parsePackIdFromTransactionNotes(o.transaction_notes);
+  const packName =
+    packId && packNameById && Object.prototype.hasOwnProperty.call(packNameById, packId)
+      ? packNameById[packId]
       : null;
   return {
     order_id: o.order_id,
@@ -69,6 +74,8 @@ function mapRowToAdminOrder(o, planById, userById, templateNameById) {
     user_details: userById[o.user_id] || null,
     template_id: templateId,
     template_name: templateName,
+    pack_id: packId,
+    pack_name: packName,
     analytics_app_version: null,
     analytics_os_name: null,
     analytics_os_version: null
@@ -322,10 +329,13 @@ exports.listAdminOrders = async function (req, res) {
     }
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
-    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
+    const [templateNameById, packNameById] = await Promise.all([
+      orderTemplateStitch.buildTemplateNameByIdMap(rows),
+      orderTemplateStitch.buildPackNameByIdMap(rows)
+    ]);
     const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
     const orders = rows.map((o) => {
-      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
+      const base = mapRowToAdminOrder(o, planById, userById, templateNameById, packNameById);
       return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
     });
 
@@ -391,7 +401,10 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
     });
 
     const { planById, userById } = await stitchPlansAndUsersForRows(matchRows);
-    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(matchRows);
+    const [templateNameById, packNameById] = await Promise.all([
+      orderTemplateStitch.buildTemplateNameByIdMap(matchRows),
+      orderTemplateStitch.buildPackNameByIdMap(matchRows)
+    ]);
     const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(matchRows);
 
     const byPg = Object.create(null);
@@ -414,7 +427,7 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
 
       const internal = rawOrder
         ? orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
-            mapRowToAdminOrder(rawOrder, planById, userById, templateNameById),
+            mapRowToAdminOrder(rawOrder, planById, userById, templateNameById, packNameById),
             ctxMap
           )
         : null;
@@ -516,13 +529,16 @@ exports.exportAdminOrdersCsv = async function (req, res) {
       exportLimit > 0 ? await OrdersModel.listOrdersAdmin({ ...preparedFilters, limit: exportLimit, offset: 0 }) : [];
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
-    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(rows);
+    const [templateNameById, packNameById] = await Promise.all([
+      orderTemplateStitch.buildTemplateNameByIdMap(rows),
+      orderTemplateStitch.buildPackNameByIdMap(rows)
+    ]);
     const ctxMap =
       rows.length <= MAX_ORDERS_ANALYTICS_ENRICH
         ? await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows)
         : new Map();
     const orders = rows.map((o) => {
-      const base = mapRowToAdminOrder(o, planById, userById, templateNameById);
+      const base = mapRowToAdminOrder(o, planById, userById, templateNameById, packNameById);
       return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
     });
 
@@ -575,6 +591,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
         'billing_interval',
         'template_id',
         'template_name',
+        'pack_id',
+        'pack_name',
         'client_platform',
         'payment_gateway',
         'quantity',
@@ -605,6 +623,8 @@ exports.exportAdminOrdersCsv = async function (req, res) {
             csvEscape(o.billing_interval),
             csvEscape(o.template_id),
             csvEscape(o.template_name),
+            csvEscape(o.pack_id),
+            csvEscape(o.pack_name),
             csvEscape(o.client_platform),
             csvEscape(o.payment_gateway),
             csvEscape(o.quantity),

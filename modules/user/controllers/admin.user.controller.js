@@ -459,17 +459,23 @@ exports.getUserOrders = async function (req, res) {
     const planMap = {};
     for (const p of plans) planMap[p.pp_id] = p;
 
-    const templateNameById = await orderTemplateStitch.buildTemplateNameByIdMap(orders);
+    const [templateNameById, packNameById] = await Promise.all([
+      orderTemplateStitch.buildTemplateNameByIdMap(orders),
+      orderTemplateStitch.buildPackNameByIdMap(orders)
+    ]);
 
     const data = orders.map(order => {
       const plan = order.payment_plan_id ? planMap[order.payment_plan_id] : null;
       const tid = orderTemplateStitch.parseTemplateIdFromTransactionNotes(order.transaction_notes);
+      const pid = orderTemplateStitch.parsePackIdFromTransactionNotes(order.transaction_notes);
       const { transaction_notes: _tn, ...rest } = order;
       return {
         ...rest,
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
         template_id: tid,
         template_name: tid ? (templateNameById[tid] ?? null) : null,
+        pack_id: pid,
+        pack_name: pid ? (packNameById[pid] ?? null) : null,
         analytics_app_version: null,
         analytics_os_name: null,
         analytics_os_version: null

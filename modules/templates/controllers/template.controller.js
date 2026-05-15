@@ -680,6 +680,22 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
 }
 
 
+const TEMPLATE_LIST_SORT_BY = [
+  'updated_at',
+  'created_at',
+  'template_name',
+  'template_code',
+  'credits',
+  'alacarte_price',
+  'status'
+];
+
+function parseTemplateListSort(query) {
+  const sortBy = TEMPLATE_LIST_SORT_BY.includes(query.sort_by) ? query.sort_by : 'updated_at';
+  const sortDir = query.sort_dir === 'asc' ? 'asc' : 'desc';
+  return { sort_by: sortBy, sort_dir: sortDir };
+}
+
 /**
  * @api {get} /templates List templates
  * @apiVersion 1.0.0
@@ -702,6 +718,9 @@ exports.listTemplates = async function (req, res) {
     const wf = req.query.template_workflow_type;
     const templateWorkflowType =
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
+    const ttf = req.query.template_type_filter;
+    const templateTypeFilter =
+      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : undefined;
 
     const ie = req.query.is_effects;
     let isEffectsFilter;
@@ -711,6 +730,7 @@ exports.listTemplates = async function (req, res) {
       isEffectsFilter = false;
     }
 
+    const listSort = parseTemplateListSort(req.query);
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
       status: req.query.status || undefined,
@@ -719,9 +739,9 @@ exports.listTemplates = async function (req, res) {
       platform: req.query.platform || undefined,
       billing,
       template_workflow_type: templateWorkflowType,
+      template_type_filter: templateTypeFilter,
       is_effects: isEffectsFilter,
-      sort_by: req.query.sort_by || undefined,
-      sort_dir: req.query.sort_dir || undefined,
+      ...listSort,
       ...(listSearch ? { q: listSearch } : {})
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
@@ -1351,6 +1371,10 @@ exports.searchTemplates = async function (req, res) {
     const wf = req.query.template_workflow_type;
     const template_workflow_type_param =
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : null;
+    const ttf = req.query.template_type_filter;
+    const templateTypeFilter =
+      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : null;
+    const listSort = parseTemplateListSort(req.query);
     const nameOnly =
       req.query.name_only === 'true' ||
       req.query.name_only === true ||
@@ -1366,11 +1390,10 @@ exports.searchTemplates = async function (req, res) {
       platform,
       billing,
       template_workflow_type_param,
-      {
-        nameOnly,
-        sortBy: req.query.sort_by,
-        sortDir: req.query.sort_dir
-      }
+      templateTypeFilter,
+      listSort.sort_by,
+      listSort.sort_dir,
+      { nameOnly }
     );
 
     // Batch fetch related data (no queries in loop); stitch in controller

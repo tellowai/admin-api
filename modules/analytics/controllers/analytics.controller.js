@@ -724,7 +724,7 @@ class AnalyticsController {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
 
-      // Convert client timezone dates to UTC for database queries
+      // Convert client timezone dates to UTC for database queries (MV fallback only)
       const utcFilters = TimezoneService.convertToUTC(
         queryParams.start_date,
         queryParams.end_date,
@@ -733,32 +733,31 @@ class AnalyticsController {
         timezone
       );
 
-      const filters = {
-        ...utcFilters,
-        plan_id: queryParams.plan_id,
-        plan_name: queryParams.plan_name,
-        plan_type: queryParams.plan_type,
-        payment_provider: queryParams.payment_provider,
-        currency: queryParams.currency,
-        user_id: queryParams.user_id
+      const additionalFilters = {};
+      if (queryParams.plan_id) additionalFilters.plan_id = queryParams.plan_id;
+      if (queryParams.plan_name) additionalFilters.plan_name = queryParams.plan_name;
+      if (queryParams.plan_type) additionalFilters.plan_type = queryParams.plan_type;
+      if (queryParams.payment_provider) additionalFilters.payment_provider = queryParams.payment_provider;
+      if (queryParams.currency) additionalFilters.currency = queryParams.currency;
+      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+
+      const clientWindow = {
+        clientTz: timezone,
+        calendarStart: TimezoneService.toCalendarYmd(queryParams.start_date),
+        calendarEnd: TimezoneService.toCalendarYmd(queryParams.end_date)
       };
 
-      let purchases;
-      if (queryParams.group_by) {
-        const additionalFilters = {};
-        if (queryParams.plan_id) additionalFilters.plan_id = queryParams.plan_id;
-        if (queryParams.plan_name) additionalFilters.plan_name = queryParams.plan_name;
-        if (queryParams.plan_type) additionalFilters.plan_type = queryParams.plan_type;
-        if (queryParams.payment_provider) additionalFilters.payment_provider = queryParams.payment_provider;
-        if (queryParams.currency) additionalFilters.currency = queryParams.currency;
-        if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
-        purchases = await AnalyticsService.queryMixedDateRangeGrouped('PURCHASES', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        purchases = await AnalyticsService.getPurchases(filters);
-      }
+      const purchases = await AnalyticsService.getPurchasesCommerceSeries(
+        utcFilters,
+        additionalFilters,
+        queryParams.group_by || null,
+        clientWindow
+      );
 
-      // Convert UTC results back to client timezone
-      const convertedResults = TimezoneService.convertFromUTC(purchases, timezone);
+      const useClientTzSeries = Boolean(clientWindow.calendarStart && clientWindow.calendarEnd);
+      const convertedResults = useClientTzSeries
+        ? purchases
+        : TimezoneService.convertFromUTC(purchases, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -787,16 +786,6 @@ class AnalyticsController {
         timezone
       );
 
-      const filters = {
-        ...utcFilters,
-        plan_id: queryParams.plan_id,
-        plan_name: queryParams.plan_name,
-        plan_type: queryParams.plan_type,
-        payment_provider: queryParams.payment_provider,
-        currency: queryParams.currency,
-        user_id: queryParams.user_id
-      };
-
       const additionalFilters = {};
       if (queryParams.plan_id) additionalFilters.plan_id = queryParams.plan_id;
       if (queryParams.plan_name) additionalFilters.plan_name = queryParams.plan_name;
@@ -805,10 +794,22 @@ class AnalyticsController {
       if (queryParams.currency) additionalFilters.currency = queryParams.currency;
       if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
 
-      const asOfUtcDatetime = `${utcFilters.end_date} ${utcFilters.end_time}`;
+      const clientWindow = {
+        clientTz: timezone,
+        calendarStart: TimezoneService.toCalendarYmd(queryParams.start_date),
+        calendarEnd: TimezoneService.toCalendarYmd(queryParams.end_date)
+      };
+      const useClientTz = Boolean(clientWindow.calendarStart && clientWindow.calendarEnd);
+      const asOfUtcDatetime = useClientTz
+        ? TimezoneService.utcRangeForClientCalendar(
+          clientWindow.calendarStart,
+          clientWindow.calendarEnd,
+          TimezoneService.normalizeTimezoneAlias(timezone)
+        ).rangeEndUtc
+        : `${utcFilters.end_date} ${utcFilters.end_time}`;
 
       const [totalPurchases, activeSubscriptionsCount] = await Promise.all([
-        AnalyticsService.getCountMixedDateRange('PURCHASES', utcFilters, additionalFilters),
+        AnalyticsService.getPurchasesCommerceTotalCount(utcFilters, additionalFilters, clientWindow),
         SubscriptionsAnalyticsModel.countRecurringEntitledAt(asOfUtcDatetime)
       ]);
 
@@ -865,10 +866,18 @@ class AnalyticsController {
         group_by: queryParams.group_by
       };
 
-      const revenue = await AnalyticsService.getRevenue(filters);
+      const clientWindow = {
+        clientTz: timezone,
+        calendarStart: TimezoneService.toCalendarYmd(queryParams.start_date),
+        calendarEnd: TimezoneService.toCalendarYmd(queryParams.end_date)
+      };
 
-      // Convert UTC results back to client timezone
-      const convertedResults = TimezoneService.convertFromUTC(revenue, timezone);
+      const revenue = await AnalyticsService.getRevenue(filters, clientWindow);
+
+      const useClientTzSeries = Boolean(clientWindow.calendarStart && clientWindow.calendarEnd);
+      const convertedResults = useClientTzSeries
+        ? revenue
+        : TimezoneService.convertFromUTC(revenue, timezone);
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -907,7 +916,13 @@ class AnalyticsController {
         user_id: queryParams.user_id
       };
 
-      const totalRevenue = await AnalyticsService.getRevenueSummary(filters);
+      const clientWindow = {
+        clientTz: timezone,
+        calendarStart: TimezoneService.toCalendarYmd(queryParams.start_date),
+        calendarEnd: TimezoneService.toCalendarYmd(queryParams.end_date)
+      };
+
+      const totalRevenue = await AnalyticsService.getRevenueSummary(filters, clientWindow);
 
       // Convert date range back to client timezone for response
       const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
@@ -1559,8 +1574,11 @@ class AnalyticsController {
 
   // =========================================================================
   // Payment failures analytics
-  // Backed by payment_failures_daily_stats (ClickHouse). See
-  // photobop-api/modules/payment/constants/payment.failure.constants.js for
+  // Primary charts use `analytics_events_raw` with client-calendar bounds +
+  // `toTimeZone(timestamp, tz)` bucketing (aligned with orders-funnel CH).
+  // MV (`payment_failures_daily_stats`) remains as fallback when calendar
+  // bounds cannot be derived from the query.
+  // See photobop-api/modules/payment/constants/payment.failure.constants.js for
   // enum semantics (failure_layer × failure_category × payment_gateway).
   // =========================================================================
 
@@ -1603,11 +1621,25 @@ class AnalyticsController {
     return { utcFilters, additional };
   }
 
+  /**
+   * Client calendar YMD + tz for raw `analytics_events_raw` payment-failure queries.
+   * Same inclusive UTC instant window as orders-funnel ClickHouse (`utcRangeForClientCalendar`).
+   */
+  static _paymentFailuresClientWindow(queryParams) {
+    const clientTz = queryParams.tz || TimezoneService.getDefaultTimezone();
+    return {
+      clientTz,
+      calendarStart: TimezoneService.toCalendarYmd(queryParams.start_date),
+      calendarEnd: TimezoneService.toCalendarYmd(queryParams.end_date)
+    };
+  }
+
   static async getPaymentFailuresSummary(req, res) {
     try {
       const q = req.validatedQuery;
       const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
-      const data = await AnalyticsService.getPaymentFailuresSummary(utcFilters, additional);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const data = await AnalyticsService.getPaymentFailuresSummary(utcFilters, additional, cw);
       return res.status(HTTP_STATUS_CODES.OK).json({ data });
     } catch (error) {
       logger.error('Error fetching payment failures summary:', { error: error.message, query: req.validatedQuery });
@@ -1619,7 +1651,17 @@ class AnalyticsController {
     try {
       const q = req.validatedQuery;
       const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
-      const data = await AnalyticsService.getPaymentFailuresDaily(utcFilters, additional, q.group_by || null);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const dailyGroupedOpts =
+        cw.calendarStart && cw.calendarEnd
+          ? { clientTz: cw.clientTz, calendarStart: cw.calendarStart, calendarEnd: cw.calendarEnd }
+          : null;
+      const data = await AnalyticsService.getPaymentFailuresDaily(
+        utcFilters,
+        additional,
+        q.group_by || null,
+        dailyGroupedOpts
+      );
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures daily:', { error: error.message, query: req.validatedQuery });
@@ -1633,7 +1675,8 @@ class AnalyticsController {
       const { utcFilters, additional } = AnalyticsController._buildPaymentFailuresFilterArgs(q);
       const groupBy = q.group_by || 'failure_category';
       const limit = q.limit || 20;
-      const data = await AnalyticsService.getPaymentFailuresBreakdown(utcFilters, additional, groupBy, limit);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const data = await AnalyticsService.getPaymentFailuresBreakdown(utcFilters, additional, groupBy, limit, cw);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures breakdown:', { error: error.message, query: req.validatedQuery });
@@ -1648,7 +1691,8 @@ class AnalyticsController {
       const rowBy = q.row_by || 'failure_layer';
       const colBy = q.col_by || 'failure_category';
       const limit = q.limit || 200;
-      const data = await AnalyticsService.getPaymentFailuresMatrix(utcFilters, additional, rowBy, colBy, limit);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const data = await AnalyticsService.getPaymentFailuresMatrix(utcFilters, additional, rowBy, colBy, limit, cw);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures matrix:', { error: error.message, query: req.validatedQuery });
@@ -1669,7 +1713,8 @@ class AnalyticsController {
       const limit = q.limit || 25;
       const offset = q.offset || 0;
       const search = typeof q.search === 'string' ? q.search : '';
-      const data = await AnalyticsService.getPaymentFailuresMessageGroups(utcFilters, additional, limit, search, offset);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const data = await AnalyticsService.getPaymentFailuresMessageGroups(utcFilters, additional, limit, search, offset, cw);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures message groups:', { error: error.message, query: req.validatedQuery });
@@ -1690,7 +1735,8 @@ class AnalyticsController {
       const limit = q.limit || 50;
       const offset = q.offset || 0;
       const search = typeof q.search === 'string' ? q.search : '';
-      const data = await AnalyticsService.getPaymentFailuresSamples(utcFilters, additional, limit, offset, search);
+      const cw = AnalyticsController._paymentFailuresClientWindow(q);
+      const data = await AnalyticsService.getPaymentFailuresSamples(utcFilters, additional, limit, offset, search, cw);
       return res.status(HTTP_STATUS_CODES.OK).json({ data: data || [] });
     } catch (error) {
       logger.error('Error fetching payment failures samples:', { error: error.message, query: req.validatedQuery });
@@ -1755,7 +1801,7 @@ class AnalyticsController {
   }
 
   /**
-   * GET /analytics/growth-metrics/overview — parallel hub/spoke reads, merged daily series.
+   * GET /analytics/growth-metrics/overview — daily series (installs, views, orders, ARPPU, average order value).
    */
   static async getGrowthMetricsOverview(req, res) {
     try {
