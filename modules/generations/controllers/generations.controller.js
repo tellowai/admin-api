@@ -158,6 +158,9 @@ exports.listGenerations = async function (req, res) {
         gen.template_id = parentGen.template_id;
         gen.media_type = parentGen.media_type;
         gen.created_at = parentGen.created_at; // use the true creation time of the generation
+        if (parentGen.entitlement_id != null && String(parentGen.entitlement_id).trim() !== '') {
+          gen.entitlement_id = parentGen.entitlement_id;
+        }
       }
     });
 
@@ -185,6 +188,24 @@ exports.listGenerations = async function (req, res) {
         templateMap[t.template_id] = t;
       });
     }
+
+    const mediaIdsForEntitlement = [...new Set(generations.map((g) => g.media_generation_id).filter(Boolean))];
+    const entitlementByMediaId = new Map();
+    if (mediaIdsForEntitlement.length > 0) {
+      const entRows = await generationsModel.getMediaGenerationEntitlementsByMediaIds(mediaIdsForEntitlement);
+      for (const row of entRows) {
+        if (row.media_generation_id != null && row.entitlement_id != null) {
+          entitlementByMediaId.set(row.media_generation_id, row.entitlement_id);
+        }
+      }
+    }
+
+    generations.forEach((gen) => {
+      const eid = entitlementByMediaId.get(gen.media_generation_id);
+      if (eid != null) {
+        gen.entitlement_id = eid;
+      }
+    });
 
     // Process presigned URLs & map related properties
     for (let gen of generations) {
