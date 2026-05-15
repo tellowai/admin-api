@@ -391,7 +391,9 @@ class AnalyticsController {
         cohort: queryParams.cohort,
         page: queryParams.page,
         limit: queryParams.limit,
-        sort: queryParams.sort || 'generations'
+        sort: queryParams.sort || 'generations',
+        sort_dir: queryParams.sort_dir,
+        template_id: queryParams.template_id
       });
       return res.status(HTTP_STATUS_CODES.OK).json(result);
     } catch (error) {
