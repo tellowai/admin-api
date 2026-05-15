@@ -12,13 +12,22 @@ exports.createPack = async function(packData) {
       featured_badge_title,
       featured_badge_icon,
       featured_badge_color,
+      explore_see_all_cta_style,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
       language_code,
       people_used_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
+
+  const ctaStyleRaw =
+    packData.explore_see_all_cta_style != null && String(packData.explore_see_all_cta_style).trim() !== ''
+      ? String(packData.explore_see_all_cta_style).trim().toLowerCase()
+      : 'gold_gradient';
+  const exploreSeeAllCtaStyle = ['gold_gradient', 'gold_flat', 'silver_gradient', 'silver_flat'].includes(ctaStyleRaw)
+    ? ctaStyleRaw
+    : 'gold_gradient';
   
   const values = [
     packId,
@@ -33,6 +42,7 @@ exports.createPack = async function(packData) {
     packData.featured_badge_color != null && String(packData.featured_badge_color).trim() !== ''
       ? String(packData.featured_badge_color).trim().slice(0, 16)
       : null,
+    exploreSeeAllCtaStyle,
     packData.thumbnail_cf_r2_key || null,
     packData.thumbnail_cf_r2_url || null,
     JSON.stringify(packData.additional_data || {}),
@@ -71,6 +81,7 @@ exports.getPack = async function(packId) {
       featured_badge_title,
       featured_badge_icon,
       featured_badge_color,
+      explore_see_all_cta_style,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,
@@ -99,6 +110,7 @@ exports.listPacks = async function(limit = 10, offset = 0) {
       featured_badge_title,
       featured_badge_icon,
       featured_badge_color,
+      explore_see_all_cta_style,
       thumbnail_cf_r2_key,
       thumbnail_cf_r2_url,
       additional_data,

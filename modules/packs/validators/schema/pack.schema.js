@@ -11,12 +11,15 @@ const HEX_COLOR = Joi.string()
   .pattern(/^#([0-9A-Fa-f]{6})$/)
   .messages({ 'string.pattern.base': 'Must be a hex color like #D4A574' });
 
+const EXPLORE_SEE_ALL_CTA_STYLES = ['gold_gradient', 'gold_flat', 'silver_gradient', 'silver_flat'];
+
 const createPackSchema = Joi.object().keys({
   pack_name: Joi.string().max(255).required(),
   description: Joi.string().max(20000).allow(null, ''),
   featured_badge_title: Joi.string().max(160).allow(null, ''),
   featured_badge_icon: Joi.string().max(128).allow(null, ''),
   featured_badge_color: HEX_COLOR,
+  explore_see_all_cta_style: Joi.string().valid(...EXPLORE_SEE_ALL_CTA_STYLES).optional(),
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).uri().allow(null),
   additional_data: Joi.object().allow(null),
@@ -30,6 +33,7 @@ const updatePackSchema = Joi.object().keys({
   featured_badge_title: Joi.string().max(160).allow(null, ''),
   featured_badge_icon: Joi.string().max(128).allow(null, ''),
   featured_badge_color: HEX_COLOR,
+  explore_see_all_cta_style: Joi.string().valid(...EXPLORE_SEE_ALL_CTA_STYLES).optional(),
   thumbnail_cf_r2_key: Joi.string().max(512).allow(null),
   thumbnail_cf_r2_url: Joi.string().max(1000).uri().allow(null),
   additional_data: Joi.object().allow(null),
