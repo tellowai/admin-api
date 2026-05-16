@@ -13,6 +13,7 @@ const CLIENT_PLATFORM_COL = 'o.client_platform';
 
 /** Canonical DB value (ENUM); avoids LOWER(column) which prevents index use on payment_gateway. */
 const GATEWAY_GOOGLE_PLAY = 'google_play';
+const GATEWAY_APPLE_IAP = 'apple_iap';
 
 /**
  * Single-table: payment plan ids that match the admin "product type" bucket (for filtering orders by payment_plan_id).
@@ -502,6 +503,57 @@ exports.findGooglePlayOrdersMatchingOrphans = async function ({ pgOrderIds, purc
   const whereOr = parts.join(' OR ');
   const query = `
     ${ORDERS_ADMIN_SELECT}
+    WHERE o.payment_gateway = ?
+      AND (${whereOr})
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+/**
+ * Internal orders that may match Apple ASN2 / verify orphan rows.
+ * Match strategy (in priority order, but all OR'd in SQL — controller picks best per orphan row):
+ *   - by Apple transactionId stored on `pg_payment_id` (set by verifyApplePayment when it succeeded)
+ *   - by `apple_app_account_token` (UUID we generated at order creation; only true Apple-side link for deferred fulfillments)
+ *
+ * Selecting `apple_app_account_token` so the controller can index matches client-side.
+ */
+exports.findAppleOrdersMatchingOrphans = async function ({ transactionIds, appAccountTokens }) {
+  const txIds = [...new Set((transactionIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+  const tokens = [...new Set((appAccountTokens || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+  if (txIds.length === 0 && tokens.length === 0) return [];
+
+  const parts = [];
+  const params = [GATEWAY_APPLE_IAP];
+  if (txIds.length > 0) {
+    parts.push(`o.pg_payment_id IN (${txIds.map(() => '?').join(',')})`);
+    params.push(...txIds);
+  }
+  if (tokens.length > 0) {
+    parts.push(`o.apple_app_account_token IN (${tokens.map(() => '?').join(',')})`);
+    params.push(...tokens);
+  }
+  const whereOr = parts.join(' OR ');
+  const query = `
+    SELECT
+      o.order_id,
+      o.user_id,
+      o.payment_gateway,
+      o.client_platform,
+      o.pg_order_id,
+      o.quantity,
+      o.pg_payment_id,
+      o.apple_app_account_token,
+      o.payment_plan_id,
+      o.amount_paid,
+      o.currency,
+      o.payment_method,
+      o.status,
+      o.transaction_notes,
+      o.created_at,
+      o.completed_at,
+      o.failed_at,
+      o.refunded_at
+    FROM orders o
     WHERE o.payment_gateway = ?
       AND (${whereOr})
   `;
