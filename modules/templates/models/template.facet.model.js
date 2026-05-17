@@ -2,6 +2,16 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+function parseAdditionalData(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * List all facets with their associated tags from the database
  */
@@ -51,15 +61,22 @@ exports.getTagsForFacet = async function(facetId) {
       tag_description,
       facet_id,
       is_active,
+      additional_data,
       created_at,
       updated_at
     FROM template_tag_definitions
     WHERE facet_id = ?
     AND archived_at IS NULL
-    ORDER BY tag_name ASC
+    ORDER BY
+      COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(additional_data, '$.sort')) AS UNSIGNED), 9999) ASC,
+      tag_name ASC
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(query, [facetId]);
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [facetId]);
+  return rows.map((row) => ({
+    ...row,
+    additional_data: parseAdditionalData(row.additional_data)
+  }));
 };
 
 /**
