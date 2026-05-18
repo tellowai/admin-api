@@ -7,6 +7,43 @@ const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const StorageFactory = require('../../os2/providers/storage.factory');
+const config = require('../../../config/config');
+
+/**
+ * Resolve full GET URL for niche thumbnail (public CDN, ephemeral presign, or private presign).
+ */
+async function resolveThumbUrl(bucket, assetKey) {
+  if (!bucket || !assetKey) {
+    return null;
+  }
+  const key = String(assetKey).replace(/^\//, '');
+  if (key.startsWith('http://') || key.startsWith('https://')) {
+    return key;
+  }
+  try {
+    const storage = StorageFactory.getProvider();
+    const ephemeralName = config.os2?.r2?.ephemeral?.bucket;
+    if (ephemeralName && bucket === ephemeralName) {
+      return await storage.generateEphemeralPresignedDownloadUrl(key);
+    }
+    const publicCfg = config.os2?.r2?.public || {};
+    const publicBase = String(publicCfg.bucketUrl || '').replace(/\/$/, '');
+    const publicBucketName = publicCfg.bucket;
+    const isPublicBucket =
+      bucket === 'public' || (publicBucketName && bucket === publicBucketName);
+    if (isPublicBucket) {
+      if (!publicBase) {
+        return null;
+      }
+      return `${publicBase}/${key}`;
+    }
+    return await storage.generatePresignedDownloadUrl(key);
+  } catch (error) {
+    logger.error('Error resolving niche thumb URL:', { error: error.message, bucket, assetKey });
+    return null;
+  }
+}
 
 /**
  * @api {get} /niches List niches
@@ -23,8 +60,18 @@ exports.listNiches = async function(req, res) {
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     const niches = await NicheModel.listNiches(paginationParams);
 
+    const data = await Promise.all(
+      niches.map(async (row) => {
+        const thumb_image_url = await resolveThumbUrl(
+          row.thumb_image_storage_bucket,
+          row.thumb_image_object_key
+        );
+        return { ...row, thumb_image_url };
+      })
+    );
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: niches
+      data
     });
 
   } catch (error) {
@@ -106,8 +153,13 @@ exports.getNicheById = async function(req, res) {
       });
     }
 
+    const thumb_image_url = await resolveThumbUrl(
+      niche.thumb_image_storage_bucket,
+      niche.thumb_image_object_key
+    );
+
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: niche
+      data: { ...niche, thumb_image_url }
     });
 
   } catch (error) {

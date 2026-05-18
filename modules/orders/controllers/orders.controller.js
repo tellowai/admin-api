@@ -1,12 +1,13 @@
 'use strict';
 
 const OrdersModel = require('../models/orders.model');
-const GooglePlayOrphanModel = require('../models/google-play-orphan.model');
+const PaymentOrphanModel = require('../models/payment-orphan.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
 const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
 const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
+const AppleOrphanDecoder = require('../services/apple-orphan-decoder.service');
 
 function normPlanField(v) {
   if (v == null || v === '') return '';
@@ -362,10 +363,251 @@ exports.listAdminOrders = async function (req, res) {
 };
 
 /**
- * GET /admin/orders/play-store — Orphan reconciliation queue (photobop-api writes `google_play_orphan_events`).
- * For each row: batch `orders.get` first when `play_order_id` exists, then stitch a matching internal order if any (by `pg_order_id` or `pg_payment_id` = purchase token).
+ * Common orphan row → display dictionary. Whichever gateway we are listing, the admin UI gets the same shape.
  */
-exports.listAdminPlayStoreOrders = async function (req, res) {
+function _baseOrphanMeta(orph) {
+  return {
+    id: orph.id,
+    gateway: orph.gateway,
+    purchase_token: orph.purchase_token,
+    source: orph.source,
+    reason_code: orph.reason_code,
+    user_id_hint: orph.user_id_hint,
+    requested_internal_order_id: orph.requested_internal_order_id,
+    notification_type: orph.notification_type,
+    product_id: orph.product_id,
+    app_version: orph.app_version,
+    device_os: orph.device_os,
+    device_os_version: orph.device_os_version,
+    device_brand: orph.device_brand,
+    device_model: orph.device_model,
+    first_seen_at: orph.first_seen_at,
+    last_seen_at: orph.last_seen_at,
+    payload_json: orph.payload_json
+  };
+}
+
+/**
+ * Build the Google-Play-specific orphan view (calls Google to enrich, links to internal orders by pg_order_id / pg_payment_id).
+ */
+async function _buildGooglePlayOrphanView({ orphanRows }) {
+  const pgIds = orphanRows
+    .map((r) => r.play_order_id)
+    .filter((id) => id != null && String(id).trim() !== '')
+    .map((id) => String(id).trim());
+
+  let playMeta = { ordersById: {}, failures: [], skipped: false };
+  try {
+    playMeta = await GooglePlayOrderSyncService.batchGetOrdersByPlayOrderIds(pgIds);
+  } catch (e) {
+    if (e && e.code === 'GOOGLE_NOT_CONFIGURED') {
+      playMeta = { ordersById: {}, failures: [], skipped: true };
+    } else {
+      console.error('listAdminOrphanedOrders[google_play]: Play batch lookup failed', e.message || e);
+      playMeta = { ordersById: {}, failures: [], skipped: true };
+    }
+  }
+
+  const matchRows = await OrdersModel.findGooglePlayOrdersMatchingOrphans({
+    pgOrderIds: orphanRows.map((r) => r.play_order_id),
+    purchaseTokens: orphanRows.map((r) => r.purchase_token)
+  });
+
+  const { planById, userById } = await stitchPlansAndUsersForRows(matchRows);
+  const [templateNameById, packNameById] = await Promise.all([
+    orderTemplateStitch.buildTemplateNameByIdMap(matchRows),
+    orderTemplateStitch.buildPackNameByIdMap(matchRows)
+  ]);
+  const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(matchRows);
+
+  const byPg = Object.create(null);
+  const byTok = Object.create(null);
+  for (const r of matchRows) {
+    if (r.pg_order_id != null && String(r.pg_order_id).trim() !== '') {
+      byPg[String(r.pg_order_id).trim()] = r;
+    }
+    if (r.pg_payment_id != null && String(r.pg_payment_id).trim() !== '') {
+      byTok[String(r.pg_payment_id).trim()] = r;
+    }
+  }
+
+  const failureByPg = new Map((playMeta.failures || []).map((f) => [String(f.play_order_id), f]));
+
+  const ordersOut = orphanRows.map((orph) => {
+    const pid = orph.play_order_id != null ? String(orph.play_order_id).trim() : '';
+    const tok = orph.purchase_token != null ? String(orph.purchase_token).trim() : '';
+    const rawOrder = (pid && byPg[pid]) || (tok && byTok[tok]) || null;
+
+    const internal = rawOrder
+      ? orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
+          mapRowToAdminOrder(rawOrder, planById, userById, templateNameById, packNameById),
+          ctxMap
+        )
+      : null;
+
+    const ps = pid && playMeta.ordersById[pid] ? playMeta.ordersById[pid] : null;
+    const fail = pid ? failureByPg.get(pid) : null;
+
+    let play_fetch_error = null;
+    if (!ps) {
+      if (fail && fail.message) play_fetch_error = fail.message;
+      else if (!playMeta.skipped) {
+        play_fetch_error = pid ? 'Play order not returned' : 'No Play order id on orphan row';
+      }
+    }
+
+    return {
+      play_store_order: ps,
+      internal_order: internal,
+      play_fetch_error,
+      orphan_meta: _baseOrphanMeta(orph)
+    };
+  });
+
+  ordersOut.sort((a, b) => {
+    const ta =
+      Date.parse(a.play_store_order?.createTime || '') ||
+      Date.parse(a.orphan_meta?.last_seen_at || '') ||
+      0;
+    const tb =
+      Date.parse(b.play_store_order?.createTime || '') ||
+      Date.parse(b.orphan_meta?.last_seen_at || '') ||
+      0;
+    return tb - ta;
+  });
+
+  return {
+    ordersOut,
+    extra: { play_metadata_skipped: playMeta.skipped }
+  };
+}
+
+/**
+ * Build the Apple-specific orphan view. We do NOT call Apple's API here (would need a separate service-account / JWT).
+ * Instead we decode the `signed_transaction_info` JWS payload that photobop-api already stored at write time — that
+ * payload IS Apple-signed (we just don't re-verify the signature on this read path; verification happens at write time).
+ * Link to internal orders by Apple transactionId (pg_payment_id) and/or apple_app_account_token.
+ */
+async function _buildAppleOrphanView({ orphanRows }) {
+  const decodedById = Object.create(null);
+  for (const r of orphanRows) {
+    const decoded = AppleOrphanDecoder.decodeSignedTransactionInfo(r.signed_transaction_info);
+    if (decoded) decodedById[r.id] = decoded;
+  }
+
+  const transactionIds = orphanRows
+    .map((r) => (r.purchase_token != null ? String(r.purchase_token).trim() : ''))
+    .filter(Boolean);
+  const appAccountTokens = orphanRows
+    .map((r) => (r.apple_app_account_token != null ? String(r.apple_app_account_token).trim() : ''))
+    .filter(Boolean);
+
+  const matchRows = await OrdersModel.findAppleOrdersMatchingOrphans({
+    transactionIds,
+    appAccountTokens
+  });
+
+  const { planById, userById } = await stitchPlansAndUsersForRows(matchRows);
+  const [templateNameById, packNameById] = await Promise.all([
+    orderTemplateStitch.buildTemplateNameByIdMap(matchRows),
+    orderTemplateStitch.buildPackNameByIdMap(matchRows)
+  ]);
+  const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(matchRows);
+
+  const byTxId = Object.create(null);
+  const byAppAccountToken = Object.create(null);
+  for (const r of matchRows) {
+    if (r.pg_payment_id != null && String(r.pg_payment_id).trim() !== '') {
+      byTxId[String(r.pg_payment_id).trim()] = r;
+    }
+    if (r.apple_app_account_token != null && String(r.apple_app_account_token).trim() !== '') {
+      byAppAccountToken[String(r.apple_app_account_token).trim()] = r;
+    }
+  }
+
+  const ordersOut = orphanRows.map((orph) => {
+    const txId = orph.purchase_token != null ? String(orph.purchase_token).trim() : '';
+    const aat = orph.apple_app_account_token != null ? String(orph.apple_app_account_token).trim() : '';
+    const rawOrder = (txId && byTxId[txId]) || (aat && byAppAccountToken[aat]) || null;
+
+    const internal = rawOrder
+      ? orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
+          mapRowToAdminOrder(rawOrder, planById, userById, templateNameById, packNameById),
+          ctxMap
+        )
+      : null;
+
+    const decoded = decodedById[orph.id] || null;
+    // Mirror the shape of `play_store_order` so the UI can render with the same component skeleton.
+    // Apple JWS timestamps are epoch-ms numbers; normalise to ISO so the admin-ui (which uses parseOrderDate(s))
+    // can sort/format them without per-field special-cases.
+    const _epochToIso = (n) => {
+      if (n == null) return null;
+      const num = Number(n);
+      if (!Number.isFinite(num)) return null;
+      const d = new Date(num);
+      return Number.isNaN(d.getTime()) ? null : d.toISOString();
+    };
+    const apple_store_transaction = decoded
+      ? {
+          transactionId: decoded.transactionId || null,
+          originalTransactionId: decoded.originalTransactionId || null,
+          bundleId: decoded.bundleId || null,
+          productId: decoded.productId || null,
+          type: decoded.type || null,
+          inAppOwnershipType: decoded.inAppOwnershipType || null,
+          environment: decoded.environment || null,
+          purchaseDate: _epochToIso(decoded.purchaseDate),
+          originalPurchaseDate: _epochToIso(decoded.originalPurchaseDate),
+          expiresDate: _epochToIso(decoded.expiresDate),
+          revocationDate: _epochToIso(decoded.revocationDate),
+          revocationReason: decoded.revocationReason || null,
+          quantity: decoded.quantity || null,
+          storefront: decoded.storefront || null,
+          price: decoded.price || null,
+          currency: decoded.currency || null,
+          appAccountToken: decoded.appAccountToken || orph.apple_app_account_token || null
+        }
+      : null;
+
+    return {
+      apple_store_transaction,
+      internal_order: internal,
+      orphan_meta: {
+        ..._baseOrphanMeta(orph),
+        apple_app_account_token: orph.apple_app_account_token,
+        // Don't echo the raw JWS to the admin payload — too noisy. Decoded fields above are what reviewers need.
+        signed_transaction_info_present: !!orph.signed_transaction_info
+      }
+    };
+  });
+
+  ordersOut.sort((a, b) => {
+    const ta =
+      Date.parse(a.apple_store_transaction?.purchaseDate || '') ||
+      Date.parse(a.orphan_meta?.last_seen_at || '') ||
+      0;
+    const tb =
+      Date.parse(b.apple_store_transaction?.purchaseDate || '') ||
+      Date.parse(b.orphan_meta?.last_seen_at || '') ||
+      0;
+    return tb - ta;
+  });
+
+  return { ordersOut, extra: {} };
+}
+
+/**
+ * GET /admin/orders/orphans?gateway=google_play|apple_iap
+ * Unified orphan reconciliation queue. `gateway` is required; omit only via the legacy /play-store alias.
+ */
+exports.listAdminOrphanedOrders = async function (req, res) {
+  const SUPPORTED = new Set(['google_play', 'apple_iap']);
+  const gateway = req.query.gateway ? String(req.query.gateway).trim().toLowerCase() : '';
+  if (!SUPPORTED.has(gateway)) {
+    return res.status(400).json({ message: 'gateway must be one of: google_play, apple_iap' });
+  }
+
   try {
     const limitRaw = parseInt(req.query.limit, 10);
     const pageRaw = parseInt(req.query.page, 10);
@@ -374,131 +616,39 @@ exports.listAdminPlayStoreOrders = async function (req, res) {
     const offset = (page - 1) * limit;
 
     const [total, orphanRows] = await Promise.all([
-      GooglePlayOrphanModel.countOrphansAdmin(),
-      GooglePlayOrphanModel.listOrphansAdmin({ limit, offset })
+      PaymentOrphanModel.countOrphansAdmin({ gateway }),
+      PaymentOrphanModel.listOrphansAdmin({ gateway, limit, offset })
     ]);
 
-    const pgIds = orphanRows
-      .map((r) => r.play_order_id)
-      .filter((id) => id != null && String(id).trim() !== '')
-      .map((id) => String(id).trim());
-
-    let playMeta = { ordersById: {}, failures: [], skipped: false };
-    try {
-      playMeta = await GooglePlayOrderSyncService.batchGetOrdersByPlayOrderIds(pgIds);
-    } catch (e) {
-      if (e && e.code === 'GOOGLE_NOT_CONFIGURED') {
-        playMeta = { ordersById: {}, failures: [], skipped: true };
-      } else {
-        console.error('listAdminPlayStoreOrders: Play batch lookup failed', e.message || e);
-        playMeta = { ordersById: {}, failures: [], skipped: true };
-      }
-    }
-
-    const matchRows = await OrdersModel.findGooglePlayOrdersMatchingOrphans({
-      pgOrderIds: orphanRows.map((r) => r.play_order_id),
-      purchaseTokens: orphanRows.map((r) => r.purchase_token)
-    });
-
-    const { planById, userById } = await stitchPlansAndUsersForRows(matchRows);
-    const [templateNameById, packNameById] = await Promise.all([
-      orderTemplateStitch.buildTemplateNameByIdMap(matchRows),
-      orderTemplateStitch.buildPackNameByIdMap(matchRows)
-    ]);
-    const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(matchRows);
-
-    const byPg = Object.create(null);
-    const byTok = Object.create(null);
-    for (const r of matchRows) {
-      if (r.pg_order_id != null && String(r.pg_order_id).trim() !== '') {
-        byPg[String(r.pg_order_id).trim()] = r;
-      }
-      if (r.pg_payment_id != null && String(r.pg_payment_id).trim() !== '') {
-        byTok[String(r.pg_payment_id).trim()] = r;
-      }
-    }
-
-    const failureByPg = new Map((playMeta.failures || []).map((f) => [String(f.play_order_id), f]));
-
-    let ordersOut = orphanRows.map((orph) => {
-      const pid = orph.play_order_id != null ? String(orph.play_order_id).trim() : '';
-      const tok = orph.purchase_token != null ? String(orph.purchase_token).trim() : '';
-      const rawOrder = (pid && byPg[pid]) || (tok && byTok[tok]) || null;
-
-      const internal = rawOrder
-        ? orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(
-            mapRowToAdminOrder(rawOrder, planById, userById, templateNameById, packNameById),
-            ctxMap
-          )
-        : null;
-
-      const ps = pid && playMeta.ordersById[pid] ? playMeta.ordersById[pid] : null;
-      const fail = pid ? failureByPg.get(pid) : null;
-
-      const orphan_meta = {
-        id: orph.id,
-        purchase_token: orph.purchase_token,
-        source: orph.source,
-        reason_code: orph.reason_code,
-        user_id_hint: orph.user_id_hint,
-        requested_internal_order_id: orph.requested_internal_order_id,
-        notification_type: orph.notification_type,
-        product_id: orph.product_id,
-        app_version: orph.app_version,
-        device_os: orph.device_os,
-        device_os_version: orph.device_os_version,
-        device_brand: orph.device_brand,
-        device_model: orph.device_model,
-        first_seen_at: orph.first_seen_at,
-        last_seen_at: orph.last_seen_at,
-        payload_json: orph.payload_json
-      };
-
-      let play_fetch_error = null;
-      if (!ps) {
-        if (fail && fail.message) play_fetch_error = fail.message;
-        else if (!playMeta.skipped) {
-          play_fetch_error = pid ? 'Play order not returned' : 'No Play order id on orphan row';
-        }
-      }
-
-      return {
-        play_store_order: ps,
-        internal_order: internal,
-        play_fetch_error,
-        orphan_meta
-      };
-    });
-
-    ordersOut.sort((a, b) => {
-      const ta =
-        Date.parse(a.play_store_order?.createTime || '') ||
-        Date.parse(a.orphan_meta?.last_seen_at || '') ||
-        0;
-      const tb =
-        Date.parse(b.play_store_order?.createTime || '') ||
-        Date.parse(b.orphan_meta?.last_seen_at || '') ||
-        0;
-      return tb - ta;
-    });
+    const view = gateway === 'google_play'
+      ? await _buildGooglePlayOrphanView({ orphanRows })
+      : await _buildAppleOrphanView({ orphanRows });
 
     return res.status(200).json({
       data: {
-        orders: ordersOut,
+        orders: view.ordersOut,
         page,
         limit,
         total,
         has_more: offset + orphanRows.length < total,
-        play_metadata_skipped: playMeta.skipped,
-        list_kind: 'orphan_queue'
+        gateway,
+        list_kind: 'orphan_queue',
+        ...view.extra
       }
     });
   } catch (err) {
-    console.error('listAdminPlayStoreOrders error:', err);
-    return res.status(500).json({
-      message: 'Failed to list Play Store orders'
-    });
+    console.error('listAdminOrphanedOrders error:', { gateway, error: err && err.message ? err.message : err });
+    return res.status(500).json({ message: 'Failed to list orphaned orders' });
   }
+};
+
+/**
+ * Legacy alias for GET /admin/orders/play-store. Routes-old + admin UI still call this URL; we keep it working
+ * by forcing gateway=google_play. Remove this once the admin UI fully cuts over to /admin/orders/orphans.
+ */
+exports.listAdminPlayStoreOrders = async function (req, res) {
+  req.query.gateway = 'google_play';
+  return exports.listAdminOrphanedOrders(req, res);
 };
 
 /**

@@ -52,6 +52,11 @@ module.exports = function (app) {
     .route('/admin/orders/play-store')
     .get(AuthMiddleware.isAdminUser, ordersController.listAdminPlayStoreOrders);
 
+  // Unified orphan reconciliation queue (preferred). Required `?gateway=google_play|apple_iap`.
+  app
+    .route('/admin/orders/orphans')
+    .get(AuthMiddleware.isAdminUser, ordersController.listAdminOrphanedOrders);
+
   app
     .route('/admin/orders/:orderId/google-play/preview-from-console')
     .post(AuthMiddleware.isAdminUser, ordersController.previewGooglePlayFromConsole);

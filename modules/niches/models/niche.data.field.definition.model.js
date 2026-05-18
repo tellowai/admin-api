@@ -2,6 +2,33 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+/**
+ * Normalize additional_data for MySQL JSON column (screen_heading, screen_subheading).
+ * @param {unknown} data
+ * @returns {string|null}
+ */
+function serializeAdditionalDataForDb(data) {
+  if (data == null) return null;
+  if (typeof data === 'string') {
+    const t = data.trim();
+    if (!t) return null;
+    try {
+      return serializeAdditionalDataForDb(JSON.parse(t));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof data !== 'object' || Array.isArray(data)) return null;
+  const out = {};
+  if (data.screen_heading != null && String(data.screen_heading).trim()) {
+    out.screen_heading = String(data.screen_heading).trim().slice(0, 200);
+  }
+  if (data.screen_subheading != null && String(data.screen_subheading).trim()) {
+    out.screen_subheading = String(data.screen_subheading).trim().slice(0, 500);
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
 exports.listNicheDataFieldDefinitions = async function(nicheId, pagination) {
   const query = `
     SELECT 
@@ -12,6 +39,8 @@ exports.listNicheDataFieldDefinitions = async function(nicheId, pagination) {
       field_data_type,
       is_visible_in_first_time_flow,
       display_order,
+      additional_data,
+      placeholder_text,
       created_at,
       updated_at
     FROM niche_data_field_definitions
@@ -37,6 +66,8 @@ exports.getNicheDataFieldDefinitionById = async function(ndfdId) {
       field_data_type,
       is_visible_in_first_time_flow,
       display_order,
+      additional_data,
+      placeholder_text,
       created_at,
       updated_at
     FROM niche_data_field_definitions
@@ -58,6 +89,8 @@ exports.getNicheDataFieldDefinitionsByNicheId = async function(nicheId) {
       field_data_type,
       is_visible_in_first_time_flow,
       display_order,
+      additional_data,
+      placeholder_text,
       created_at,
       updated_at
     FROM niche_data_field_definitions
@@ -74,9 +107,9 @@ exports.bulkCreateNicheDataFieldDefinitions = async function(fieldsData) {
     return { affectedRows: 0 };
   }
 
-  const fields = ['niche_id', 'field_code', 'field_label', 'field_data_type', 'is_visible_in_first_time_flow', 'display_order'];
   const values = [];
   const placeholders = [];
+  const rowPlaceholder = '(?, ?, ?, ?, ?, ?, ?, ?)';
 
   fieldsData.forEach(fieldData => {
     const rowValues = [
@@ -85,19 +118,25 @@ exports.bulkCreateNicheDataFieldDefinitions = async function(fieldsData) {
       fieldData.field_label,
       fieldData.field_data_type,
       fieldData.is_visible_in_first_time_flow !== undefined ? fieldData.is_visible_in_first_time_flow : 0,
-      fieldData.display_order || null
+      fieldData.display_order || null,
+      fieldData.placeholder_text != null && String(fieldData.placeholder_text).trim() !== ''
+        ? String(fieldData.placeholder_text).trim().slice(0, 500)
+        : null,
+      serializeAdditionalDataForDb(fieldData.additional_data)
     ];
     values.push(...rowValues);
-    placeholders.push(`(${fields.map(() => '?').join(', ')})`);
+    placeholders.push(rowPlaceholder);
   });
 
   const insertQuery = `
     INSERT INTO niche_data_field_definitions (
-      niche_id, field_code, field_label, field_data_type, is_visible_in_first_time_flow, display_order
+      niche_id, field_code, field_label, field_data_type, is_visible_in_first_time_flow, display_order, placeholder_text, additional_data
     ) VALUES ${placeholders.join(', ')}
     ON DUPLICATE KEY UPDATE
       field_label = VALUES(field_label),
       display_order = VALUES(display_order),
+      placeholder_text = VALUES(placeholder_text),
+      additional_data = VALUES(additional_data),
       archived_at = NULL
   `;
 
@@ -114,7 +153,7 @@ exports.getByNicheIdAndFieldCodesInOrder = async function(nicheId, fieldCodes) {
   const placeholders = fieldCodes.map(() => '?').join(', ');
   const query = `
     SELECT ndfd_id, niche_id, field_code, field_label, field_data_type,
-           is_visible_in_first_time_flow, display_order, created_at, updated_at
+           is_visible_in_first_time_flow, display_order, additional_data, placeholder_text, created_at, updated_at
     FROM niche_data_field_definitions
     WHERE niche_id = ? AND field_code IN (${placeholders}) AND archived_at IS NULL
     ORDER BY FIELD(field_code, ${placeholders})
@@ -131,9 +170,20 @@ exports.bulkUpdateNicheDataFieldDefinitions = async function(fieldsData) {
   const validRows = fieldsData.filter(f => f && f.ndfd_id != null);
   if (validRows.length === 0) return 0;
 
-  const updatableColumns = ['field_label', 'field_data_type', 'is_visible_in_first_time_flow', 'display_order'];
-  const columnsToUpdate = updatableColumns.filter(col =>
-    validRows.some(row => row[col] !== undefined && row[col] !== null)
+  const updatableColumns = [
+    'field_label',
+    'field_data_type',
+    'is_visible_in_first_time_flow',
+    'display_order',
+    'placeholder_text',
+    'additional_data'
+  ];
+  const columnsToUpdate = updatableColumns.filter((col) =>
+    validRows.some((row) => {
+      if (row[col] === undefined) return false;
+      if (col === 'placeholder_text' || col === 'additional_data') return true;
+      return row[col] !== null;
+    })
   );
   if (columnsToUpdate.length === 0) {
     const idPlaceholders = validRows.map(() => '?').join(', ');
@@ -154,9 +204,16 @@ exports.bulkUpdateNicheDataFieldDefinitions = async function(fieldsData) {
   setParts.push('updated_at = NOW()');
 
   const values = [];
-  columnsToUpdate.forEach(col => {
-    validRows.forEach(r => {
-      values.push(r.ndfd_id, r[col]);
+  columnsToUpdate.forEach((col) => {
+    validRows.forEach((r) => {
+      let v = r[col];
+      if (col === 'additional_data') {
+        v = serializeAdditionalDataForDb(r.additional_data);
+      } else if (col === 'placeholder_text' && v != null) {
+        v = String(v).trim().slice(0, 500);
+        v = v === '' ? null : v;
+      }
+      values.push(r.ndfd_id, v);
     });
   });
   const idPlaceholders = validRows.map(() => '?').join(', ');
@@ -244,6 +301,8 @@ exports.getNicheDataFieldDefinitionsByIds = async function(ndfdIds) {
       field_data_type,
       is_visible_in_first_time_flow,
       display_order,
+      additional_data,
+      placeholder_text,
       created_at,
       updated_at
     FROM niche_data_field_definitions

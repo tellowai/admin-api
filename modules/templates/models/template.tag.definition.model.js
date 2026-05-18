@@ -2,6 +2,24 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+function parseAdditionalData(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+function mapTagRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    additional_data: parseAdditionalData(row.additional_data)
+  };
+}
+
 exports.listAllTemplateTagDefinitions = async function() {
   const query = `
     SELECT 
@@ -11,6 +29,7 @@ exports.listAllTemplateTagDefinitions = async function() {
       tag_description,
       facet_id,
       is_active,
+      additional_data,
       created_at,
       updated_at
     FROM template_tag_definitions
@@ -30,6 +49,7 @@ exports.getTemplateTagDefinitionById = async function(tagId) {
       tag_description,
       facet_id,
       is_active,
+      additional_data,
       created_at,
       updated_at
     FROM template_tag_definitions
@@ -38,7 +58,7 @@ exports.getTemplateTagDefinitionById = async function(tagId) {
   `;
 
   const result = await mysqlQueryRunner.runQueryInSlave(query, [tagId]);
-  return result.length > 0 ? result[0] : null;
+  return result.length > 0 ? mapTagRow(result[0]) : null;
 };
 
 exports.getTemplateTagDefinitionByCode = async function(tagCode) {
@@ -68,8 +88,9 @@ exports.createTemplateTagDefinition = async function(tagData) {
       tag_code,
       tag_description,
       facet_id,
-      is_active
-    ) VALUES (?, ?, ?, ?, ?)
+      is_active,
+      additional_data
+    ) VALUES (?, ?, ?, ?, ?, ?)
   `;
 
   const queryParams = [
@@ -77,7 +98,8 @@ exports.createTemplateTagDefinition = async function(tagData) {
     tagData.tag_code,
     tagData.tag_description || null,
     tagData.facet_id,
-    tagData.is_active !== undefined ? tagData.is_active : 1
+    tagData.is_active !== undefined ? tagData.is_active : 1,
+    tagData.additional_data != null ? JSON.stringify(tagData.additional_data) : null
   ];
 
   const result = await mysqlQueryRunner.runQueryInMaster(query, queryParams);
@@ -192,6 +214,7 @@ exports.listTemplateTagDefinitionsWithPagination = async function(pagination) {
       tag_description,
       facet_id,
       is_active,
+      additional_data,
       created_at,
       updated_at
     FROM template_tag_definitions
@@ -200,10 +223,11 @@ exports.listTemplateTagDefinitionsWithPagination = async function(pagination) {
     LIMIT ? OFFSET ?
   `;
 
-  return await mysqlQueryRunner.runQueryInSlave(
+  const rows = await mysqlQueryRunner.runQueryInSlave(
     query, 
     [pagination.limit, pagination.offset]
   );
+  return rows.map(mapTagRow);
 };
 
 exports.updateTemplateTagDefinition = async function(tagId, tagData) {
@@ -214,7 +238,9 @@ exports.updateTemplateTagDefinition = async function(tagId, tagData) {
   Object.entries(tagData).forEach(([key, value]) => {
     if (value !== undefined) {
       setClause.push(`${key} = ?`);
-      values.push(value);
+      values.push(
+        key === 'additional_data' && value != null ? JSON.stringify(value) : value
+      );
     }
   });
 

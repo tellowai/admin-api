@@ -5,12 +5,20 @@ const Joi = require('@hapi/joi');
 const createExploreSectionSchema = Joi.object().keys({
   section_name: Joi.string().max(255).required(),
   layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').default('horizontal_scroller'),
-  section_items_type: Joi.string().valid('manual', 'latest', 'track_collection', 'track_pack').default('manual'),
-  section_type: Joi.string().valid('template', 'collection', 'pack', 'mixed', 'banner').default('mixed'),
+  section_items_type: Joi.string()
+    .valid('manual', 'latest', 'track_collection', 'track_pack', 'tag_facet')
+    .default('manual'),
+  section_type: Joi.string()
+    .valid('template', 'collection', 'pack', 'mixed', 'banner', 'tag_facet')
+    .default('mixed'),
   ui_type: Joi.when('section_type', {
     is: 'pack',
     then: Joi.string().valid('list_of_packs', 'pack_templates').default('list_of_packs'),
-    otherwise: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').default('normal')
+    otherwise: Joi.when('section_type', {
+      is: 'tag_facet',
+      then: Joi.string().valid('facet_grid').default('facet_grid'),
+      otherwise: Joi.string().valid('normal', 'compact_horizontal', 'compact_vertical').default('normal')
+    })
   }),
   sort_order: Joi.number().integer().min(0).default(0),
   status: Joi.string().valid('active', 'inactive').default('active'),
@@ -21,10 +29,21 @@ const createExploreSectionSchema = Joi.object().keys({
 const updateExploreSectionSchema = Joi.object().keys({
   section_name: Joi.string().max(255).optional(),
   layout_type: Joi.string().valid('horizontal_scroller', 'vertical_grid', 'masonry').optional(),
-  section_items_type: Joi.string().valid('manual', 'latest', 'track_collection', 'track_pack').optional(),
-  section_type: Joi.string().valid('template', 'collection', 'pack', 'mixed', 'banner').optional(),
+  section_items_type: Joi.string()
+    .valid('manual', 'latest', 'track_collection', 'track_pack', 'tag_facet')
+    .optional(),
+  section_type: Joi.string()
+    .valid('template', 'collection', 'pack', 'mixed', 'banner', 'tag_facet')
+    .optional(),
   ui_type: Joi.string()
-    .valid('normal', 'compact_horizontal', 'compact_vertical', 'list_of_packs', 'pack_templates')
+    .valid(
+      'normal',
+      'compact_horizontal',
+      'compact_vertical',
+      'list_of_packs',
+      'pack_templates',
+      'facet_grid'
+    )
     .optional(),
   sort_order: Joi.number().integer().min(0).optional(),
   status: Joi.string().valid('active', 'inactive').optional(),
