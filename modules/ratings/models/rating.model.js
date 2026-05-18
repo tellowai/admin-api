@@ -23,7 +23,7 @@ exports.listRatingsByDateRange = async function ({
   const params = [startDate, endDate];
 
   if (platform) {
-    conditions.push('platform = ?');
+    conditions.push('LOWER(TRIM(platform)) = ?');
     params.push(platform);
   }
 
@@ -59,4 +59,29 @@ exports.listRatingsByDateRange = async function ({
   ]);
 
   return { rows, total: Number(total) };
+};
+
+/**
+ * Latest completed (or any) generation for a user at or before a rating timestamp.
+ * @param {string} userId
+ * @param {Date|string} beforeAt
+ * @returns {Promise<{ media_generation_id: string, template_id: string, created_at: Date, completed_at: Date|null }|null>}
+ */
+exports.getLatestGenerationBeforeTime = async function (userId, beforeAt) {
+  if (!userId || !beforeAt) return null;
+  const query = `
+    SELECT
+      media_generation_id,
+      template_id,
+      created_at,
+      completed_at
+    FROM media_generations
+    WHERE user_id = ?
+      AND deleted_at IS NULL
+      AND COALESCE(completed_at, submitted_at, created_at) <= ?
+    ORDER BY COALESCE(completed_at, submitted_at, created_at) DESC
+    LIMIT 1
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [userId, beforeAt]);
+  return rows?.[0] || null;
 };
