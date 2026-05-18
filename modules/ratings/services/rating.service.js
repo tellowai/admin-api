@@ -8,6 +8,13 @@ const TimezoneService = require('../../analytics/services/timezone.service');
 
 const DEFAULT_LIMIT = 20;
 
+function normalizePlatform(platform) {
+  const key = String(platform || '').trim().toLowerCase();
+  if (!key) return null;
+  if (key === 'www' || key === 'browser') return 'web';
+  return key;
+}
+
 /**
  * Resolve date range: default last 7 days (including today) when omitted.
  */
@@ -26,6 +33,25 @@ function resolveDateRange(start_date, end_date, tz) {
     startDate: moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate(),
     endDate: moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate()
   };
+}
+
+/**
+ * Infer template + generation from media_generations (no app_ratings schema change).
+ * Uses the user's latest generation at or before the rating timestamp.
+ */
+async function resolveGenerationContext(rows) {
+  const needing = rows.filter((r) => r.user_id);
+  if (!needing.length) return;
+
+  await Promise.all(
+    needing.map(async (row) => {
+      const gen = await RatingModel.getLatestGenerationBeforeTime(row.user_id, row.created_at);
+      if (!gen) return;
+      row.media_generation_id = gen.media_generation_id;
+      row.template_id = gen.template_id;
+      row.generation_created_at = gen.completed_at || gen.created_at;
+    })
+  );
 }
 
 /**
@@ -56,28 +82,52 @@ exports.listRatings = async function (query) {
     platform: platformFilter || undefined
   });
 
+  await resolveGenerationContext(rows);
+
   const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
-  const users = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
+  const templateIds = [...new Set(rows.map((r) => r.template_id).filter(Boolean))];
+
+  const [users, templates] = await Promise.all([
+    userIds.length ? GenerationsModel.getUsersByIds(userIds) : [],
+    templateIds.length ? GenerationsModel.getTemplatesByIds(templateIds) : []
+  ]);
+
   const userMap = {};
   users.forEach((u) => {
     userMap[u.user_id] = u;
   });
 
+  const templateMap = {};
+  templates.forEach((t) => {
+    templateMap[t.template_id] = t;
+  });
+
   const enriched = rows.map((row) => {
     const user = row.user_id ? userMap[row.user_id] : null;
+    const template = row.template_id ? templateMap[row.template_id] : null;
     return {
       rating_id: row.rating_id,
       user_id: row.user_id,
       app_version: row.app_version,
       rating: Number(row.rating),
       reason: row.reason,
-      platform: row.platform,
+      platform: normalizePlatform(row.platform),
+      template_id: row.template_id || null,
+      media_generation_id: row.media_generation_id || null,
+      generation_created_at: row.generation_created_at || null,
       created_at: row.created_at,
       user_details: user
         ? {
             display_name: user.display_name,
             email: user.email,
             mobile: user.mobile
+          }
+        : null,
+      template_details: template
+        ? {
+            template_id: template.template_id,
+            template_name: template.template_name,
+            template_type: template.template_type
           }
         : null
     };
