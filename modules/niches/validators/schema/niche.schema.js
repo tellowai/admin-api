@@ -20,6 +20,13 @@ const updateNicheSchema = Joi.object().keys({
   is_active: Joi.boolean().optional()
 });
 
+const additionalDataSchema = Joi.object({
+  screen_heading: Joi.string().max(200).allow('', null).optional(),
+  screen_subheading: Joi.string().max(500).allow('', null).optional()
+})
+  .allow(null)
+  .optional();
+
 const bulkCreateFieldDefinitionsSchema = Joi.object().keys({
   fields: Joi.array().items(
     Joi.object().keys({
@@ -27,7 +34,9 @@ const bulkCreateFieldDefinitionsSchema = Joi.object().keys({
       field_label: Joi.string().max(100).required(),
       field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').required(),
       is_visible_in_first_time_flow: Joi.boolean().optional(),
-      display_order: Joi.number().integer().allow(null).optional()
+      display_order: Joi.number().integer().allow(null).optional(),
+      placeholder_text: Joi.string().max(500).allow('', null).optional(),
+      additional_data: additionalDataSchema
     })
   ).min(1).required()
 });
@@ -40,7 +49,9 @@ const bulkUpdateFieldDefinitionsSchema = Joi.object().keys({
       field_label: Joi.string().max(100).optional(),
       field_data_type: Joi.string().valid('short_text', 'long_text', 'date', 'time', 'datetime', 'photo', 'video').optional(),
       is_visible_in_first_time_flow: Joi.boolean().optional(),
-      display_order: Joi.number().integer().allow(null).optional()
+      display_order: Joi.number().integer().allow(null).optional(),
+      placeholder_text: Joi.string().max(500).allow('', null).optional(),
+      additional_data: additionalDataSchema
     })
   ).min(1).required()
 });
