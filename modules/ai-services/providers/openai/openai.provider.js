@@ -51,7 +51,7 @@ class OpenAIProvider extends BaseLLMProvider {
 
       return {
         success: true,
-        data: response.choices[0].message.parsed || response.choices[0].message.content,
+        data: this._parseStructuredResponse(response.choices[0].message),
         metrics
       };
     } catch (error) {
@@ -94,7 +94,7 @@ class OpenAIProvider extends BaseLLMProvider {
 
       return {
         success: true,
-        data: response.choices[0].message.parsed || response.choices[0].message.content,
+        data: this._parseStructuredResponse(response.choices[0].message),
         metrics
       };
     } catch (error) {
@@ -108,6 +108,31 @@ class OpenAIProvider extends BaseLLMProvider {
     }
   }
 
+  _parseStructuredResponse(message) {
+    if (!message) return null;
+    if (message.parsed && typeof message.parsed === 'object') {
+      return message.parsed;
+    }
+    const content = message.content;
+    if (content == null) return null;
+    if (typeof content === 'object') return content;
+    const text = String(content).trim();
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        try {
+          return JSON.parse(match[0]);
+        } catch (__) {
+          return text;
+        }
+      }
+      return text;
+    }
+  }
+
   _buildMultiModalContent(messages, images) {
     return messages.map(msg => {
       if (msg.role === 'user') {
@@ -115,13 +140,14 @@ class OpenAIProvider extends BaseLLMProvider {
           role: msg.role,
           content: [
             ...(msg.content ? [{ type: "text", text: msg.content }] : []),
-            ...images.map(image => ({
-              type: "image_url",
-              image_url: {
-                url: image,
-                detail: "low"
-              }
-            }))
+            ...images.map((image) => {
+              const url = typeof image === 'string' ? image : image.url;
+              const detail = typeof image === 'string' ? 'low' : (image.detail || 'low');
+              return {
+                type: 'image_url',
+                image_url: { url, detail }
+              };
+            })
           ]
         };
       }

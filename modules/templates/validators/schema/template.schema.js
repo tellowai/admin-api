@@ -421,7 +421,9 @@ const addClipSchema = Joi.object({
 const inferTemplateMetadataSchema = Joi.object().keys({
   bodymovin_json: Joi.object().required(),
   template_output_type: Joi.string().valid('image', 'video').optional(),
-  filename_hint: Joi.string().max(255).allow('', null).optional()
+  filename_hint: Joi.string().max(255).allow('', null).optional(),
+  /** data:image/...;base64,... preview frame for vision (niche + naming) */
+  thumb_image_data_url: Joi.string().max(8_000_000).allow('', null).optional()
 });
 
 exports.createTemplateSchema = createTemplateSchema;
