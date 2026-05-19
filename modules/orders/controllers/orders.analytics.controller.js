@@ -5,6 +5,7 @@ const TimezoneService = require('../../analytics/services/timezone.service');
 const OrdersAnalyticsModel = require('../models/orders.analytics.model');
 const OrdersModel = require('../models/orders.model');
 const SubscriptionsAnalyticsModel = require('../../analytics/models/subscriptions.analytics.model');
+const CreditsModel = require('../../credits/models/credits.model');
 const {
   SUBSCRIPTION_EVENT_TYPE_KEYS,
   normalizeSubscriptionEventTypeFilter,
@@ -141,10 +142,11 @@ function planCreditsFromMap(providerPlanId, planMap) {
   };
 }
 
-function buildSubscriptionRowDtos(rawRows, planMap = new Map()) {
+function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new Map()) {
   return (rawRows || []).map((r) => {
     const { credits, bonus_credits } = planCreditsFromMap(r.provider_plan_id, planMap);
     const subscriptionEventTypeKey = classifySubscriptionEventType(r);
+    const wallet = balanceMap.get(r.user_id != null ? String(r.user_id) : '');
     return {
       subscription_id: r.subscription_id,
       user_id: r.user_id,
@@ -156,8 +158,10 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map()) {
       payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
       subscription_status: displaySubscriptionStatus(r),
-      credits,
-      bonus_credits
+      plan_credits: credits,
+      plan_bonus_credits: bonus_credits,
+      credit_balance: wallet ? wallet.balance : 0,
+      credit_reserved_balance: wallet ? wallet.reserved_balance : 0
     };
   });
 }
@@ -359,7 +363,9 @@ exports.getUserSubscriptionsTable = async function (req, res) {
     const planMap = await SubscriptionsAnalyticsModel.resolvePlanMetadataForProviderPlanIds(providerPlanIds, {
       useMaster: true
     });
-    const items = buildSubscriptionRowDtos(rows, planMap);
+    const userIds = [...new Set((rows || []).map((r) => r.user_id).filter((id) => id != null))];
+    const balanceMap = await CreditsModel.getBalancesByUserIds(userIds, { useMaster: true });
+    const items = buildSubscriptionRowDtos(rows, planMap, balanceMap);
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,
