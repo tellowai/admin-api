@@ -8,7 +8,8 @@ const createNicheSchema = Joi.object().keys({
   thumb_image_storage_bucket: Joi.string().max(100).required(),
   slug: Joi.string().max(50).required(),
   display_order: Joi.number().integer().allow(null).optional(),
-  is_active: Joi.boolean().optional()
+  is_active: Joi.boolean().optional(),
+  profile_title_template: Joi.string().max(255).allow('', null).optional()
 });
 
 const updateNicheSchema = Joi.object().keys({
@@ -17,7 +18,8 @@ const updateNicheSchema = Joi.object().keys({
   thumb_image_storage_bucket: Joi.string().max(100).optional(),
   // slug is not updatable - removed from update schema
   display_order: Joi.number().integer().allow(null).optional(),
-  is_active: Joi.boolean().optional()
+  is_active: Joi.boolean().optional(),
+  profile_title_template: Joi.string().max(255).allow('', null).optional()
 });
 
 const additionalDataSchema = Joi.object({
