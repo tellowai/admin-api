@@ -70,33 +70,62 @@ async function refundCreditsTransaction(userId, amount, referenceType, reference
   }
 }
 
-async function getUserCreditsTransactions(userId, page, limit) {
+async function getUserCreditsTransactions(userId, page, limit, options = {}) {
+  const useMaster = options.useMaster === true;
+  const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
   const offset = (page - 1) * limit;
-  
+
   const transactionsQuery = `
     SELECT * FROM credits_transactions
     WHERE user_id = ?
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `;
-  
+
   const balanceQuery = `
     SELECT balance, reserved_balance FROM user_credits WHERE user_id = ?
   `;
 
   const [transactions, balanceResult] = await Promise.all([
-    MysqlQueryRunner.runQueryInSlave(transactionsQuery, [userId, limit, offset]),
-    MysqlQueryRunner.runQueryInSlave(balanceQuery, [userId])
+    runQuery(transactionsQuery, [userId, limit, offset]),
+    runQuery(balanceQuery, [userId])
   ]);
+
+  const balance = balanceResult[0] ? Number(balanceResult[0].balance) || 0 : 0;
+  const reserved_balance = balanceResult[0] ? Number(balanceResult[0].reserved_balance) || 0 : 0;
 
   return {
     transactions,
-    balance: balanceResult[0] ? balanceResult[0].balance : 0,
-    reserved_balance: balanceResult[0] ? balanceResult[0].reserved_balance : 0
+    balance,
+    reserved_balance
   };
+}
+
+/** Wallet balances for many users (admin tables). Keys are string user_id. */
+async function getBalancesByUserIds(userIds, options = {}) {
+  const useMaster = options.useMaster === true;
+  const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+  const ids = [...new Set((userIds || []).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id)))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const rows = await runQuery(
+    'SELECT user_id, balance, reserved_balance FROM user_credits WHERE user_id IN (?)',
+    [ids]
+  );
+
+  for (const r of rows || []) {
+    const uid = String(r.user_id);
+    map.set(uid, {
+      balance: Number(r.balance) || 0,
+      reserved_balance: Number(r.reserved_balance) || 0
+    });
+  }
+  return map;
 }
 
 module.exports = {
   refundCreditsTransaction,
-  getUserCreditsTransactions
+  getUserCreditsTransactions,
+  getBalancesByUserIds
 };

@@ -433,7 +433,9 @@ exports.getUserCreditTransactions = async function (req, res) {
     const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
     const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
 
-    const creditData = await CreditsModel.getUserCreditsTransactions(userId, page, limit);
+    const creditData = await CreditsModel.getUserCreditsTransactions(userId, page, limit, {
+      useMaster: true
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: creditData
