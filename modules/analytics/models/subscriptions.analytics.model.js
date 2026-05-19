@@ -435,116 +435,28 @@ class SubscriptionsAnalyticsModel {
         s.end_at,
         COALESCE(s.start_at, s.created_at) AS purchase_or_start_at,
         (
-          COALESCE(
-            (
-              SELECT o.client_platform
-              FROM orders o
-              WHERE o.user_id = s.user_id
-                AND o.status = 'completed'
-                AND o.completed_at IS NOT NULL
-                AND o.client_platform IS NOT NULL
-                AND TRIM(o.client_platform) <> ''
-              ORDER BY
-                CASE
-                  WHEN o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-                   AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-                  THEN 0
-                  ELSE 1
-                END ASC,
-                ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
-                o.order_id DESC
-              LIMIT 1
-            ),
-            CASE
-              WHEN JSON_VALID(s.additional_data)
-                AND LOWER(
-                  COALESCE(
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.store'))), ''),
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.store'))), ''),
-                    ''
-                  )
-                ) LIKE '%app_store%'
-              THEN 'ios'
-              WHEN JSON_VALID(s.additional_data)
-                AND LOWER(
-                  COALESCE(
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.store'))), ''),
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.store'))), ''),
-                    ''
-                  )
-                ) REGEXP 'play_store|amazon'
-              THEN 'android'
-              WHEN JSON_VALID(s.additional_data)
-                AND LOWER(
-                  COALESCE(
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.store'))), ''),
-                    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.store'))), ''),
-                    ''
-                  )
-                ) = 'stripe'
-              THEN 'web'
-              ELSE NULL
-            END,
-            (
-              SELECT
-                CASE
-                  WHEN pgp.pg_plan_id_ios = s.provider_plan_id
-                    AND IFNULL(pgp.pg_plan_id_android, '') <> s.provider_plan_id
-                    THEN 'ios'
-                  WHEN pgp.pg_plan_id_android = s.provider_plan_id
-                    AND IFNULL(pgp.pg_plan_id_ios, '') <> s.provider_plan_id
-                    THEN 'android'
-                  WHEN pgp.pg_plan_id_ios = s.provider_plan_id THEN 'ios'
-                  WHEN pgp.pg_plan_id_android = s.provider_plan_id THEN 'android'
-                  ELSE NULL
-                END
-              FROM payment_gateway_plans pgp
-              WHERE pgp.is_active = 1
-                AND s.provider_plan_id IS NOT NULL
-                AND TRIM(s.provider_plan_id) <> ''
-                AND (
-                  pgp.pg_plan_id_ios = s.provider_plan_id
-                  OR pgp.pg_plan_id_android = s.provider_plan_id
-                  OR pgp.pg_plan_id = s.provider_plan_id
-                )
-              ORDER BY
-                CASE
-                  WHEN pgp.pg_plan_id_ios = s.provider_plan_id OR pgp.pg_plan_id_android = s.provider_plan_id
-                  THEN 0
-                  ELSE 1
-                END ASC
-              LIMIT 1
-            ),
-            CASE
-              WHEN LOWER(TRIM(COALESCE(s.provider, ''))) IN ('apple_iap', 'apple') THEN 'ios'
-              WHEN LOWER(TRIM(COALESCE(s.provider, ''))) IN ('google_play', 'google') THEN 'android'
-              ELSE NULL
-            END
-          )
+          SELECT o.client_platform
+          FROM orders o
+          WHERE o.user_id = s.user_id
+            AND o.status = 'completed'
+            AND o.completed_at IS NOT NULL
+            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            o.order_id DESC
+          LIMIT 1
         ) AS linked_client_platform,
         (
-          COALESCE(
-            (
-              SELECT o.payment_gateway
-              FROM orders o
-              WHERE o.user_id = s.user_id
-                AND o.status = 'completed'
-                AND o.completed_at IS NOT NULL
-                AND o.payment_gateway IS NOT NULL
-                AND TRIM(o.payment_gateway) <> ''
-              ORDER BY
-                CASE
-                  WHEN o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-                   AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-                  THEN 0
-                  ELSE 1
-                END ASC,
-                ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
-                o.order_id DESC
-              LIMIT 1
-            ),
-            NULLIF(TRIM(s.provider), '')
-          )
+          SELECT o.payment_gateway
+          FROM orders o
+          WHERE o.user_id = s.user_id
+            AND o.status = 'completed'
+            AND o.completed_at IS NOT NULL
+            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            o.order_id DESC
+          LIMIT 1
         ) AS linked_order_gateway,
         s.additional_data AS subscription_additional_data
       FROM subscriptions s

@@ -41,61 +41,6 @@ function displaySubscriptionStatus(row) {
   return status || 'unknown';
 }
 
-/** RevenueCat `event.store` values (APP_STORE, PLAY_STORE, …) → client_platform slug. */
-function inferPlatformFromRevenueCatStore(store) {
-  if (store == null || String(store).trim() === '') return null;
-  const s = String(store).trim().toUpperCase();
-  if (s.includes('APP_STORE') || s === 'MAC_APP_STORE') return 'ios';
-  if (s.includes('PLAY_STORE') || s === 'AMAZON') return 'android';
-  if (s === 'STRIPE') return 'web';
-  return null;
-}
-
-function inferPlatformFromAdditionalData(raw) {
-  const data = parseSubscriptionAdditionalData(raw);
-  if (!data || typeof data !== 'object') return null;
-
-  let notes = data.notes;
-  if (typeof notes === 'string') {
-    try {
-      notes = JSON.parse(notes);
-    } catch {
-      notes = null;
-    }
-  }
-
-  const store =
-    (notes && typeof notes === 'object' && notes.store != null ? notes.store : null) ||
-    data.store ||
-    null;
-  return inferPlatformFromRevenueCatStore(store);
-}
-
-function inferPlatformFromGatewayOrProvider(orderGateway, subscriptionProvider) {
-  const gateway = orderGateway && String(orderGateway).trim().toLowerCase();
-  const provider = subscriptionProvider && String(subscriptionProvider).trim().toLowerCase();
-  if (gateway === 'apple_iap' || gateway === 'apple' || provider === 'apple_iap' || provider === 'apple') {
-    return 'ios';
-  }
-  if (gateway === 'google_play' || gateway === 'google' || provider === 'google_play' || provider === 'google') {
-    return 'android';
-  }
-  return null;
-}
-
-function resolveSubscriptionPlatformSlug(row) {
-  const fromSql = row.linked_client_platform && String(row.linked_client_platform).trim().toLowerCase();
-  if (fromSql === 'ios' || fromSql === 'android' || fromSql === 'web') return fromSql;
-
-  const fromRc = inferPlatformFromAdditionalData(row.subscription_additional_data);
-  if (fromRc) return fromRc;
-
-  const fromGateway = inferPlatformFromGatewayOrProvider(row.linked_order_gateway, row.subscription_provider);
-  if (fromGateway) return fromGateway;
-
-  return null;
-}
-
 function formatPlatformLabel(clientPlatform) {
   const p = clientPlatform && String(clientPlatform).trim().toLowerCase();
   if (p === 'ios') return 'iOS';
@@ -210,7 +155,7 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
       subscription_event_type: labelForSubscriptionEventTypeKey(subscriptionEventTypeKey),
       purchase_or_start_at: formatIsoDate(r.purchase_or_start_at),
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
-      payment_platform: formatPlatformLabel(resolveSubscriptionPlatformSlug(r)),
+      payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
       subscription_status: displaySubscriptionStatus(r),
       plan_credits: credits,
