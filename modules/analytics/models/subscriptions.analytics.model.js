@@ -275,7 +275,7 @@ class SubscriptionsAnalyticsModel {
    * (numeric pp_id or store SKU via `payment_gateway_plans`).
    * @param {unknown[]} providerPlanIds
    * @param {{ useMaster?: boolean }} [options] use primary DB for reads (admin / read-your-writes)
-   * @returns {Promise<Map<string, { plan_name: string|null, billing_interval: string|null, plan_type: string|null }>>}
+   * @returns {Promise<Map<string, { plan_name: string|null, billing_interval: string|null, plan_type: string|null, credits: number|null, bonus_credits: number|null }>>}
    */
   static async resolvePlanMetadataForProviderPlanIds(providerPlanIds, options = {}) {
     const useMaster = options.useMaster === true;
@@ -294,14 +294,16 @@ class SubscriptionsAnalyticsModel {
     const numericIds = unique.filter((id) => /^\d+$/.test(id)).map((id) => parseInt(id, 10));
     if (numericIds.length) {
       const rows = await runQuery(
-        'SELECT pp_id, plan_name, billing_interval, plan_type FROM payment_plans WHERE pp_id IN (?)',
+        'SELECT pp_id, plan_name, billing_interval, plan_type, credits, bonus_credits FROM payment_plans WHERE pp_id IN (?)',
         [numericIds]
       );
       for (const r of rows || []) {
         map.set(String(r.pp_id), {
           plan_name: r.plan_name != null ? String(r.plan_name) : null,
           billing_interval: r.billing_interval != null ? String(r.billing_interval) : null,
-          plan_type: r.plan_type != null ? String(r.plan_type) : null
+          plan_type: r.plan_type != null ? String(r.plan_type) : null,
+          credits: r.credits != null ? Number(r.credits) : null,
+          bonus_credits: r.bonus_credits != null ? Number(r.bonus_credits) : null
         });
       }
     }
@@ -309,7 +311,7 @@ class SubscriptionsAnalyticsModel {
     const stringSkus = unique.filter((id) => !/^\d+$/.test(id));
     if (stringSkus.length) {
       const rows = await runQuery(
-        `SELECT pp.plan_name, pp.billing_interval, pp.plan_type,
+        `SELECT pp.plan_name, pp.billing_interval, pp.plan_type, pp.credits, pp.bonus_credits,
                 pgp.pg_plan_id, pgp.pg_plan_id_ios, pgp.pg_plan_id_android
          FROM payment_gateway_plans pgp
          INNER JOIN payment_plans pp ON pp.pp_id = pgp.payment_plan_id
@@ -330,7 +332,9 @@ class SubscriptionsAnalyticsModel {
           map.set(sku, {
             plan_name: hit.plan_name != null ? String(hit.plan_name) : null,
             billing_interval: hit.billing_interval != null ? String(hit.billing_interval) : null,
-            plan_type: hit.plan_type != null ? String(hit.plan_type) : null
+            plan_type: hit.plan_type != null ? String(hit.plan_type) : null,
+            credits: hit.credits != null ? Number(hit.credits) : null,
+            bonus_credits: hit.bonus_credits != null ? Number(hit.bonus_credits) : null
           });
         }
       }
@@ -350,7 +354,7 @@ class SubscriptionsAnalyticsModel {
    * @param {string} opts.tz IANA
    * @param {string} [opts.clientPlatform] '' | 'ios' | 'android' | 'web'
    * @param {number|null} [opts.paymentPlanId] internal `payment_plans.pp_id` — matches numeric `provider_plan_id` or gateway SKU rows for that plan
-   * @param {string} [opts.subscriptionEventType] '' | Renewal | Subscription initial | Upgrade | One-time (matches admin DTO classification)
+   * @param {string} [opts.subscriptionEventType] '' | renewal | initial | upgrade | one_time (matches admin DTO classification)
    * @param {string} [opts.subscriptionDisplayStatus] lowercase display status (matches {@link orders.analytics.controller} display rules)
    * @param {number} opts.limit
    * @param {number} opts.offset
@@ -402,7 +406,7 @@ class SubscriptionsAnalyticsModel {
     }
 
     const rawEt = subscriptionEventType != null ? String(subscriptionEventType).trim() : '';
-    const et = ['Renewal', 'Subscription initial', 'Upgrade', 'One-time'].includes(rawEt) ? rawEt : '';
+    const et = ['renewal', 'initial', 'upgrade', 'one_time'].includes(rawEt) ? rawEt : '';
     const eventClause = et ? { sql: ' AND t._event_type = ? ', params: [et] } : { sql: '', params: [] };
 
     const rawSt = subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
@@ -478,11 +482,11 @@ class SubscriptionsAnalyticsModel {
                 CAST(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.renewal_count'))), '') AS UNSIGNED),
                 0
               ) > 0
-            ) THEN 'Renewal'
+            ) THEN 'renewal'
             WHEN JSON_VALID(inner_sub.subscription_additional_data)
-              AND JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.notes.type')) = 'upgrade' THEN 'Upgrade'
-            WHEN LOWER(TRIM(COALESCE(inner_sub.payment_type, ''))) IN ('one_time', 'onetime') THEN 'One-time'
-            ELSE 'Subscription initial'
+              AND JSON_UNQUOTE(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.notes.type')) = 'upgrade' THEN 'upgrade'
+            WHEN LOWER(TRIM(COALESCE(inner_sub.payment_type, ''))) IN ('one_time', 'onetime') THEN 'one_time'
+            ELSE 'initial'
           END
         ) AS _event_type,
         (

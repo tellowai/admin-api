@@ -5,6 +5,11 @@ const TimezoneService = require('../../analytics/services/timezone.service');
 const OrdersAnalyticsModel = require('../models/orders.analytics.model');
 const OrdersModel = require('../models/orders.model');
 const SubscriptionsAnalyticsModel = require('../../analytics/models/subscriptions.analytics.model');
+const {
+  SUBSCRIPTION_EVENT_TYPE_KEYS,
+  normalizeSubscriptionEventTypeFilter,
+  labelForSubscriptionEventTypeKey
+} = require('../constants/subscription-event-types');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
@@ -99,38 +104,60 @@ function classifySubscriptionEventType(row) {
   if (data && typeof data === 'object') {
     const prev = data.previous_subscription_id;
     if (prev != null && String(prev).trim() !== '') {
-      return 'Renewal';
+      return SUBSCRIPTION_EVENT_TYPE_KEYS.RENEWAL;
     }
     const rc = data.renewal_count;
     if (rc != null && Number(rc) > 0) {
-      return 'Renewal';
+      return SUBSCRIPTION_EVENT_TYPE_KEYS.RENEWAL;
     }
     const notes = data.notes;
     if (notes && typeof notes === 'object' && notes.type === 'upgrade') {
-      return 'Upgrade';
+      return SUBSCRIPTION_EVENT_TYPE_KEYS.UPGRADE;
     }
   }
 
   const pt = String(row.payment_type || '').toLowerCase();
   if (pt === 'one_time' || pt === 'onetime') {
-    return 'One-time';
+    return SUBSCRIPTION_EVENT_TYPE_KEYS.ONE_TIME;
   }
 
-  return 'Subscription initial';
+  return SUBSCRIPTION_EVENT_TYPE_KEYS.INITIAL;
 }
 
-function buildSubscriptionRowDtos(rawRows) {
+function planCreditsFromMap(providerPlanId, planMap) {
+  if (providerPlanId == null || String(providerPlanId).trim() === '') {
+    return { credits: null, bonus_credits: null };
+  }
+  const meta = planMap && planMap.get(String(providerPlanId).trim());
+  if (!meta) {
+    return { credits: null, bonus_credits: null };
+  }
+  return {
+    credits: meta.credits != null && Number.isFinite(Number(meta.credits)) ? Number(meta.credits) : null,
+    bonus_credits:
+      meta.bonus_credits != null && Number.isFinite(Number(meta.bonus_credits))
+        ? Number(meta.bonus_credits)
+        : null
+  };
+}
+
+function buildSubscriptionRowDtos(rawRows, planMap = new Map()) {
   return (rawRows || []).map((r) => {
+    const { credits, bonus_credits } = planCreditsFromMap(r.provider_plan_id, planMap);
+    const subscriptionEventTypeKey = classifySubscriptionEventType(r);
     return {
       subscription_id: r.subscription_id,
       user_id: r.user_id,
       user_name: r.user_name,
-      subscription_event_type: classifySubscriptionEventType(r),
+      subscription_event_type_key: subscriptionEventTypeKey,
+      subscription_event_type: labelForSubscriptionEventTypeKey(subscriptionEventTypeKey),
       purchase_or_start_at: formatIsoDate(r.purchase_or_start_at),
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
       payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
-      subscription_status: displaySubscriptionStatus(r)
+      subscription_status: displaySubscriptionStatus(r),
+      credits,
+      bonus_credits
     };
   });
 }
@@ -310,10 +337,7 @@ exports.getUserSubscriptionsTable = async function (req, res) {
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 25));
     const offset = (page - 1) * limit;
 
-    const subscriptionEventType =
-      q.subscription_event_type != null && String(q.subscription_event_type).trim() !== ''
-        ? String(q.subscription_event_type).trim()
-        : '';
+    const subscriptionEventType = normalizeSubscriptionEventTypeFilter(q.subscription_event_type);
     const subscriptionStatus =
       q.subscription_status != null && String(q.subscription_status).trim() !== ''
         ? String(q.subscription_status).trim().toLowerCase()
@@ -331,7 +355,11 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       offset,
       useMaster: true
     });
-    const items = buildSubscriptionRowDtos(rows);
+    const providerPlanIds = (rows || []).map((r) => r.provider_plan_id);
+    const planMap = await SubscriptionsAnalyticsModel.resolvePlanMetadataForProviderPlanIds(providerPlanIds, {
+      useMaster: true
+    });
+    const items = buildSubscriptionRowDtos(rows, planMap);
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,

@@ -3,6 +3,7 @@
 const Joi = require('@hapi/joi');
 const validationCtrl = require('../../core/controllers/validation.controller');
 const HTTP_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const { ALL_SUBSCRIPTION_EVENT_TYPE_FILTER_VALUES } = require('../constants/subscription-event-types');
 
 const ordersAnalyticsQuerySchema = Joi.object({
   start_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
@@ -32,7 +33,7 @@ const userSubscriptionsTableQuerySchema = Joi.object({
   client_platform: Joi.string().valid('', 'ios', 'android', 'web').optional().allow(''),
   payment_plan_id: Joi.string().optional().allow('').pattern(/^\d*$/),
   subscription_event_type: Joi.string()
-    .valid('', 'Renewal', 'Subscription initial', 'Upgrade', 'One-time')
+    .valid(...ALL_SUBSCRIPTION_EVENT_TYPE_FILTER_VALUES)
     .optional()
     .allow(''),
   subscription_status: Joi.string().trim().lowercase().max(64).optional().allow(''),
