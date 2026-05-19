@@ -3,6 +3,7 @@
 const versionConfig = require('../../version');
 const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const TemplateCtrl = require('../controllers/template.controller');
+const TemplateMetadataInferenceCtrl = require('../controllers/template.metadata.inference.controller');
 const TemplateValidator = require('../validators/template.validator');
 
 module.exports = function (app) {
@@ -42,6 +43,14 @@ module.exports = function (app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateCreateDraftTemplateData,
     TemplateCtrl.createDraftTemplate
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/infer-metadata'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateValidator.validateInferTemplateMetadataData,
+    TemplateMetadataInferenceCtrl.inferTemplateMetadata
   );
 
   app.route(

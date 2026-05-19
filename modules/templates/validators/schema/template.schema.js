@@ -418,6 +418,12 @@ const addClipSchema = Joi.object({
   asset_type: Joi.string().valid('image', 'video', 'audio').default('video')
 });
 
+const inferTemplateMetadataSchema = Joi.object().keys({
+  bodymovin_json: Joi.object().required(),
+  template_output_type: Joi.string().valid('image', 'video').optional(),
+  filename_hint: Joi.string().max(255).allow('', null).optional()
+});
+
 exports.createTemplateSchema = createTemplateSchema;
 exports.createDraftTemplateSchema = createDraftTemplateSchema;
 exports.updateTemplateSchema = updateTemplateSchema;
@@ -430,3 +436,4 @@ exports.importTemplatesSchema = importTemplatesSchema;
 exports.ensureAiClipsSchema = ensureAiClipsSchema;
 exports.reorderClipsSchema = reorderClipsSchema;
 exports.addClipSchema = addClipSchema;
+exports.inferTemplateMetadataSchema = inferTemplateMetadataSchema;
