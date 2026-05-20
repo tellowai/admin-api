@@ -6,9 +6,8 @@ const path = require('path');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('./models.registry.service');
 const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
-const MessageModel = require('../models/message.model');
-const ToolCallModel = require('../models/tool_call.model');
 const ContextSummaryModel = require('../models/context.summary.model');
+const conversationData = require('./conversation-data.service');
 const { redactString, truncatePreview } = require('./pii.redactor');
 const circuitBreaker = require('./circuit-breaker.util');
 const rateLimit = require('./rate-limit.service');
@@ -62,7 +61,7 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
     }
   }
 
-  const messages = await MessageModel.listByConversation(conversation.conversation_id);
+  const { messages, toolCalls } = await conversationData.loadMessagesWithTools(conversation.conversation_id);
   if (messages.length <= keepRecent + 2) return null;
 
   const cutoffIdx = Math.max(0, messages.length - keepRecent);
@@ -73,10 +72,9 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
   const summarizer = modelsRegistry.getSummarizerModel();
   if (!summarizer) return null;
 
-  const messageIds = toSummarize.map((m) => m.message_id);
-  const toolCalls = await ToolCallModel.listByMessageIds(messageIds);
+  const messageIds = new Set(toSummarize.map((m) => m.message_id));
   const toolByMsg = {};
-  toolCalls.forEach((tc) => {
+  toolCalls.filter((tc) => messageIds.has(tc.message_id)).forEach((tc) => {
     if (!toolByMsg[tc.message_id]) toolByMsg[tc.message_id] = [];
     toolByMsg[tc.message_id].push(tc);
   });

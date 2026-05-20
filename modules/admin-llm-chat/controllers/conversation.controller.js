@@ -3,23 +3,10 @@
 const { v4: uuidv4 } = require('uuid');
 const HTTP = require('../../core/controllers/httpcodes.server.controller').CODES;
 const ConversationModel = require('../models/conversation.model');
-const MessageModel = require('../models/message.model');
-const ToolCallModel = require('../models/tool_call.model');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('../services/models.registry.service');
-const ContextSummaryModel = require('../models/context.summary.model');
 const contextBreakdown = require('../services/context.breakdown.service');
-
-function parseJsonColumn(value) {
-  if (value == null) return null;
-  if (typeof value === 'object') return value;
-  if (typeof value !== 'string') return null;
-  try {
-    return JSON.parse(value);
-  } catch (_e) {
-    return null;
-  }
-}
+const conversationData = require('../services/conversation-data.service');
 
 exports.listModels = async (req, res) => {
   return res.status(HTTP.OK).json({ data: modelsRegistry.getEnabledModels() });
@@ -63,21 +50,13 @@ exports.getConversation = async (req, res) => {
   if (!conv) {
     return res.status(HTTP.NOT_FOUND).json({ code: 'CONVERSATION_NOT_FOUND' });
   }
-  const messages = await MessageModel.listByConversation(req.params.conversationId);
-  const messageIds = messages.map((m) => m.message_id);
-  const toolCalls = await ToolCallModel.listByMessageIds(messageIds);
-  const toolByMsg = {};
-  toolCalls.forEach((tc) => {
-    if (!toolByMsg[tc.message_id]) toolByMsg[tc.message_id] = [];
-    toolByMsg[tc.message_id].push(tc);
-  });
-  const enriched = messages.map((m) => ({
-    ...m,
-    content_parts: parseJsonColumn(m.content_parts),
-    tool_calls: toolByMsg[m.message_id] || [],
-  }));
-  const summary = await ContextSummaryModel.getLatest(req.params.conversationId);
-  const contextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId)
+  const { messages: enriched, summary } = await conversationData.loadConversationContext(
+    req.params.conversationId,
+  );
+  const contextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId, {
+    messages: enriched,
+    summary,
+  })
     || (() => {
       const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);
       const effectiveTokens = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
@@ -121,7 +100,7 @@ exports.deleteConversation = async (req, res) => {
 exports.exportConversation = async (req, res) => {
   const conv = await ConversationModel.getByIdForUser(req.params.conversationId, req.user.userId);
   if (!conv) return res.status(HTTP.NOT_FOUND).json({ code: 'CONVERSATION_NOT_FOUND' });
-  const messages = await MessageModel.listByConversation(req.params.conversationId);
+  const { messages } = await conversationData.loadMessagesWithTools(req.params.conversationId);
   const format = req.query.format || 'json';
   if (format === 'md') {
     const md = messages.map((m) => `### ${m.role}\n\n${m.content || ''}\n`).join('\n');

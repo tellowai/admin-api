@@ -8,6 +8,7 @@ const { executeTool } = require('../tools/tool.executor');
 const MessageModel = require('../models/message.model');
 const ToolCallModel = require('../models/tool_call.model');
 const ConversationModel = require('../models/conversation.model');
+const conversationData = require('./conversation-data.service');
 const UsageModel = require('../models/usage.model');
 const ContextSummaryModel = require('../models/context.summary.model');
 const promptService = require('./prompt.service');
@@ -22,18 +23,6 @@ const kafkaCtrl = require('../../core/controllers/kafka.controller');
 
 function estimateCost(modelMeta, tokensIn, tokensOut) {
   return ((tokensIn / 1e6) * modelMeta.inputCostPer1M + (tokensOut / 1e6) * modelMeta.outputCostPer1M);
-}
-
-function attachToolCalls(history, toolCalls) {
-  const byMsg = {};
-  toolCalls.forEach((tc) => {
-    if (!byMsg[tc.message_id]) byMsg[tc.message_id] = [];
-    byMsg[tc.message_id].push(tc);
-  });
-  return history.map((m) => ({
-    ...m,
-    tool_calls: byMsg[m.message_id] || [],
-  }));
 }
 
 class TurnTraceBuilder {
@@ -177,40 +166,41 @@ async function runStreamingTurn({
     sendEvent('context_warning', { usedPct, limit: modelMeta.contextWindow });
   }
 
-  const systemText = await promptService.buildSystemPrompt(userId, conversation.system_prompt_version);
-  let history = await MessageModel.listByConversation(conversation.conversation_id);
-  const historyIds = history.map((m) => m.message_id);
-  const toolCalls = historyIds.length ? await ToolCallModel.listByMessageIds(historyIds) : [];
-  history = attachToolCalls(history, toolCalls);
+  const [systemText, historyPayload] = await Promise.all([
+    promptService.buildSystemPrompt(userId, conversation.system_prompt_version),
+    conversationData.loadMessagesWithTools(conversation.conversation_id),
+  ]);
+  const history = historyPayload.messages;
 
   const seq = await MessageModel.nextSequenceNo(conversation.conversation_id);
   const turnId = uuidv4();
   const userMsgId = uuidv4();
   const assistantMsgId = uuidv4();
-
-  await MessageModel.create({
-    message_id: userMsgId,
-    conversation_id: conversation.conversation_id,
-    turn_id: turnId,
-    client_message_id: userMessage.client_message_id || null,
-    role: 'user',
-    content: userMessage.content,
-    content_parts: userMessage.content_parts || null,
-    sequence_no: seq,
-  });
-
   const assistantSeq = seq + 1;
-  await MessageModel.create({
-    message_id: assistantMsgId,
-    conversation_id: conversation.conversation_id,
-    turn_id: turnId,
-    role: 'assistant',
-    content: '',
-    model_provider: modelMeta.provider,
-    model_id: modelMeta.id,
-    sequence_no: assistantSeq,
-    finish_reason: 'in_progress',
-  });
+
+  await MessageModel.createMany([
+    {
+      message_id: userMsgId,
+      conversation_id: conversation.conversation_id,
+      turn_id: turnId,
+      client_message_id: userMessage.client_message_id || null,
+      role: 'user',
+      content: userMessage.content,
+      content_parts: userMessage.content_parts || null,
+      sequence_no: seq,
+    },
+    {
+      message_id: assistantMsgId,
+      conversation_id: conversation.conversation_id,
+      turn_id: turnId,
+      role: 'assistant',
+      content: '',
+      model_provider: modelMeta.provider,
+      model_id: modelMeta.id,
+      sequence_no: assistantSeq,
+      finish_reason: 'in_progress',
+    },
+  ]);
 
   const historyWithUser = [
     ...history,
@@ -298,12 +288,13 @@ async function runStreamingTurn({
     if (pendingToolCalls.length && toolCallCount < maxTools) {
       if (!sawToolThisRound) traceBuilder.markFinalSegment();
       const toolResults = [];
+      const toolRowsToInsert = [];
       for (const tc of pendingToolCalls) {
         toolCallCount += 1;
         const start = Date.now();
         const result = await executeTool(tc.name, tc.arguments, { userId });
         const durationMs = Date.now() - start;
-        await ToolCallModel.create({
+        toolRowsToInsert.push({
           tool_call_id: uuidv4(),
           message_id: assistantMsgId,
           tool_name: tc.name,
@@ -329,6 +320,9 @@ async function runStreamingTurn({
           content_stub: `[tool:${tc.name}]`,
         });
       }
+      if (toolRowsToInsert.length) {
+        await ToolCallModel.createMany(toolRowsToInsert);
+      }
       pendingToolCalls.length = 0;
       return runLoop(toolResults);
     }
@@ -343,23 +337,25 @@ async function runStreamingTurn({
     const costUsd = estimateCost(modelMeta, turnTokensIn, turnTokensOut);
     const latencyMs = Date.now() - startedAt;
 
-    await MessageModel.finalize(assistantMsgId, {
-      content,
-      content_parts,
-      finish_reason: 'stop',
-      tokens_in: turnTokensIn,
-      tokens_out: turnTokensOut,
-      cost_usd: costUsd,
-      latency_ms: latencyMs,
-    });
-    await ConversationModel.addUsageTotals(conversation.conversation_id, turnTokensIn, turnTokensOut, costUsd);
-    await UsageModel.incrementDaily(userId, {
-      tokensIn: turnTokensIn,
-      tokensOut: turnTokensOut,
-      costUsd,
-      messages: 2,
-      toolCalls: toolCallCount,
-    });
+    await Promise.all([
+      MessageModel.finalize(assistantMsgId, {
+        content,
+        content_parts,
+        finish_reason: 'stop',
+        tokens_in: turnTokensIn,
+        tokens_out: turnTokensOut,
+        cost_usd: costUsd,
+        latency_ms: latencyMs,
+      }),
+      ConversationModel.addUsageTotals(conversation.conversation_id, turnTokensIn, turnTokensOut, costUsd),
+      UsageModel.incrementDaily(userId, {
+        tokensIn: turnTokensIn,
+        tokensOut: turnTokensOut,
+        costUsd,
+        messages: 2,
+        toolCalls: toolCallCount,
+      }),
+    ]);
 
     turnContextUsage = await contextBreakdown.computeBreakdown({
       conversation: {

@@ -20,7 +20,9 @@ exports.create = (data) => {
 };
 
 exports.getByIdForUser = (attachmentId, userId) => {
-  const q = `SELECT * FROM admin_llm_chat_attachments WHERE attachment_id = ? AND user_id = ? LIMIT 1`;
+  const q = `SELECT attachment_id, conversation_id, message_id, user_id, mime_type, size_bytes,
+    storage_key, original_name, parse_status, parsed_text, created_at
+    FROM admin_llm_chat_attachments WHERE attachment_id = ? AND user_id = ? LIMIT 1`;
   return mysqlModel.runQueryInSlave(q, [attachmentId, userId]).then((r) => r[0] || null);
 };
 
@@ -37,6 +39,18 @@ exports.linkToMessage = (attachmentIds, messageId) => {
 };
 
 exports.listByConversation = (conversationId) => {
-  const q = `SELECT * FROM admin_llm_chat_attachments WHERE conversation_id = ? ORDER BY created_at ASC`;
+  const q = `SELECT attachment_id, conversation_id, message_id, mime_type, size_bytes,
+    storage_key, original_name, parse_status, created_at
+    FROM admin_llm_chat_attachments WHERE conversation_id = ? ORDER BY created_at ASC`;
   return mysqlModel.runQueryInSlave(q, [conversationId]);
+};
+
+exports.listByIdsForUser = (attachmentIds, userId) => {
+  if (!attachmentIds.length) return Promise.resolve([]);
+  const placeholders = attachmentIds.map(() => '?').join(',');
+  const q = `SELECT attachment_id, conversation_id, message_id, mime_type, size_bytes,
+    storage_key, original_name, parse_status, parsed_text
+    FROM admin_llm_chat_attachments
+    WHERE user_id = ? AND attachment_id IN (${placeholders})`;
+  return mysqlModel.runQueryInSlave(q, [userId, ...attachmentIds]);
 };

@@ -2,10 +2,8 @@
 
 const { TOOL_DEFINITIONS, toOpenAITools, toAnthropicTools } = require('../constants/tool.registry');
 const promptService = require('./prompt.service');
-const MessageModel = require('../models/message.model');
-const ToolCallModel = require('../models/tool_call.model');
-const ContextSummaryModel = require('../models/context.summary.model');
 const modelsRegistry = require('./models.registry.service');
+const conversationData = require('./conversation-data.service');
 
 const CATEGORIES = [
   { key: 'system_prompt', label: 'System prompt', color: '#9ca3af' },
@@ -51,18 +49,6 @@ function messageTokenEstimate(m, modelId) {
     text += `\n${JSON.stringify(m.tool_calls)}`;
   }
   return estimateTokens(text, modelId);
-}
-
-function attachToolCalls(history, toolCalls) {
-  const byMsg = {};
-  toolCalls.forEach((tc) => {
-    if (!byMsg[tc.message_id]) byMsg[tc.message_id] = [];
-    byMsg[tc.message_id].push(tc);
-  });
-  return history.map((m) => ({
-    ...m,
-    tool_calls: byMsg[m.message_id] || [],
-  }));
 }
 
 function analyzeMessages(messages, modelId) {
@@ -157,16 +143,21 @@ async function computeBreakdown({
   };
 }
 
-async function computeForConversation(conversation, userId, { pendingUserContent = null } = {}) {
+async function computeForConversation(conversation, userId, {
+  pendingUserContent = null,
+  messages: preloadedMessages = null,
+  summary: preloadedSummary = null,
+} = {}) {
   const modelMeta = modelsRegistry.resolveModel(conversation.model_id, conversation.model_provider);
   if (!modelMeta) return null;
 
-  let history = await MessageModel.listByConversation(conversation.conversation_id);
-  const messageIds = history.map((m) => m.message_id);
-  const toolCalls = messageIds.length ? await ToolCallModel.listByMessageIds(messageIds) : [];
-  history = attachToolCalls(history, toolCalls);
-
-  const summary = await ContextSummaryModel.getLatest(conversation.conversation_id);
+  let history = preloadedMessages;
+  let summary = preloadedSummary;
+  if (!history || summary === undefined) {
+    const loaded = await conversationData.loadConversationContext(conversation.conversation_id);
+    history = history || loaded.messages;
+    summary = summary !== undefined ? summary : loaded.summary;
+  }
 
   return computeBreakdown({
     conversation,

@@ -50,9 +50,41 @@ exports.findByClientMessageId = (conversationId, clientMessageId) => {
 };
 
 exports.nextSequenceNo = async (conversationId) => {
-  const q = `SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq FROM admin_llm_chat_messages WHERE conversation_id = ?`;
-  const rows = await mysqlModel.runQueryInSlave(q, [conversationId]);
+  const q = `SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_seq
+    FROM admin_llm_chat_messages WHERE conversation_id = ?`;
+  const rows = await mysqlModel.runQueryInMaster(q, [conversationId]);
   return rows[0].next_seq;
+};
+
+exports.createMany = (rows) => {
+  if (!rows.length) return Promise.resolve();
+  const valuePlaceholders = rows.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').join(',');
+  const q = `INSERT INTO admin_llm_chat_messages
+    (message_id, conversation_id, turn_id, client_message_id, role, content, content_parts,
+     model_provider, model_id, sequence_no, tokens_in, tokens_out, cost_usd, latency_ms, finish_reason, is_hidden)
+    VALUES ${valuePlaceholders}`;
+  const params = [];
+  rows.forEach((data) => {
+    params.push(
+      data.message_id,
+      data.conversation_id,
+      data.turn_id || null,
+      data.client_message_id || null,
+      data.role,
+      data.content || null,
+      data.content_parts ? JSON.stringify(data.content_parts) : null,
+      data.model_provider || null,
+      data.model_id || null,
+      data.sequence_no,
+      data.tokens_in || 0,
+      data.tokens_out || 0,
+      data.cost_usd || 0,
+      data.latency_ms || null,
+      data.finish_reason || null,
+      data.is_hidden ? 1 : 0,
+    );
+  });
+  return mysqlModel.runQueryInMaster(q, params);
 };
 
 exports.updateContent = (messageId, content, finishReason) => {

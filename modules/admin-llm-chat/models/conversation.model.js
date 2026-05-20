@@ -76,11 +76,12 @@ exports.addUsageTotals = (conversationId, tokensIn, tokensOut, costUsd) => {
 };
 
 exports.search = (userId, query, limit = 20) => {
-  const q = `SELECT conversation_id, title, updated_at,
-    MATCH(title, content_searchable) AGAINST (? IN NATURAL LANGUAGE MODE) AS score
+  const sanitized = String(query).replace(/[%_]/g, ' ').trim();
+  const pattern = `%${sanitized}%`;
+  const q = `SELECT conversation_id, title, model_provider, model_id, updated_at
     FROM admin_llm_chat_conversations
-    WHERE user_id = ? AND deleted_at IS NULL
-    AND MATCH(title, content_searchable) AGAINST (? IN NATURAL LANGUAGE MODE)
-    ORDER BY score DESC LIMIT ?`;
-  return mysqlModel.runQueryInSlave(q, [query, userId, query, limit]);
+    WHERE user_id = ? AND deleted_at IS NULL AND title LIKE ?
+    ORDER BY updated_at DESC
+    LIMIT ?`;
+  return mysqlModel.runQueryInSlave(q, [userId, pattern, limit]);
 };
