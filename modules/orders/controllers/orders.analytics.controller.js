@@ -381,3 +381,66 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       .json({ message: 'Failed to load subscription table' });
   }
 };
+
+function buildPurchasingCustomerUserDetails(row) {
+  const details = {};
+  if (row.user_display_name != null && String(row.user_display_name).trim()) {
+    details.display_name = String(row.user_display_name).trim();
+  }
+  if (row.user_first_name != null && String(row.user_first_name).trim()) {
+    details.first_name = String(row.user_first_name).trim();
+  }
+  if (row.user_last_name != null && String(row.user_last_name).trim()) {
+    details.last_name = String(row.user_last_name).trim();
+  }
+  if (row.user_email != null && String(row.user_email).trim()) {
+    details.email = String(row.user_email).trim();
+  }
+  if (row.user_mobile != null && String(row.user_mobile).trim()) {
+    details.mobile = String(row.user_mobile).trim();
+  }
+  return Object.keys(details).length ? details : null;
+}
+
+/** GET /admin/orders/analytics/purchasing-customers — lifetime purchasers (paginated). */
+exports.getPurchasingCustomersTable = async function (req, res) {
+  try {
+    const q = req.validatedQuery;
+    const page = Math.max(1, Number(q.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(q.limit) || 10));
+    const offset = (page - 1) * limit;
+    const search = q.search != null ? String(q.search).trim() : '';
+
+    const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
+      search,
+      limit,
+      offset,
+      useMaster: true
+    });
+
+    const items = (rows || []).map((row) => ({
+      user_id: row.user_id,
+      user_name: row.user_name != null ? String(row.user_name) : null,
+      user_details: buildPurchasingCustomerUserDetails(row),
+      last_purchased_at: formatIsoDate(row.last_purchased_at),
+      alacarte_purchases: Number(row.alacarte_purchases) || 0,
+      addon_purchases: Number(row.addon_purchases) || 0,
+      subscription_purchases: Number(row.subscription_purchases) || 0,
+      total_purchases: Number(row.total_purchases) || 0
+    }));
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        items,
+        total,
+        page,
+        limit
+      }
+    });
+  } catch (err) {
+    console.error('getPurchasingCustomersTable error:', err);
+    return res
+      .status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR)
+      .json({ message: 'Failed to load purchasing customers' });
+  }
+};

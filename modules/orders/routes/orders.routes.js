@@ -46,6 +46,14 @@ module.exports = function (app) {
       ordersAnalyticsController.getUserSubscriptionsTable
     );
 
+  app
+    .route('/admin/orders/analytics/purchasing-customers')
+    .get(
+      AuthMiddleware.isAdminUser,
+      ordersAnalyticsValidator.validatePurchasingCustomersTableQuery,
+      ordersAnalyticsController.getPurchasingCustomersTable
+    );
+
   app.route('/admin/orders/export').get(AuthMiddleware.isAdminUser, ordersController.exportAdminOrdersCsv);
 
   app
