@@ -57,6 +57,17 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         retryable: true,
       };
     }
+    if (msg.includes('UNKNOWN_TABLE') || msg.includes('does not exist')) {
+      const table = (runSql.match(/\bFROM\s+(?:`?\w+`?\.)?`?(\w+)`?/i) || [])[1];
+      return {
+        success: false,
+        error: 'TABLE_NOT_FOUND',
+        message: table
+          ? `ClickHouse table ${table} does not exist. Apply db migrations for meta_ads_insights_daily / google_ads_insights_daily, then ingest via workers.`
+          : 'ClickHouse table not found. Apply ads CH migrations and run workers ingestion.',
+        retryable: false,
+      };
+    }
     return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true };
   }
 }

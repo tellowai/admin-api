@@ -161,7 +161,7 @@ function verifyImportEnvelope(body, secret) {
 
   const meta = body._photobop_ai_model_export;
   if (!meta || typeof meta !== 'object') {
-    return { error: 'Missing _photobop_ai_model_export metadata. This file was not produced by Photobop Admin export.', statusCode: 400 };
+    return { error: 'Missing _photobop_ai_model_export metadata. This file was not produced by Tellow AI Admin export.', statusCode: 400 };
   }
 
   if (meta.format !== EXPORT_FORMAT) {

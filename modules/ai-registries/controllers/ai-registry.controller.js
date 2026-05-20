@@ -462,7 +462,7 @@ exports.read = async function (req, res) {
 };
 
 /**
- * Export full model as signed JSON (Photobop Admin format).
+ * Export full model as signed JSON (Tellow AI Admin format).
  */
 exports.exportJson = async function (req, res) {
   try {

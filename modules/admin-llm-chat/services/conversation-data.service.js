@@ -29,8 +29,10 @@ function stitchToolCalls(messages, toolCalls) {
 }
 
 /** One messages query + one batched tool_calls query; stitch in memory. */
-async function loadMessagesWithTools(conversationId, { limit } = {}) {
-  const messages = await MessageModel.listByConversation(conversationId, { limit });
+async function loadMessagesWithTools(conversationId, { paginate, limit, beforeSequenceNo } = {}) {
+  const messages = paginate
+    ? await MessageModel.listPageByConversation(conversationId, { limit, beforeSequenceNo })
+    : await MessageModel.listByConversation(conversationId);
   const messageIds = messages.map((m) => m.message_id);
   const toolCalls = messageIds.length
     ? await ToolCallModel.listByMessageIds(messageIds)
@@ -41,7 +43,33 @@ async function loadMessagesWithTools(conversationId, { limit } = {}) {
   };
 }
 
-/** Parallel simple reads for conversation detail / context breakdown. */
+async function buildMessagesPagination(conversationId, messages, { limit }) {
+  if (!messages.length) {
+    return { hasMore: false, oldestSequenceNo: null, pageSize: limit };
+  }
+  const oldestSequenceNo = messages[0].sequence_no;
+  const hasMore = messages.length >= limit
+    && await MessageModel.hasOlderThan(conversationId, oldestSequenceNo);
+  return { hasMore, oldestSequenceNo, pageSize: limit };
+}
+
+/** Paginated window for conversation detail API. */
+async function loadConversationPage(conversationId, { limit, beforeSequenceNo } = {}) {
+  const [messagePayload, summary] = await Promise.all([
+    loadMessagesWithTools(conversationId, { paginate: true, limit, beforeSequenceNo }),
+    beforeSequenceNo == null ? ContextSummaryModel.getLatest(conversationId) : Promise.resolve(undefined),
+  ]);
+  const pagination = await buildMessagesPagination(conversationId, messagePayload.messages, { limit });
+  return {
+    messages: messagePayload.messages,
+    toolCalls: messagePayload.toolCalls,
+    summary: summary !== undefined ? summary : null,
+    pagination,
+    summarySkipped: beforeSequenceNo != null,
+  };
+}
+
+/** Parallel simple reads for conversation detail / context breakdown (full history). */
 async function loadConversationContext(conversationId) {
   const [messagePayload, summary] = await Promise.all([
     loadMessagesWithTools(conversationId),
@@ -58,5 +86,6 @@ module.exports = {
   parseJsonColumn,
   stitchToolCalls,
   loadMessagesWithTools,
+  loadConversationPage,
   loadConversationContext,
 };

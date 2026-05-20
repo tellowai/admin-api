@@ -72,4 +72,8 @@ module.exports = {
   SUMMARY_KEEP_RECENT_TURNS: envInt('ADMIN_LLM_CHAT_SUMMARY_KEEP_RECENT', 6),
   SUMMARY_PER_USER_PER_MIN: envInt('ADMIN_LLM_CHAT_SUMMARY_RPM', 4),
   TITLE_PER_USER_PER_MIN: envInt('ADMIN_LLM_CHAT_TITLE_RPM', 10),
+
+  /** Messages returned per page in GET conversation (matches admin templates list page size). */
+  MESSAGES_PAGE_SIZE: envInt('ADMIN_LLM_CHAT_MESSAGES_PAGE_SIZE', 10),
+  MESSAGES_PAGE_SIZE_MAX: envInt('ADMIN_LLM_CHAT_MESSAGES_PAGE_SIZE_MAX', 50),
 };

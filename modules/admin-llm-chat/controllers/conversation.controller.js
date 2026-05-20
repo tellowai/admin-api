@@ -50,32 +50,45 @@ exports.getConversation = async (req, res) => {
   if (!conv) {
     return res.status(HTTP.NOT_FOUND).json({ code: 'CONVERSATION_NOT_FOUND' });
   }
-  const { messages: enriched, summary } = await conversationData.loadConversationContext(
-    req.params.conversationId,
+  const pageSize = Math.min(
+    Math.max(1, parseInt(req.query.limit, 10) || CONSTANTS.MESSAGES_PAGE_SIZE),
+    CONSTANTS.MESSAGES_PAGE_SIZE_MAX,
   );
-  const contextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId, {
-    messages: enriched,
-    summary,
-  })
-    || (() => {
-      const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);
-      const effectiveTokens = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
-      const contextLimit = modelMeta?.contextWindow || 128000;
-      return {
-        effectiveTokens,
-        limit: contextLimit,
-        pct: contextLimit > 0 ? effectiveTokens / contextLimit : 0,
-        breakdown: [],
-        estimated: false,
-        billedTokens: effectiveTokens,
-      };
-    })();
+  const beforeRaw = req.query.before;
+  const beforeSequenceNo = beforeRaw != null && beforeRaw !== ''
+    ? parseInt(beforeRaw, 10)
+    : null;
+  const pagePayload = await conversationData.loadConversationPage(req.params.conversationId, {
+    limit: pageSize,
+    beforeSequenceNo: Number.isFinite(beforeSequenceNo) ? beforeSequenceNo : null,
+  });
+  const enriched = pagePayload.messages;
+  const summary = pagePayload.summarySkipped
+    ? undefined
+    : pagePayload.summary;
+  const contextUsage = beforeSequenceNo == null
+    ? await contextBreakdown.computeForConversation(conv, req.user.userId, { summary })
+    : null;
+  const resolvedContextUsage = contextUsage || (() => {
+    const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);
+    const effectiveTokens = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
+    const contextLimit = modelMeta?.contextWindow || 128000;
+    return {
+      effectiveTokens,
+      limit: contextLimit,
+      pct: contextLimit > 0 ? effectiveTokens / contextLimit : 0,
+      breakdown: [],
+      estimated: false,
+      billedTokens: effectiveTokens,
+    };
+  })();
   return res.status(HTTP.OK).json({
     data: {
       conversation: conv,
       messages: enriched,
       summary,
-      contextUsage,
+      contextUsage: resolvedContextUsage,
+      pagination: pagePayload.pagination,
     },
   });
 };

@@ -27,14 +27,45 @@ exports.create = (data) => {
   ]);
 };
 
-exports.listByConversation = (conversationId, { limit = 200 } = {}) => {
-  const q = `SELECT message_id, conversation_id, turn_id, client_message_id, role, content, content_parts,
-    model_provider, model_id, sequence_no, tokens_in, tokens_out, cost_usd, latency_ms, finish_reason, created_at
+const MESSAGE_LIST_COLUMNS = `message_id, conversation_id, turn_id, client_message_id, role, content, content_parts,
+    model_provider, model_id, sequence_no, tokens_in, tokens_out, cost_usd, latency_ms, finish_reason, created_at`;
+
+/** Full history ascending (orchestrator, export, context breakdown). */
+exports.listByConversation = (conversationId) => {
+  const q = `SELECT ${MESSAGE_LIST_COLUMNS}
     FROM admin_llm_chat_messages
     WHERE conversation_id = ? AND is_hidden = 0
-    ORDER BY sequence_no ASC
+    ORDER BY sequence_no ASC`;
+  return mysqlModel.runQueryInSlave(q, [conversationId]);
+};
+
+/** Recent page for chat UI: latest N, or N older than beforeSequenceNo. Returns ascending order. */
+exports.listPageByConversation = (conversationId, { limit = 10, beforeSequenceNo = null } = {}) => {
+  const lim = Math.min(Math.max(1, parseInt(limit, 10) || 10), 100);
+  if (beforeSequenceNo != null && Number.isFinite(Number(beforeSequenceNo))) {
+    const q = `SELECT ${MESSAGE_LIST_COLUMNS}
+      FROM admin_llm_chat_messages
+      WHERE conversation_id = ? AND is_hidden = 0 AND sequence_no < ?
+      ORDER BY sequence_no DESC
+      LIMIT ?`;
+    return mysqlModel.runQueryInSlave(q, [conversationId, beforeSequenceNo, lim])
+      .then((rows) => rows.reverse());
+  }
+  const q = `SELECT ${MESSAGE_LIST_COLUMNS}
+    FROM admin_llm_chat_messages
+    WHERE conversation_id = ? AND is_hidden = 0
+    ORDER BY sequence_no DESC
     LIMIT ?`;
-  return mysqlModel.runQueryInSlave(q, [conversationId, limit]);
+  return mysqlModel.runQueryInSlave(q, [conversationId, lim])
+    .then((rows) => rows.reverse());
+};
+
+exports.hasOlderThan = (conversationId, sequenceNo) => {
+  const q = `SELECT 1 AS ok FROM admin_llm_chat_messages
+    WHERE conversation_id = ? AND is_hidden = 0 AND sequence_no < ?
+    LIMIT 1`;
+  return mysqlModel.runQueryInSlave(q, [conversationId, sequenceNo])
+    .then((rows) => rows.length > 0);
 };
 
 exports.getById = (messageId) => {
