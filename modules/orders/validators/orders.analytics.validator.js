@@ -69,7 +69,18 @@ exports.validateUserSubscriptionsTableQuery = function (req, res, next) {
 const purchasingCustomersTableQuerySchema = Joi.object({
   search: Joi.string().trim().max(128).optional().allow(''),
   page: Joi.number().integer().min(1).optional().default(1),
-  limit: Joi.number().integer().min(1).max(100).optional().default(10)
+  limit: Joi.number().integer().min(1).max(100).optional().default(10),
+  sort: Joi.string()
+    .valid(
+      'last_purchased_at',
+      'alacarte_purchases',
+      'subscription_purchases',
+      'addon_purchases',
+      'total_purchases'
+    )
+    .optional()
+    .default('last_purchased_at'),
+  sort_dir: Joi.string().valid('asc', 'desc').optional().default('desc')
 });
 
 exports.validatePurchasingCustomersTableQuery = function (req, res, next) {

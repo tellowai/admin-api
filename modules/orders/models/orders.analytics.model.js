@@ -396,6 +396,28 @@ const SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL = `
   AND NOT (${SUBSCRIPTION_IS_UPGRADE_SQL})
 `;
 
+/** @type {Record<string, string>} */
+const PURCHASING_CUSTOMERS_SORT_COLUMNS = {
+  last_purchased_at: 'purchasers.last_purchased_at',
+  alacarte_purchases: 'purchasers.alacarte_purchases',
+  subscription_purchases: 'purchasers.subscription_purchases',
+  addon_purchases: 'purchasers.addon_purchases',
+  total_purchases: 'purchasers.total_purchases'
+};
+
+/**
+ * @param {string} [sortBy]
+ * @param {string} [sortDir]
+ * @returns {string}
+ */
+function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
+  const key = sortBy != null ? String(sortBy).trim() : '';
+  const col =
+    PURCHASING_CUSTOMERS_SORT_COLUMNS[key] || PURCHASING_CUSTOMERS_SORT_COLUMNS.last_purchased_at;
+  const dir = String(sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  return `${col} ${dir}, purchasers.user_id DESC`;
+}
+
 /**
  * Paginated customers who have purchased at least once (completed order and/or subscription row).
  *
@@ -410,11 +432,14 @@ const SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL = `
  * @param {string} [opts.search] name, email, mobile, or user id fragment
  * @param {number} opts.limit
  * @param {number} opts.offset
+ * @param {string} [opts.sortBy]
+ * @param {string} [opts.sortDir] asc | desc
  * @param {boolean} [opts.useMaster]
  * @returns {Promise<{ rows: object[], total: number }>}
  */
 exports.listPurchasingCustomersForAdmin = async function (opts) {
-  const { search = '', limit, offset, useMaster = false } = opts;
+  const { search = '', limit, offset, sortBy, sortDir, useMaster = false } = opts;
+  const orderBySql = resolvePurchasingCustomersOrderBy(sortBy, sortDir);
   const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
 
   const searchTrim = search != null ? String(search).trim() : '';
@@ -517,7 +542,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       ${aggSelect}
     ) purchasers
     WHERE purchasers.total_purchases > 0
-    ORDER BY purchasers.last_purchased_at DESC, purchasers.user_id DESC
+    ORDER BY ${orderBySql}
     LIMIT ? OFFSET ?
   `;
   const rows = await runQuery(listQuery, [...searchParams, limit, offset]);
