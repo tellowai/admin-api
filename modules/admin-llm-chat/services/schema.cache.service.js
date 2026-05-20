@@ -21,6 +21,7 @@ function buildFromWhitelist() {
         aggregating: Boolean(meta.aggregating),
         pii_columns: meta.pii_columns || [],
         forbidden_filter_columns: meta.required_date_column === 'report_date' ? ['date'] : [],
+        currency_column: meta.currency_column || null,
       },
     ]),
   );

@@ -32,13 +32,13 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
     const rows = Array.isArray(data) ? data : [];
     const redacted = rows.map((row) => redactRow(row));
     const truncated = rows.length >= (maxRows || CONSTANTS.CH_QUERY_LIMIT_DEFAULT);
-    return {
+    return enrichMonetaryResult({
       success: true,
       rows: redacted,
       row_count: redacted.length,
       truncated,
       query_ms: Date.now() - start,
-    };
+    }, runSql, validation.tables);
   } catch (error) {
     const msg = String(error.message || '');
     if (msg.includes('Timeout')) {
@@ -59,6 +59,28 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
     }
     return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true };
   }
+}
+
+const MONETARY_METRICS = /\b(total_revenue|amount_total|spend|conversion_value|conversions_value)\b/i;
+
+/** Warn when revenue/spend was summed without currency in SELECT/GROUP BY. */
+function enrichMonetaryResult(result, sql, tables = []) {
+  if (!result?.success || !result.rows?.length || !tables.length) return result;
+  const table = tables[0];
+  const meta = WHITELIST[table];
+  const currencyCol = meta?.currency_column;
+  if (!currencyCol) return result;
+  const sqlLower = String(sql || '').toLowerCase();
+  if (!MONETARY_METRICS.test(sqlLower)) return result;
+  if (sqlLower.includes(currencyCol)) return result;
+  const sample = result.rows[0];
+  if (sample && currencyCol in sample) return result;
+  return {
+    ...result,
+    warning: `Amounts were aggregated without ${currencyCol}. Values may mix currencies — re-query with ${currencyCol} in SELECT and GROUP BY ${currencyCol}.`,
+    format_hint: 'Present revenue/spend as "<amount> <CURRENCY>" per row, not a bare number.',
+    suggested_sql: `SELECT ${currencyCol}, sum(total_revenue) AS total_revenue FROM ${table} WHERE report_date >= '...' AND report_date <= '...' GROUP BY ${currencyCol}`,
+  };
 }
 
 function redactRow(row) {
@@ -95,9 +117,13 @@ function getTableSchema({ table }) {
     aggregating: Boolean(meta.aggregating),
     description: meta.description,
     forbidden_filter_columns: forbidden,
+    currency_column: meta.currency_column || null,
     hint: meta.required_date_column === 'report_date'
       ? 'Daily stats use report_date — never use `date` in WHERE on this table.'
       : 'Use the date column shown in required_date_column for WHERE filters.',
+    revenue_hint: meta.currency_column
+      ? `Include ${meta.currency_column} in SELECT and GROUP BY when summing total_revenue, amount_total, or spend.`
+      : null,
   };
 }
 

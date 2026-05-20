@@ -54,7 +54,8 @@ module.exports = {
   },
   revenue_daily_stats: {
     required_date_column: 'report_date',
-    description: 'Daily commerce revenue (object_type commerce / purchase events).',
+    description: 'Daily commerce revenue (object_type commerce / purchase events). Always GROUP BY currency when summing total_revenue — never report a bare number without currency.',
+    currency_column: 'currency',
     columns: [
       'report_date', 'currency', 'payment_provider', 'plan_name', 'app_version', 'build_number',
       'os_name', 'os_version', 'device_brand', 'device_model', 'screen_resolution', 'network_type',
@@ -66,7 +67,8 @@ module.exports = {
   },
   orders_daily_stats: {
     required_date_column: 'report_date',
-    description: 'Daily order lifecycle counts (created/completed/failed).',
+    description: 'Daily order lifecycle counts (created/completed/failed). Include currency when summing amount_total.',
+    currency_column: 'currency',
     columns: [
       'report_date', 'status', 'product_classification', 'payment_gateway', 'plan_type',
       'billing_interval', 'currency', 'store_country', 'ip_country', 'timezone',
@@ -136,7 +138,8 @@ module.exports = {
   },
   meta_ads_insights_daily: {
     required_date_column: 'date',
-    description: 'Meta Ads daily spend and performance.',
+    description: 'Meta Ads daily spend and performance. Include currency when reporting spend.',
+    currency_column: 'currency',
     columns: [
       'date', 'account_id', 'account_name', 'campaign_id', 'campaign_name', 'objective',
       'adset_id', 'adset_name', 'ad_id', 'ad_name', 'spend', 'impressions', 'clicks',
@@ -147,7 +150,8 @@ module.exports = {
   },
   google_ads_insights_daily: {
     required_date_column: 'date',
-    description: 'Google Ads daily spend and performance.',
+    description: 'Google Ads daily spend and performance. Include currency when reporting spend.',
+    currency_column: 'currency',
     columns: [
       'date', 'customer_id', 'customer_name', 'campaign_id', 'campaign_name', 'ad_group_id', 'ad_group_name',
       'ad_id', 'ad_name', 'spend', 'impressions', 'clicks', 'interactions', 'conversions',
