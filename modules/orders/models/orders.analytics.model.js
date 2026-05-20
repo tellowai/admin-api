@@ -630,6 +630,27 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   const countRows = await runQuery(countQuery, [...baseFromParams, ...rangeParams]);
   const total = Number(countRows[0]?.cnt || 0) || 0;
 
+  const summaryQuery = `
+    SELECT
+      COALESCE(SUM(purchasers.alacarte_purchases), 0) AS alacarte_purchases,
+      COALESCE(SUM(purchasers.addon_purchases), 0) AS addon_purchases,
+      COALESCE(SUM(purchasers.subscription_purchases), 0) AS subscription_purchases,
+      COALESCE(SUM(purchasers.total_purchases), 0) AS total_purchases
+    FROM (
+      ${aggSelect}
+    ) purchasers
+    WHERE purchasers.total_purchases > 0
+    ${rangeClause}
+  `;
+  const summaryRows = await runQuery(summaryQuery, [...baseFromParams, ...rangeParams]);
+  const summaryRow = summaryRows[0] || {};
+  const summary = {
+    alacarte_purchases: Number(summaryRow.alacarte_purchases) || 0,
+    addon_purchases: Number(summaryRow.addon_purchases) || 0,
+    subscription_purchases: Number(summaryRow.subscription_purchases) || 0,
+    total_purchases: Number(summaryRow.total_purchases) || 0
+  };
+
   const listQuery = `
     SELECT * FROM (
       ${aggSelect}
@@ -640,5 +661,5 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
     LIMIT ? OFFSET ?
   `;
   const rows = await runQuery(listQuery, [...baseFromParams, ...rangeParams, limit, offset]);
-  return { rows: rows || [], total };
+  return { rows: rows || [], total, summary };
 };

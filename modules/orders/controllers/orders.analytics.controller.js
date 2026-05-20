@@ -434,7 +434,7 @@ exports.getPurchasingCustomersTable = async function (req, res) {
         ? Math.floor(Number(q.range_max))
         : null;
 
-    const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
+    const { rows, total, summary } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
       startCal,
       endCal,
       tz,
@@ -467,7 +467,13 @@ exports.getPurchasingCustomersTable = async function (req, res) {
         items,
         total,
         page,
-        limit
+        limit,
+        summary: {
+          alacarte_purchases: Number(summary?.alacarte_purchases) || 0,
+          addon_purchases: Number(summary?.addon_purchases) || 0,
+          subscription_purchases: Number(summary?.subscription_purchases) || 0,
+          total_purchases: Number(summary?.total_purchases) || 0
+        }
       }
     });
   } catch (err) {
