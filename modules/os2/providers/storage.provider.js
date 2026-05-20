@@ -48,6 +48,15 @@ class StorageProvider {
   async getObjectBufferFromBucket(bucket, key) {
     throw new Error('Method not implemented');
   }
+
+  /**
+   * @param {string} bucket
+   * @param {string} key
+   * @returns {Promise<boolean>}
+   */
+  async objectExistsInBucket(bucket, key) {
+    throw new Error('Method not implemented');
+  }
 }
 
 module.exports = StorageProvider; 

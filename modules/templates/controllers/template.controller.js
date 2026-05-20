@@ -160,7 +160,14 @@ async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templa
       templateData.cf_r2_key !== undefined ? templateData.cf_r2_key : existingTemplate.cf_r2_key
     );
     if (oldCf && (!newCf || oldCf.bucket !== newCf.bucket || oldCf.key !== newCf.key)) {
-      await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldCf, 'cf_r2');
+      if (!newCf || await storage.objectExistsInBucket(newCf.bucket, newCf.key)) {
+        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldCf, 'cf_r2');
+      } else {
+        logger.warn('Skipping cf_r2 orphan delete — replacement object not in R2', {
+          old_key: oldCf.key,
+          new_key: newCf?.key
+        });
+      }
     }
 
     const oldThumb = normalizedTemplateMediaRef(existingTemplate.thumb_frame_bucket, existingTemplate.thumb_frame_asset_key);
@@ -169,7 +176,14 @@ async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templa
       templateData.thumb_frame_asset_key !== undefined ? templateData.thumb_frame_asset_key : existingTemplate.thumb_frame_asset_key
     );
     if (oldThumb && (!newThumb || oldThumb.bucket !== newThumb.bucket || oldThumb.key !== newThumb.key)) {
-      await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldThumb, 'thumb_frame');
+      if (!newThumb || await storage.objectExistsInBucket(newThumb.bucket, newThumb.key)) {
+        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldThumb, 'thumb_frame');
+      } else {
+        logger.warn('Skipping thumb_frame orphan delete — replacement object not in R2', {
+          old_key: oldThumb.key,
+          new_key: newThumb?.key
+        });
+      }
     }
   } catch (err) {
     logger.warn('deleteOrphanedTemplateR2MediaAfterUpdate failed', { error: err.message });

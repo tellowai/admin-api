@@ -200,6 +200,28 @@ class R2StorageProvider extends StorageProvider {
     return Buffer.from(bytes);
   }
 
+  /**
+   * @returns {Promise<boolean>}
+   */
+  async objectExistsInBucket(bucket, key) {
+    if (!key || !String(key).trim()) return false;
+    const targetBucket = this.resolveBucketName(bucket);
+    const cleanKey = key.startsWith('/') ? key.slice(1) : key;
+    try {
+      await this.client.send(new HeadObjectCommand({
+        Bucket: targetBucket,
+        Key: cleanKey
+      }));
+      return true;
+    } catch (err) {
+      const code = err?.name || err?.Code;
+      if (code === 'NotFound' || code === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   async deleteObject(key) {
     if (!key || !String(key).trim()) return;
     const command = new DeleteObjectCommand({
