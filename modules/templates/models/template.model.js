@@ -787,6 +787,8 @@ exports.getTemplateById = async function (templateId) {
       bodymovin_json_key,
       custom_text_input_fields,
       credits,
+      member_price,
+      member_original_price,
       alacarte_price,
       alacarte_original_price,
       aspect_ratio,
