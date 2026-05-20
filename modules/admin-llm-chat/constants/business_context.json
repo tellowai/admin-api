@@ -1,0 +1,7 @@
+{
+  "companyName": "Tellow AI",
+  "primaryKpis": ["ROAS", "CPI", "installs", "revenue", "retention"],
+  "targetRoas": 3,
+  "defaultTimezone": "Asia/Kolkata",
+  "notes": "Update via PATCH /api/admin/llm-chat/business-context"
+}

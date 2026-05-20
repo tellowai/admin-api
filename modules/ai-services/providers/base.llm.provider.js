@@ -16,6 +16,18 @@ class BaseLLMProvider {
     throw new Error("Method 'createMultiModalCompletion' must be implemented");
   }
 
+  async streamChatCompletion(_opts) {
+    throw new Error("Method 'streamChatCompletion' must be implemented");
+  }
+
+  async countTokens(_opts) {
+    throw new Error("Method 'countTokens' must be implemented");
+  }
+
+  listSupportedModels() {
+    throw new Error("Method 'listSupportedModels' must be implemented");
+  }
+
   _calculateMetrics(response, startTime, messages, activeModel, isMultiModal = false) {
     throw new Error("Method '_calculateMetrics' must be implemented");
   }
