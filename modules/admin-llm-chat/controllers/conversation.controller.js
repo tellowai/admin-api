@@ -67,7 +67,10 @@ exports.getConversation = async (req, res) => {
     ? undefined
     : pagePayload.summary;
   const contextUsage = beforeSequenceNo == null
-    ? await contextBreakdown.computeForConversation(conv, req.user.userId, { summary })
+    ? await contextBreakdown.computeForConversation(conv, req.user.userId, {
+      summary,
+      messages: enriched,
+    })
     : null;
   const resolvedContextUsage = contextUsage || (() => {
     const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);

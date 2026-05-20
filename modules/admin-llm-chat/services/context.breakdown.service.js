@@ -16,18 +16,31 @@ const CATEGORIES = [
   { key: 'attachments', label: 'Attachments', color: '#eab308' },
 ];
 
+let tokenEncoder = null;
+
+function getTokenEncoder() {
+  if (tokenEncoder) return tokenEncoder;
+  try {
+    const { encoding_for_model } = require('tiktoken');
+    tokenEncoder = encoding_for_model('gpt-4o');
+    return tokenEncoder;
+  } catch (_e) {
+    return null;
+  }
+}
+
 function estimateTokens(text, _modelId) {
   if (!text) return 0;
   const s = String(text);
-  try {
-    const { encoding_for_model } = require('tiktoken');
-    const enc = encoding_for_model('gpt-4o');
-    const n = enc.encode(s).length;
-    enc.free();
-    return n;
-  } catch (_e) {
-    return Math.ceil(s.length / 4);
+  const enc = getTokenEncoder();
+  if (enc) {
+    try {
+      return enc.encode(s).length;
+    } catch (_e) {
+      return Math.ceil(s.length / 4);
+    }
   }
+  return Math.ceil(s.length / 4);
 }
 
 function contentToString(content) {
