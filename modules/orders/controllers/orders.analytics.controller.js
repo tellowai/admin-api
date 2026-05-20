@@ -402,10 +402,18 @@ function buildPurchasingCustomerUserDetails(row) {
   return Object.keys(details).length ? details : null;
 }
 
-/** GET /admin/orders/analytics/purchasing-customers — lifetime purchasers (paginated). */
+/** GET /admin/orders/analytics/purchasing-customers — purchasers in date range (paginated). */
 exports.getPurchasingCustomersTable = async function (req, res) {
   try {
     const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date);
+    const endCal = toCalendarDate(q.end_date);
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 10));
     const offset = (page - 1) * limit;
@@ -427,6 +435,9 @@ exports.getPurchasingCustomersTable = async function (req, res) {
         : null;
 
     const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
+      startCal,
+      endCal,
+      tz,
       search,
       limit,
       offset,
