@@ -3,6 +3,8 @@
 const MessageModel = require('../models/message.model');
 const ToolCallModel = require('../models/tool_call.model');
 const ContextSummaryModel = require('../models/context.summary.model');
+const AttachmentModel = require('../models/attachment.model');
+const attachmentStorage = require('./attachment.storage.service');
 
 function parseJsonColumn(value) {
   if (value == null) return null;
@@ -53,6 +55,57 @@ async function buildMessagesPagination(conversationId, messages, { limit }) {
   return { hasMore, oldestSequenceNo, pageSize: limit };
 }
 
+function partsArrayFromMessage(m) {
+  const parts = m.content_parts;
+  if (Array.isArray(parts)) return [...parts];
+  if (parts && typeof parts === 'object' && Array.isArray(parts.parts)) return [...parts.parts];
+  return [];
+}
+
+function mergeMessageAttachments(messages, conversationId, imageRows) {
+  if (!imageRows?.length) return messages;
+  const byMsg = {};
+  imageRows.forEach((row) => {
+    if (!byMsg[row.message_id]) byMsg[row.message_id] = [];
+    byMsg[row.message_id].push({
+      attachment_id: row.attachment_id,
+      mime_type: row.mime_type,
+      original_name: row.original_name,
+      public_url: attachmentStorage.publicUrlForKey(row.storage_key),
+    });
+  });
+  return messages.map((m) => {
+    const attachments = byMsg[m.message_id];
+    if (!attachments?.length) return m;
+    let parts = partsArrayFromMessage(m);
+    const hasImage = parts.some((p) => p?.type === 'image_url');
+    if (!hasImage) {
+      const text = typeof m.content === 'string' ? m.content.trim() : '';
+      if (text && !parts.some((p) => p?.type === 'text')) {
+        parts.unshift({ type: 'text', text });
+      }
+      parts = parts.concat(
+        attachments.map((a) => ({
+          type: 'image_url',
+          image_url: { url: a.public_url },
+        })),
+      );
+    }
+    return {
+      ...m,
+      attachments,
+      content_parts: parts.length ? parts : m.content_parts,
+    };
+  });
+}
+
+async function enrichMessagesWithAttachments(messages, conversationId) {
+  const userIds = messages.filter((m) => m.role === 'user' && m.message_id).map((m) => m.message_id);
+  if (!userIds.length) return messages;
+  const imageRows = await AttachmentModel.listImagesByMessageIds(conversationId, userIds);
+  return mergeMessageAttachments(messages, conversationId, imageRows);
+}
+
 /** Paginated window for conversation detail API. */
 async function loadConversationPage(conversationId, { limit, beforeSequenceNo } = {}) {
   const [messagePayload, summary] = await Promise.all([
@@ -60,8 +113,9 @@ async function loadConversationPage(conversationId, { limit, beforeSequenceNo } 
     beforeSequenceNo == null ? ContextSummaryModel.getLatest(conversationId) : Promise.resolve(undefined),
   ]);
   const pagination = await buildMessagesPagination(conversationId, messagePayload.messages, { limit });
+  const messages = await enrichMessagesWithAttachments(messagePayload.messages, conversationId);
   return {
-    messages: messagePayload.messages,
+    messages,
     toolCalls: messagePayload.toolCalls,
     summary: summary !== undefined ? summary : null,
     pagination,
@@ -88,4 +142,5 @@ module.exports = {
   loadMessagesWithTools,
   loadConversationPage,
   loadConversationContext,
+  enrichMessagesWithAttachments,
 };

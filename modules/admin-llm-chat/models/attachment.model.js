@@ -38,6 +38,16 @@ exports.linkToMessage = (attachmentIds, messageId) => {
   return mysqlModel.runQueryInMaster(q, [messageId, ...attachmentIds]);
 };
 
+exports.listImagesByMessageIds = (conversationId, messageIds) => {
+  if (!messageIds?.length) return Promise.resolve([]);
+  const placeholders = messageIds.map(() => '?').join(',');
+  const q = `SELECT attachment_id, message_id, mime_type, storage_key, original_name
+    FROM admin_llm_chat_attachments
+    WHERE conversation_id = ? AND message_id IN (${placeholders})
+    AND mime_type LIKE 'image/%'`;
+  return mysqlModel.runQueryInSlave(q, [conversationId, ...messageIds]);
+};
+
 exports.listByConversation = (conversationId) => {
   const q = `SELECT attachment_id, conversation_id, message_id, mime_type, size_bytes,
     storage_key, original_name, parse_status, created_at
