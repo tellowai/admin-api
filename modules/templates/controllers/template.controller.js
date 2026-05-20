@@ -734,7 +734,7 @@ exports.listTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : undefined;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : undefined;
 
     const ie = req.query.is_effects;
     let isEffectsFilter;
@@ -1387,7 +1387,7 @@ exports.searchTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : null;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : null;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : null;
     const listSort = parseTemplateListSort(req.query);
     const nameOnly =
       req.query.name_only === 'true' ||
