@@ -64,3 +64,22 @@ exports.validateUserSubscriptionsTableQuery = function (req, res, next) {
   req.validatedQuery = payloadValidation.value;
   return next(null);
 };
+
+/** Paginated customers with at least one purchase (lifetime). */
+const purchasingCustomersTableQuerySchema = Joi.object({
+  search: Joi.string().trim().max(128).optional().allow(''),
+  page: Joi.number().integer().min(1).optional().default(1),
+  limit: Joi.number().integer().min(1).max(100).optional().default(10)
+});
+
+exports.validatePurchasingCustomersTableQuery = function (req, res, next) {
+  const payloadValidation = validationCtrl.validate(purchasingCustomersTableQuerySchema, req.query);
+  if (payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+  req.validatedQuery = payloadValidation.value;
+  return next(null);
+};
