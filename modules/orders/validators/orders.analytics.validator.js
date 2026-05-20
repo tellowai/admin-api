@@ -65,22 +65,53 @@ exports.validateUserSubscriptionsTableQuery = function (req, res, next) {
   return next(null);
 };
 
+const purchasingCustomersRangeFields = [
+  'alacarte_purchases',
+  'subscription_purchases',
+  'addon_purchases',
+  'total_purchases',
+  'credit_balance'
+];
+
 /** Paginated customers with at least one purchase (lifetime). */
 const purchasingCustomersTableQuerySchema = Joi.object({
   search: Joi.string().trim().max(128).optional().allow(''),
   page: Joi.number().integer().min(1).optional().default(1),
   limit: Joi.number().integer().min(1).max(100).optional().default(10),
   sort: Joi.string()
-    .valid(
-      'last_purchased_at',
-      'alacarte_purchases',
-      'subscription_purchases',
-      'addon_purchases',
-      'total_purchases'
-    )
+    .valid('last_purchased_at', ...purchasingCustomersRangeFields)
     .optional()
     .default('last_purchased_at'),
-  sort_dir: Joi.string().valid('asc', 'desc').optional().default('desc')
+  sort_dir: Joi.string().valid('asc', 'desc').optional().default('desc'),
+  range_field: Joi.string()
+    .valid(...purchasingCustomersRangeFields)
+    .optional()
+    .allow(''),
+  range_min: Joi.number().integer().min(0).optional(),
+  range_max: Joi.number().integer().min(0).optional()
+}).custom((value, helpers) => {
+  const field =
+    value.range_field != null && String(value.range_field).trim() !== ''
+      ? String(value.range_field).trim()
+      : '';
+  const hasMin = value.range_min != null && value.range_min !== '';
+  const hasMax = value.range_max != null && value.range_max !== '';
+  if (!field && (hasMin || hasMax)) {
+    return helpers.error('any.custom', {
+      message: 'range_field is required when range_min or range_max is set'
+    });
+  }
+  if (field && !hasMin && !hasMax) {
+    return helpers.error('any.custom', {
+      message: 'range_min or range_max is required when range_field is set'
+    });
+  }
+  if (hasMin && hasMax && Number(value.range_min) > Number(value.range_max)) {
+    return helpers.error('any.custom', {
+      message: 'range_min must be less than or equal to range_max'
+    });
+  }
+  return value;
 });
 
 exports.validatePurchasingCustomersTableQuery = function (req, res, next) {
