@@ -170,10 +170,13 @@ function messageToApiRows(m, activeProvider, supportsVision) {
   }
 
   if (m.role === 'tool') {
+    const content = typeof m.content === 'string'
+      ? m.content
+      : JSON.stringify(m.content || m.content_stub || {});
     return [{
       role: 'tool',
       tool_call_id: m.tool_call_id,
-      content: m.content_stub || m.content,
+      content,
     }];
   }
 
@@ -186,6 +189,27 @@ function messageToApiRows(m, activeProvider, supportsVision) {
     role: m.role,
     content: normalizeContent(m, supportsVision),
   }];
+}
+
+/** OpenAI requires each tool message to follow an assistant message with matching tool_calls. */
+function repairOpenaiToolMessageSequence(apiRows) {
+  const out = [];
+  for (const row of apiRows) {
+    if (row.role === 'tool') {
+      const prev = out[out.length - 1];
+      const prevIds = prev?.tool_calls?.map((tc) => tc.id || tc.tool_call_id) || [];
+      const matches = prev?.role === 'assistant'
+        && prev.tool_calls?.length
+        && prevIds.includes(row.tool_call_id);
+      if (!matches) {
+        const body = typeof row.content === 'string' ? row.content : JSON.stringify(row.content || {});
+        out.push({ role: 'assistant', content: `[Tool result]: ${truncatePreview(body, 2048)}` });
+        continue;
+      }
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 function sanitizeMessageRow(row, activeProvider) {
@@ -252,7 +276,11 @@ function buildMessagesForProvider(history, systemText, options = {}) {
     }
   });
 
-  return apiRows.map((row) => sanitizeMessageRow(row, activeProvider));
+  let sanitized = apiRows.map((row) => sanitizeMessageRow(row, activeProvider));
+  if (activeProvider === 'openai') {
+    sanitized = repairOpenaiToolMessageSequence(sanitized);
+  }
+  return sanitized;
 }
 
 module.exports = {

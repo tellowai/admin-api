@@ -12,7 +12,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_table_schema',
-    description: 'Get column names and types for a whitelisted table.',
+    description: 'REQUIRED before query_clickhouse. Returns exact column names and the date filter column (often report_date, not date).',
     parameters: {
       type: 'object',
       properties: {
@@ -24,7 +24,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'query_clickhouse',
-    description: 'Run a safe SELECT on one whitelisted table. Must include date filter. No JOINs.',
+    description: 'Run SELECT on one whitelisted table. Call get_table_schema first; use required_date_column in WHERE (report_date for daily stats). No JOINs.',
     parameters: {
       type: 'object',
       properties: {

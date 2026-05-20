@@ -40,6 +40,36 @@ describe('prompt.service flattenToolCallsForProvider', () => {
     expect(assistant.tool_calls).to.be.undefined;
   });
 
+  it('keeps tool message after assistant tool_calls in buildMessagesForProvider', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [
+        { role: 'user', content: 'schema?', sequence_no: 1 },
+        {
+          role: 'assistant',
+          content: null,
+          model_provider: 'openai',
+          tool_calls: [{
+            tool_call_id: 'call_abc',
+            tool_name: 'get_table_schema',
+            arguments_json: { table: 'google_ads_insights_daily' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_abc',
+          content: '{"success":true}',
+        },
+      ],
+      'System',
+      { activeProvider: 'openai', supportsVision: true },
+    );
+    const toolIdx = messages.findIndex((m) => m.role === 'tool');
+    expect(toolIdx).to.be.greaterThan(0);
+    expect(messages[toolIdx - 1].role).to.equal('assistant');
+    expect(messages[toolIdx - 1].tool_calls).to.have.length(1);
+    expect(messages[toolIdx - 1].tool_calls[0].function.name).to.equal('get_table_schema');
+  });
+
   it('flattens cross-provider tool calls into assistant text block', () => {
     const rows = promptService.flattenToolCallsForProvider(toolCalls, 'anthropic', 'openai');
     expect(rows).to.have.length(1);

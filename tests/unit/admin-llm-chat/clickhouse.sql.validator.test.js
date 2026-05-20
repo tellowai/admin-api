@@ -41,6 +41,31 @@ describe('clickhouse.sql.validator', () => {
     expect(r.code).to.equal('DATE_PREDICATE_REQUIRED');
   });
 
+  it('auto-fixes date column on report_date tables', () => {
+    const r = validateClickHouseSql(
+      "SELECT status, orders_count FROM orders_daily_stats WHERE date = '2026-05-19'",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('report_date');
+    expect(r.sql).not.to.match(/\bWHERE\s+date\b/i);
+  });
+
+  it('auto-fixes date= without space on report_date tables', () => {
+    const r = validateClickHouseSql(
+      "SELECT * FROM attribution_daily_stats WHERE date='2026-05-19'",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('report_date');
+    expect(r.sql).to.include('SELECT report_date');
+  });
+
+  it('allows report_date on orders_daily_stats', () => {
+    const r = validateClickHouseSql(
+      "SELECT status, sum(orders_count) AS orders FROM orders_daily_stats WHERE report_date = '2026-05-19' GROUP BY status",
+    );
+    expect(r.ok).to.equal(true);
+  });
+
   it('rejects multiple statements', () => {
     const r = validateClickHouseSql("SELECT 1; DROP TABLE meta_ads_insights_daily");
     expect(r.ok).to.equal(false);

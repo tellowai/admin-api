@@ -25,6 +25,32 @@ function estimateCost(modelMeta, tokensIn, tokensOut) {
   return ((tokensIn / 1e6) * modelMeta.inputCostPer1M + (tokensOut / 1e6) * modelMeta.outputCostPer1M);
 }
 
+/** Human-readable tool output for UI trace (not LLM envelope XML). */
+function formatToolResultPreview(result) {
+  if (!result || typeof result !== 'object') return result;
+  if (Array.isArray(result.rows)) {
+    return {
+      success: result.success !== false,
+      error: result.error || null,
+      message: result.message || null,
+      rowCount: result.rows.length,
+      preview: result.rows.slice(0, 5),
+    };
+  }
+  if (typeof result.envelope === 'string') {
+    const m = result.envelope.match(/<tool_result[^>]*>\s*([\s\S]*?)\s*<\/tool_result>/i);
+    if (m) {
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        return m[1].trim();
+      }
+    }
+  }
+  const { envelope: _omit, ...rest } = result;
+  return rest;
+}
+
 class TurnTraceBuilder {
   constructor(sendEvent) {
     this.sendEvent = sendEvent;
@@ -94,7 +120,7 @@ class TurnTraceBuilder {
       seg.status = result?.success === false ? 'failed' : 'completed';
       seg.durationMs = durationMs;
       seg.rowsReturned = result?.rows?.length ?? null;
-      seg.resultPreview = truncatePreview(redactValue(result?.envelope || result), 2048);
+      seg.resultPreview = truncatePreview(redactValue(formatToolResultPreview(result)), 2048);
     }
     this.sendEvent('segment_end', { kind: 'tool', index: this.segmentIndex });
     this.currentKind = null;
@@ -232,12 +258,22 @@ async function runStreamingTurn({
   let turnTokensIn = 0;
   let turnTokensOut = 0;
   let sawToolThisRound = false;
+  const turnExtraMessages = [];
 
-  const runLoop = async (extraMessages) => {
+  const runLoop = async ({ allowTools = true, summaryNudge = false } = {}) => {
+    const activeTools = allowTools ? tools : undefined;
+    const nudge = summaryNudge
+      ? [{
+        role: 'user',
+        content: 'Based on the tool results above, answer the user in clear prose. Do not call more tools. If queries failed or tables are missing, say so and suggest next steps.',
+        sequence_no: seq,
+      }]
+      : [];
     const baseHistory = [
       ...history,
       { role: 'user', content: userMessage.content, sequence_no: seq },
-      ...extraMessages,
+      ...turnExtraMessages,
+      ...nudge,
     ];
     const messages = promptService.buildMessagesForProvider(baseHistory, systemText, {
       activeProvider: modelMeta.provider,
@@ -254,7 +290,7 @@ async function runStreamingTurn({
         model: modelMeta.id,
         messages: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role !== 'system') : messages,
         system: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') : undefined,
-        tools,
+        tools: activeTools,
         maxTokens: modelMeta.maxOutputTokens,
         signal,
         onDelta: ({ text }) => {
@@ -287,9 +323,10 @@ async function runStreamingTurn({
 
     if (pendingToolCalls.length && toolCallCount < maxTools) {
       if (!sawToolThisRound) traceBuilder.markFinalSegment();
+      const callsForRound = [...pendingToolCalls];
       const toolResults = [];
       const toolRowsToInsert = [];
-      for (const tc of pendingToolCalls) {
+      for (const tc of callsForRound) {
         toolCallCount += 1;
         const start = Date.now();
         const result = await executeTool(tc.name, tc.arguments, { userId });
@@ -312,11 +349,22 @@ async function runStreamingTurn({
           durationMs,
           result,
         });
-        sendEvent('tool_end', { toolCallId: tc.id, name: tc.name, durationMs });
+        sendEvent('tool_end', {
+          toolCallId: tc.id,
+          name: tc.name,
+          durationMs,
+          args: redactValue(tc.arguments || {}),
+          status: result.success === false ? 'failed' : 'completed',
+          resultPreview: truncatePreview(redactValue(formatToolResultPreview(result)), 2048),
+          rowsReturned: result.rows?.length ?? null,
+        });
+        const toolContent = typeof result.envelope === 'string'
+          ? result.envelope
+          : JSON.stringify(result.envelope || {});
         toolResults.push({
           role: 'tool',
           tool_call_id: tc.id,
-          content: result.envelope,
+          content: toolContent,
           content_stub: `[tool:${tc.name}]`,
         });
       }
@@ -324,16 +372,44 @@ async function runStreamingTurn({
         await ToolCallModel.createMany(toolRowsToInsert);
       }
       pendingToolCalls.length = 0;
-      return runLoop(toolResults);
+      const toolRoundMessages = [
+        {
+          role: 'assistant',
+          content: null,
+          model_provider: modelMeta.provider,
+          tool_calls: callsForRound.map((tc) => ({
+            tool_call_id: tc.id,
+            tool_name: tc.name,
+            arguments_json: tc.arguments,
+          })),
+        },
+        ...toolResults,
+      ];
+      turnExtraMessages.push(...toolRoundMessages);
+      return runLoop({ allowTools: true });
     }
 
-    traceBuilder.markFinalSegment();
+    if (pendingToolCalls.length) {
+      pendingToolCalls.length = 0;
+      await runLoop({ allowTools: false, summaryNudge: true });
+    } else {
+      traceBuilder.markFinalSegment();
+    }
   };
 
   const startedAt = Date.now();
   try {
-    await runLoop([]);
-    const { trace, content, content_parts } = traceBuilder.finalize();
+    await runLoop({});
+    traceBuilder.markFinalSegment();
+    let { trace, content, content_parts } = traceBuilder.finalize();
+    if (!String(content || '').trim() && turnExtraMessages.length) {
+      await runLoop({ allowTools: false, summaryNudge: true });
+      traceBuilder.markFinalSegment();
+      const again = traceBuilder.finalize();
+      trace = again.trace;
+      content = again.content || content;
+      content_parts = again.content_parts;
+    }
     const costUsd = estimateCost(modelMeta, turnTokensIn, turnTokensOut);
     const latencyMs = Date.now() - startedAt;
 
@@ -406,6 +482,7 @@ async function runStreamingTurn({
 
     sendEvent('done', {
       finishReason: 'stop',
+      content,
       trace,
       usage: {
         tokensIn: turnTokensIn,
