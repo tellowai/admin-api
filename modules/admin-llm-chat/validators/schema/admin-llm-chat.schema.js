@@ -24,12 +24,20 @@ module.exports = {
     model_provider: Joi.string().valid('openai', 'anthropic').optional(),
     model_id: Joi.string().max(128).optional(),
   }),
+  presignAttachmentSchema: Joi.object({
+    conversation_id: Joi.string().required(),
+    contentType: Joi.string().required(),
+    extension: Joi.string().max(16).optional().allow(''),
+    size_bytes: Joi.number().integer().positive().optional(),
+  }),
   registerAttachmentSchema: Joi.object({
+    attachment_id: Joi.string().required(),
     conversation_id: Joi.string().required(),
     mime_type: Joi.string().required(),
     size_bytes: Joi.number().integer().positive().required(),
     storage_key: Joi.string().required(),
     original_name: Joi.string().required(),
+    public_url: Joi.string().max(2048).optional().allow('', null),
   }),
   businessContextSchema: Joi.object().unknown(true),
   digestSchema: Joi.object({

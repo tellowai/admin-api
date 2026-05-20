@@ -7,6 +7,8 @@ const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('../services/models.registry.service');
 const contextBreakdown = require('../services/context.breakdown.service');
 const conversationData = require('../services/conversation-data.service');
+const AttachmentModel = require('../models/attachment.model');
+const attachmentStorage = require('../services/attachment.storage.service');
 
 exports.listModels = async (req, res) => {
   return res.status(HTTP.OK).json({ data: modelsRegistry.getEnabledModels() });
@@ -109,7 +111,11 @@ exports.patchConversation = async (req, res) => {
 };
 
 exports.deleteConversation = async (req, res) => {
+  const conv = await ConversationModel.getByIdForUser(req.params.conversationId, req.user.userId);
+  if (!conv) return res.status(HTTP.NOT_FOUND).json({ code: 'CONVERSATION_NOT_FOUND' });
+  const storageKeys = await AttachmentModel.listStorageKeysByConversation(req.params.conversationId);
   await ConversationModel.softDelete(req.params.conversationId, req.user.userId);
+  attachmentStorage.deleteStorageKeys(storageKeys).catch(() => {});
   return res.status(HTTP.OK).json({ data: { deleted: true } });
 };
 

@@ -150,6 +150,12 @@ class AnthropicProvider extends BaseLLMProvider {
             content: m.content.map((part) => {
               if (part.type === 'image_url') {
                 const url = part.image_url?.url || part.url;
+                if (url && /^https?:\/\//i.test(url)) {
+                  return {
+                    type: 'image',
+                    source: { type: 'url', url },
+                  };
+                }
                 const base64 = url?.split(',')[1];
                 const media = url?.match(/data:(image\/[^;]+)/)?.[1] || 'image/jpeg';
                 return {

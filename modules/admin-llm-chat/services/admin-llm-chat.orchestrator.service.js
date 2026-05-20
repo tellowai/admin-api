@@ -14,6 +14,8 @@ const ContextSummaryModel = require('../models/context.summary.model');
 const promptService = require('./prompt.service');
 const contextSummaryService = require('./context.summary.service');
 const contextBreakdown = require('./context.breakdown.service');
+const attachmentResolver = require('./attachment.resolver.service');
+const AttachmentModel = require('../models/attachment.model');
 const titleService = require('./conversation.title.service');
 const { formatProviderError } = require('./provider-error.util');
 const messageScope = require('./message-scope.util');
@@ -286,6 +288,26 @@ async function runStreamingTurn({
     sendEvent('context_warning', { usedPct, limit: modelMeta.contextWindow });
   }
 
+  let resolvedUser;
+  try {
+    resolvedUser = await attachmentResolver.resolveAttachmentsForTurn(
+      attachmentIds,
+      userId,
+      conversation.conversation_id,
+      {
+        userText: userMessage.content,
+        supportsVision: modelMeta.supportsVision !== false,
+      },
+    );
+  } catch (err) {
+    if (err.code === 'INVALID_ATTACHMENTS') {
+      sendEvent('error', { code: 'INVALID_ATTACHMENTS', message: err.message, retryable: false });
+      sendEvent('done', { finishReason: 'error' });
+      return;
+    }
+    throw err;
+  }
+
   const [systemText, historyPayload] = await Promise.all([
     promptService.buildSystemPrompt(userId, conversation.system_prompt_version),
     conversationData.loadMessagesWithTools(conversation.conversation_id),
@@ -305,8 +327,11 @@ async function runStreamingTurn({
       turn_id: turnId,
       client_message_id: userMessage.client_message_id || null,
       role: 'user',
-      content: userMessage.content,
-      content_parts: userMessage.content_parts || null,
+      content: typeof resolvedUser.content === 'string'
+        ? resolvedUser.content
+        : (resolvedUser.content?.find((p) => p.type === 'text')?.text || userMessage.content),
+      content_parts: resolvedUser.content_parts
+        || (Array.isArray(resolvedUser.content) ? resolvedUser.content : userMessage.content_parts || null),
       sequence_no: seq,
     },
     {
@@ -322,9 +347,20 @@ async function runStreamingTurn({
     },
   ]);
 
+  if (attachmentIds?.length) {
+    await AttachmentModel.linkToMessage(attachmentIds, userMsgId);
+  }
+
+  const userTurnMessage = {
+    role: 'user',
+    content: resolvedUser.content,
+    content_parts: resolvedUser.content_parts,
+    sequence_no: seq,
+  };
+
   const historyWithUser = [
     ...history,
-    { role: 'user', content: userMessage.content, sequence_no: seq },
+    userTurnMessage,
   ];
   let turnContextUsage = await contextBreakdown.computeBreakdown({
     conversation,
@@ -365,7 +401,7 @@ async function runStreamingTurn({
       : [];
     const baseHistory = [
       ...history,
-      { role: 'user', content: userMessage.content, sequence_no: seq },
+      userTurnMessage,
       ...turnExtraMessages,
       ...nudge,
     ];

@@ -76,4 +76,7 @@ module.exports = {
   /** Messages returned per page in GET conversation (matches admin templates list page size). */
   MESSAGES_PAGE_SIZE: envInt('ADMIN_LLM_CHAT_MESSAGES_PAGE_SIZE', 10),
   MESSAGES_PAGE_SIZE_MAX: envInt('ADMIN_LLM_CHAT_MESSAGES_PAGE_SIZE_MAX', 50),
+
+  /** Public R2 prefix: admin-llm-chat/attachments/{conversationId}/{attachmentId}.{ext} */
+  ATTACHMENT_STORAGE_PREFIX: 'admin-llm-chat/attachments/',
 };

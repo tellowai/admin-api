@@ -34,6 +34,7 @@ module.exports = function (app) {
   app.post(prefix + '/conversations/:conversationId/messages/stream', admin, perm, ChatMiddleware.requireEnabled, Validator.validateStreamMessage, MessageCtrl.streamMessage);
   app.delete(prefix + '/conversations/:conversationId/stream', admin, perm, ChatMiddleware.requireEnabled, MessageCtrl.abortStream);
 
+  app.post(prefix + '/attachments/presign', admin, perm, ChatMiddleware.requireEnabled, Validator.validatePresignAttachment, AttachmentCtrl.presignAttachment);
   app.post(prefix + '/attachments', admin, perm, ChatMiddleware.requireEnabled, Validator.validateRegisterAttachment, AttachmentCtrl.registerAttachment);
   app.post(prefix + '/attachments/:attachmentId/parse', admin, perm, ChatMiddleware.requireEnabled, AttachmentCtrl.parseAttachment);
 

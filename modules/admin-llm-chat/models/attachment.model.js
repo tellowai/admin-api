@@ -45,6 +45,21 @@ exports.listByConversation = (conversationId) => {
   return mysqlModel.runQueryInSlave(q, [conversationId]);
 };
 
+exports.listStorageKeysByConversation = (conversationId) => {
+  const q = `SELECT storage_key FROM admin_llm_chat_attachments
+    WHERE conversation_id = ? AND storage_key IS NOT NULL`;
+  return mysqlModel.runQueryInSlave(q, [conversationId])
+    .then((rows) => (rows || []).map((r) => r.storage_key).filter(Boolean));
+};
+
+exports.listOrphanStorageKeysOlderThan = (graceHours) => {
+  const q = `SELECT storage_key FROM admin_llm_chat_attachments
+    WHERE message_id IS NULL AND storage_key IS NOT NULL
+    AND created_at < DATE_SUB(NOW(), INTERVAL ? HOUR)`;
+  return mysqlModel.runQueryInSlave(q, [graceHours])
+    .then((rows) => (rows || []).map((r) => r.storage_key).filter(Boolean));
+};
+
 exports.listByIdsForUser = (attachmentIds, userId) => {
   if (!attachmentIds.length) return Promise.resolve([]);
   const placeholders = attachmentIds.map(() => '?').join(',');
