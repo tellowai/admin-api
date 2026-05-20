@@ -452,8 +452,23 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
   return `${col} ${dir}, purchasers.user_id DESC`;
 }
 
+const PURCHASE_AT_ORDERS_SQL = `COALESCE(o.completed_at, o.created_at)`;
+const PURCHASE_AT_ORDERS_ELIGIBLE_SQL = `COALESCE(completed_at, created_at)`;
+const PURCHASE_AT_SUBSCRIPTIONS_SQL = `COALESCE(s.start_at, s.created_at)`;
+const PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL = `COALESCE(start_at, created_at)`;
+
 /**
- * Paginated customers who have purchased at least once (completed order and/or subscription row).
+ * @param {string} rangeStartUtc
+ * @param {string} rangeEndUtc
+ * @returns {string[]}
+ */
+function purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc) {
+  return [rangeStartUtc, rangeEndUtc];
+}
+
+/**
+ * Paginated customers who have at least one purchase in the calendar date range
+ * (completed order and/or initial/renewal subscription row).
  *
  * Purchase counts are computed in SQL (not summed on the client):
  * - `alacarte_purchases`: completed orders on à la carte plans
@@ -463,6 +478,9 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
  * - `total_purchases`: `alacarte + addon + subscription` (all from SQL)
  *
  * @param {Object} opts
+ * @param {string} opts.startCal YYYY-MM-DD
+ * @param {string} opts.endCal YYYY-MM-DD
+ * @param {string} opts.tz IANA timezone for calendar-day bounds
  * @param {string} [opts.search] name, email, mobile, or user id fragment
  * @param {number} opts.limit
  * @param {number} opts.offset
@@ -476,6 +494,9 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
  */
 exports.listPurchasingCustomersForAdmin = async function (opts) {
   const {
+    startCal,
+    endCal,
+    tz,
     search = '',
     limit,
     offset,
@@ -488,6 +509,8 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   } = opts;
   const orderBySql = resolvePurchasingCustomersOrderBy(sortBy, sortDir);
   const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const datePair = purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc);
 
   const searchTrim = search != null ? String(search).trim() : '';
   let searchClause = '';
@@ -506,13 +529,24 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
     searchParams.push(term, term, term, term, term);
   }
 
+  const baseFromParams = [
+    ...datePair,
+    ...datePair,
+    ...datePair,
+    ...datePair,
+    ...searchParams
+  ];
+
   const baseFrom = `
     FROM user u
     INNER JOIN (
       SELECT user_id FROM orders
       WHERE status = 'completed' AND COALESCE(payment_gateway, '') <> 'admin_grant'
+        AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} <= ?
       UNION
-      SELECT user_id FROM subscriptions
+      SELECT user_id FROM subscriptions s
+      WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+        AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} <= ?
     ) eligible ON eligible.user_id = u.user_id
     LEFT JOIN (
       SELECT
@@ -527,19 +561,21 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
             ELSE 0
           END
         ) AS subscription_order_purchases,
-        MAX(COALESCE(o.completed_at, o.created_at)) AS last_order_at
+        MAX(${PURCHASE_AT_ORDERS_SQL}) AS last_order_at
       FROM orders o
       LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
       WHERE o.status = 'completed' AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+        AND ${PURCHASE_AT_ORDERS_SQL} >= ? AND ${PURCHASE_AT_ORDERS_SQL} <= ?
       GROUP BY o.user_id
     ) ostats ON ostats.user_id = u.user_id
     LEFT JOIN (
       SELECT
         s.user_id,
         COUNT(*) AS subscription_purchases,
-        MAX(COALESCE(s.start_at, s.created_at)) AS last_subscription_at
+        MAX(${PURCHASE_AT_SUBSCRIPTIONS_SQL}) AS last_subscription_at
       FROM subscriptions s
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+        AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
       GROUP BY s.user_id
     ) sstats ON sstats.user_id = u.user_id
     LEFT JOIN user_credits uc ON uc.user_id = u.user_id
@@ -591,7 +627,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
     WHERE purchasers.total_purchases > 0
     ${rangeClause}
   `;
-  const countRows = await runQuery(countQuery, [...searchParams, ...rangeParams]);
+  const countRows = await runQuery(countQuery, [...baseFromParams, ...rangeParams]);
   const total = Number(countRows[0]?.cnt || 0) || 0;
 
   const listQuery = `
@@ -603,6 +639,6 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
     ORDER BY ${orderBySql}
     LIMIT ? OFFSET ?
   `;
-  const rows = await runQuery(listQuery, [...searchParams, ...rangeParams, limit, offset]);
+  const rows = await runQuery(listQuery, [...baseFromParams, ...rangeParams, limit, offset]);
   return { rows: rows || [], total };
 };
