@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('./models.registry.service');
-const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
+const { completeShortText } = require('./llm-auxiliary.client');
 const ContextSummaryModel = require('../models/context.summary.model');
 const conversationData = require('./conversation-data.service');
 const { redactString, truncatePreview } = require('./pii.redactor');
@@ -80,7 +80,6 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
   });
 
   const input = await buildSummaryInput(toSummarize, toolByMsg);
-  const provider = await LLMProviderFactory.createProvider(summarizer.provider);
   const system = loadSummaryPrompt();
   const userContent = `Conversation transcript to summarize:\n\n${input}`;
 
@@ -89,32 +88,15 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
   let completionTokens = 0;
 
   try {
-    if (summarizer.provider === 'anthropic') {
-      const AnthropicWrapper = require('../../ai-services/providers/anthropic/anthropic.wrapper.cjs');
-      const client = await AnthropicWrapper.create({});
-      const resp = await client.messages.create({
-        model: summarizer.id,
-        max_tokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
-        system,
-        messages: [{ role: 'user', content: userContent }],
-      });
-      summaryText = resp.content?.filter((b) => b.type === 'text').map((b) => b.text).join('') || '';
-      promptTokens = resp.usage?.input_tokens || 0;
-      completionTokens = resp.usage?.output_tokens || 0;
-    } else {
-      if (!provider.client) await provider.initialize();
-      const resp = await provider.client.chat.completions.create({
-        model: summarizer.id,
-        max_tokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-      });
-      summaryText = resp.choices?.[0]?.message?.content || '';
-      promptTokens = resp.usage?.prompt_tokens || 0;
-      completionTokens = resp.usage?.completion_tokens || 0;
-    }
+    const result = await completeShortText({
+      summarizer,
+      system,
+      userContent,
+      maxTokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
+    });
+    summaryText = result.text;
+    promptTokens = result.promptTokens;
+    completionTokens = result.completionTokens;
   } catch (err) {
     circuitBreaker.recordFailure(CB_NAME);
     logger.warn('admin_llm_chat summary failed', { err: err.message, conversationId: conversation.conversation_id });

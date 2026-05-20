@@ -14,12 +14,30 @@ describe('prompt.service flattenToolCallsForProvider', () => {
   }];
 
   it('keeps native assistant+tool rows for same provider', () => {
-    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'openai', 'openai');
+    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'anthropic', 'anthropic');
     expect(rows).to.have.length(2);
     expect(rows[0].role).to.equal('assistant');
     expect(rows[0].tool_calls[0].name).to.equal('query_clickhouse');
     expect(rows[1].role).to.equal('tool');
     expect(rows[1].tool_call_id).to.equal('tc-1');
+  });
+
+  it('formats openai native tool_calls with function wrapper', () => {
+    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'openai', 'openai');
+    expect(rows[0].tool_calls[0].type).to.equal('function');
+    expect(rows[0].tool_calls[0].function.name).to.equal('query_clickhouse');
+  });
+
+  it('omits empty tool_calls on plain assistant messages', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [{ role: 'user', content: 'hi', sequence_no: 1, tool_calls: [] },
+        { role: 'assistant', content: 'hello', sequence_no: 2, tool_calls: [] }],
+      'System',
+      { activeProvider: 'openai', supportsVision: true },
+    );
+    const assistant = messages.find((m) => m.role === 'assistant' && m.content === 'hello');
+    expect(assistant).to.exist;
+    expect(assistant.tool_calls).to.be.undefined;
   });
 
   it('flattens cross-provider tool calls into assistant text block', () => {

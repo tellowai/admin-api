@@ -71,6 +71,30 @@ function getTraceFromMessage(m) {
   return null;
 }
 
+function toProviderToolCall(tc, activeProvider) {
+  const argsRaw = typeof tc.arguments_json === 'string'
+    ? tc.arguments_json
+    : JSON.stringify(tc.arguments_json || {});
+  const argsStr = typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
+  if (activeProvider === 'openai') {
+    return {
+      id: tc.tool_call_id,
+      type: 'function',
+      function: {
+        name: tc.tool_name,
+        arguments: argsStr,
+      },
+    };
+  }
+  return {
+    id: tc.tool_call_id,
+    name: tc.tool_name,
+    arguments: typeof tc.arguments_json === 'string'
+      ? JSON.parse(tc.arguments_json)
+      : (tc.arguments_json || {}),
+  };
+}
+
 function flattenToolCallsForProvider(toolCalls, activeProvider, msgProvider) {
   if (!toolCalls?.length) return [];
   if (msgProvider === activeProvider) {
@@ -79,11 +103,7 @@ function flattenToolCallsForProvider(toolCalls, activeProvider, msgProvider) {
       rows.push({
         role: 'assistant',
         content: null,
-        tool_calls: [{
-          id: tc.tool_call_id,
-          name: tc.tool_name,
-          arguments: typeof tc.arguments_json === 'string' ? JSON.parse(tc.arguments_json) : tc.arguments_json,
-        }],
+        tool_calls: [toProviderToolCall(tc, activeProvider)],
       });
       const result = typeof tc.result_json === 'string' ? tc.result_json : JSON.stringify(tc.result_json || {});
       rows.push({
@@ -165,8 +185,32 @@ function messageToApiRows(m, activeProvider, supportsVision) {
   return [{
     role: m.role,
     content: normalizeContent(m, supportsVision),
-    tool_calls: m.tool_calls,
   }];
+}
+
+function sanitizeMessageRow(row, activeProvider) {
+  const out = { ...row };
+  if (!out.tool_calls?.length) {
+    delete out.tool_calls;
+  } else if (activeProvider === 'openai') {
+    out.tool_calls = out.tool_calls.map((tc) => {
+      if (tc.type === 'function' && tc.function?.name) return tc;
+      const args = tc.arguments ?? tc.function?.arguments ?? {};
+      return {
+        id: tc.id || tc.tool_call_id,
+        type: 'function',
+        function: {
+          name: tc.name || tc.function?.name,
+          arguments: typeof args === 'string' ? args : JSON.stringify(args),
+        },
+      };
+    });
+    if (out.role === 'assistant' && !out.content) out.content = null;
+  }
+  if (out.role === 'assistant' && !out.tool_calls?.length && (out.content == null || out.content === '')) {
+    out.content = out.content || '';
+  }
+  return out;
 }
 
 function buildMessagesForProvider(history, systemText, options = {}) {
@@ -208,7 +252,7 @@ function buildMessagesForProvider(history, systemText, options = {}) {
     }
   });
 
-  return apiRows;
+  return apiRows.map((row) => sanitizeMessageRow(row, activeProvider));
 }
 
 module.exports = {

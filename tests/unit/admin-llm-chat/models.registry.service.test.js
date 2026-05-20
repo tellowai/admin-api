@@ -40,4 +40,11 @@ describe('models.registry.service', () => {
     assert.ok(def.id);
     assert.ok(['openai', 'anthropic'].includes(def.provider));
   });
+
+  it('uses openai gpt-4o-mini for summarizer', () => {
+    const summarizer = registry.getSummarizerModel();
+    assert.ok(summarizer);
+    assert.strictEqual(summarizer.provider, 'openai');
+    assert.strictEqual(summarizer.id, 'gpt-4o-mini');
+  });
 });
