@@ -402,8 +402,42 @@ const PURCHASING_CUSTOMERS_SORT_COLUMNS = {
   alacarte_purchases: 'purchasers.alacarte_purchases',
   subscription_purchases: 'purchasers.subscription_purchases',
   addon_purchases: 'purchasers.addon_purchases',
-  total_purchases: 'purchasers.total_purchases'
+  total_purchases: 'purchasers.total_purchases',
+  credit_balance: 'purchasers.credit_balance'
 };
+
+const PURCHASING_CUSTOMERS_RANGE_COLUMNS = {
+  alacarte_purchases: 'alacarte_purchases',
+  subscription_purchases: 'subscription_purchases',
+  addon_purchases: 'addon_purchases',
+  total_purchases: 'total_purchases',
+  credit_balance: 'credit_balance'
+};
+
+/**
+ * @param {string} [rangeField]
+ * @param {number|null|undefined} rangeMin
+ * @param {number|null|undefined} rangeMax
+ * @returns {{ clause: string, params: number[] }}
+ */
+function buildPurchasingCustomersRangeClause(rangeField, rangeMin, rangeMax) {
+  const key = rangeField != null ? String(rangeField).trim() : '';
+  const col = PURCHASING_CUSTOMERS_RANGE_COLUMNS[key];
+  if (!col) return { clause: '', params: [] };
+
+  const parts = [];
+  const params = [];
+  if (rangeMin != null && Number.isFinite(Number(rangeMin))) {
+    parts.push(`purchasers.${col} >= ?`);
+    params.push(Math.floor(Number(rangeMin)));
+  }
+  if (rangeMax != null && Number.isFinite(Number(rangeMax))) {
+    parts.push(`purchasers.${col} <= ?`);
+    params.push(Math.floor(Number(rangeMax)));
+  }
+  if (!parts.length) return { clause: '', params: [] };
+  return { clause: `AND ${parts.join(' AND ')}`, params };
+}
 
 /**
  * @param {string} [sortBy]
@@ -434,11 +468,24 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
  * @param {number} opts.offset
  * @param {string} [opts.sortBy]
  * @param {string} [opts.sortDir] asc | desc
+ * @param {string} [opts.rangeField] alacarte_purchases | subscription_purchases | addon_purchases | total_purchases | credit_balance
+ * @param {number} [opts.rangeMin]
+ * @param {number} [opts.rangeMax]
  * @param {boolean} [opts.useMaster]
  * @returns {Promise<{ rows: object[], total: number }>}
  */
 exports.listPurchasingCustomersForAdmin = async function (opts) {
-  const { search = '', limit, offset, sortBy, sortDir, useMaster = false } = opts;
+  const {
+    search = '',
+    limit,
+    offset,
+    sortBy,
+    sortDir,
+    rangeField,
+    rangeMin,
+    rangeMax,
+    useMaster = false
+  } = opts;
   const orderBySql = resolvePurchasingCustomersOrderBy(sortBy, sortDir);
   const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
 
@@ -495,6 +542,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
       GROUP BY s.user_id
     ) sstats ON sstats.user_id = u.user_id
+    LEFT JOIN user_credits uc ON uc.user_id = u.user_id
     WHERE (u.DELETED_AT IS NULL)
     ${searchClause}
   `;
@@ -523,9 +571,17 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       GREATEST(
         COALESCE(ostats.last_order_at, '1970-01-01 00:00:00'),
         COALESCE(sstats.last_subscription_at, '1970-01-01 00:00:00')
-      ) AS last_purchased_at
+      ) AS last_purchased_at,
+      COALESCE(uc.balance, 0) AS credit_balance,
+      COALESCE(uc.reserved_balance, 0) AS credit_reserved_balance
     ${baseFrom}
   `;
+
+  const { clause: rangeClause, params: rangeParams } = buildPurchasingCustomersRangeClause(
+    rangeField,
+    rangeMin,
+    rangeMax
+  );
 
   const countQuery = `
     SELECT COUNT(*) AS cnt
@@ -533,8 +589,9 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       ${aggSelect}
     ) purchasers
     WHERE purchasers.total_purchases > 0
+    ${rangeClause}
   `;
-  const countRows = await runQuery(countQuery, [...searchParams]);
+  const countRows = await runQuery(countQuery, [...searchParams, ...rangeParams]);
   const total = Number(countRows[0]?.cnt || 0) || 0;
 
   const listQuery = `
@@ -542,9 +599,10 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       ${aggSelect}
     ) purchasers
     WHERE purchasers.total_purchases > 0
+    ${rangeClause}
     ORDER BY ${orderBySql}
     LIMIT ? OFFSET ?
   `;
-  const rows = await runQuery(listQuery, [...searchParams, limit, offset]);
+  const rows = await runQuery(listQuery, [...searchParams, ...rangeParams, limit, offset]);
   return { rows: rows || [], total };
 };

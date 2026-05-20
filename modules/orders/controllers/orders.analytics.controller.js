@@ -413,6 +413,18 @@ exports.getPurchasingCustomersTable = async function (req, res) {
 
     const sortBy = q.sort != null ? String(q.sort).trim() : 'last_purchased_at';
     const sortDir = q.sort_dir != null ? String(q.sort_dir).trim().toLowerCase() : 'desc';
+    const rangeField =
+      q.range_field != null && String(q.range_field).trim() !== ''
+        ? String(q.range_field).trim()
+        : '';
+    const rangeMin =
+      q.range_min != null && q.range_min !== '' && Number.isFinite(Number(q.range_min))
+        ? Math.floor(Number(q.range_min))
+        : null;
+    const rangeMax =
+      q.range_max != null && q.range_max !== '' && Number.isFinite(Number(q.range_max))
+        ? Math.floor(Number(q.range_max))
+        : null;
 
     const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
       search,
@@ -420,6 +432,9 @@ exports.getPurchasingCustomersTable = async function (req, res) {
       offset,
       sortBy,
       sortDir,
+      rangeField: rangeField || undefined,
+      rangeMin,
+      rangeMax,
       useMaster: true
     });
 
@@ -431,7 +446,9 @@ exports.getPurchasingCustomersTable = async function (req, res) {
       alacarte_purchases: Number(row.alacarte_purchases) || 0,
       addon_purchases: Number(row.addon_purchases) || 0,
       subscription_purchases: Number(row.subscription_purchases) || 0,
-      total_purchases: Number(row.total_purchases) || 0
+      total_purchases: Number(row.total_purchases) || 0,
+      credit_balance: Number(row.credit_balance) || 0,
+      credit_reserved_balance: Number(row.credit_reserved_balance) || 0
     }));
 
     return res.status(HTTP_STATUS_CODES.OK).json({
