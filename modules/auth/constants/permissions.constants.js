@@ -22,7 +22,10 @@ const PERMISSIONS = {
   VIEW_ANALYTICS: 'view_analytics',
   
   // Settings
-  MANAGE_SETTINGS: 'manage_settings'
+  MANAGE_SETTINGS: 'manage_settings',
+
+  // Admin LLM Chat (marketing intelligence)
+  ADMIN_LLM_CHAT: 'admin_llm_chat',
 };
 
 /**

@@ -32,8 +32,13 @@ const TOPICS = {
   MODEL_TUNING_EVENT_PHOTO_TUNING_COMPLETED: `${env}.model_tuning.event.photo_tuning_completed`,
   GENERATION_EVENT_REQUEST_SUBMITTED_FOR_IMAGE_GENERATION: `${env}.generation.event.image_generation_request_submitted`,
   GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_GENERATION: `${env}.generation.event.video_generation_request_submitted`,
-  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_FLOW_COMPOSER: `${env}.generation.event.video_flow_composer_request_submitted`
+  GENERATION_EVENT_REQUEST_SUBMITTED_FOR_VIDEO_FLOW_COMPOSER: `${env}.generation.event.video_flow_composer_request_submitted`,
 
+  ADMIN_LLM_CHAT_MESSAGE_SENT: `${env}.admin_llm_chat.event.message_sent`,
+  ADMIN_LLM_CHAT_TOOL_INVOKED: `${env}.admin_llm_chat.event.tool_invoked`,
+  ADMIN_LLM_CHAT_MODEL_SWITCHED: `${env}.admin_llm_chat.event.model_switched`,
+  ADMIN_LLM_CHAT_CONTEXT_SUMMARIZED: `${env}.admin_llm_chat.event.context_summarized`,
+  ADMIN_LLM_CHAT_TITLE_GENERATED: `${env}.admin_llm_chat.event.title_generated`,
 };
 
 

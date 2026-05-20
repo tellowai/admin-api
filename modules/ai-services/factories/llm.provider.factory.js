@@ -1,7 +1,7 @@
 'use strict';
 
 const OpenAIProvider = require('../providers/openai/openai.provider.js');
-// import { AnthropicProvider } from '../providers/anthropic/anthropic.provider.js';
+const AnthropicProvider = require('../providers/anthropic/anthropic.provider.js');
 const config = require('../../../config/config');
 
 class LLMProviderFactory {
@@ -9,12 +9,14 @@ class LLMProviderFactory {
     switch (providerName.toLowerCase()) {
       case 'openai': {
         const provider = new OpenAIProvider(config);
-        await provider.initialize(); // Ensure initialization is complete
+        await provider.initialize();
         return provider;
       }
-      case 'anthropic':
-        throw new Error(`Unsupported AI provider: ${providerName}`);
-        // return new AnthropicProvider(config);
+      case 'anthropic': {
+        const provider = new AnthropicProvider(config);
+        await provider.initialize();
+        return provider;
+      }
       default:
         throw new Error(`Unsupported AI provider: ${providerName}`);
     }

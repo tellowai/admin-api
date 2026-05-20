@@ -47,6 +47,27 @@ async function startServer() {
     console.log(config.appDomain + ":" + config.appPort);
   });
 
+  const streamRegistry = require('./modules/admin-llm-chat/services/stream.registry');
+  let shuttingDown = false;
+
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(chalk.yellow(`[shutdown] ${signal} — draining admin LLM chat streams…`));
+    server.close();
+    const { remaining } = await streamRegistry.drainAll({ timeoutMs: 25000 });
+    if (remaining > 0) {
+      console.warn(chalk.yellow(`[shutdown] ${remaining} streams still active after drain timeout`));
+    }
+    try {
+      if (global.kafkaProducer) await global.kafkaProducer.disconnect();
+    } catch (_e) { /* ignore */ }
+    process.exit(remaining > 0 ? 1 : 0);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
   module.exports = app;
 }
 

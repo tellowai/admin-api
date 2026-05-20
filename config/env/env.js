@@ -127,5 +127,40 @@ module.exports = {
     /** Optional path prefix (e.g. "v1" or "/v1") if the API is not mounted at the origin root. */
     routePrefix: "",
     internalServiceKey: ""
-  }
+  },
+  adminLlmChat: {
+    /** Override with ADMIN_LLM_CHAT_ENABLED or adminLlmChat.enabled in config/env/local.js */
+    enabled: false,
+    /** Optional absolute path to models.json — or set ADMIN_LLM_CHAT_MODELS_PATH */
+    modelsPath: "",
+  },
+  llmProviders: {
+    openai: { apiKey: "" },
+    anthropic: { apiKey: "" },
+  },
+  clickhouse: {
+    master: { url: "", port: "", databaseName: "", user: "", password: "", debug: false },
+    slave: { url: "", port: "", databaseName: "", user: "", password: "", debug: false },
+    adminLlmChatReadonly: { url: "", port: "", databaseName: "", user: "", password: "", debug: false },
+  },
+  telegram: {
+    botToken: "",
+    chatIds: [],
+  },
+  internalAuth: {
+    digestHmacSecret: "",
+  },
+  metaAds: {
+    accessToken: "",
+    adAccountIds: [],
+    apiVersion: "v21.0",
+  },
+  googleAds: {
+    developerToken: "",
+    clientId: "",
+    clientSecret: "",
+    refreshToken: "",
+    customerId: "",
+    loginCustomerId: "",
+  },
 };

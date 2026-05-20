@@ -203,6 +203,12 @@ exports.getUserRolesAndPermissions = async function(userId, useCache = true) {
  * @returns {Promise<boolean>} True if user has the permission
  */
 exports.userHasPermission = async function(userId, permissionCode) {
+  if (permissionCode === 'admin_llm_chat') {
+    const roles = await this.getUserRoles(userId);
+    if (roles.some((r) => r.role_name === 'owner' || r.role_name === 'admin')) {
+      return true;
+    }
+  }
   const permissions = await this.getUserPermissions(userId);
   return permissions.some(p => p.permission_code === permissionCode);
 };
@@ -225,6 +231,12 @@ exports.userHasRole = async function(userId, roleName) {
  * @returns {Promise<boolean>} True if user has at least one permission
  */
 exports.userHasAnyPermission = async function(userId, permissionCodes) {
+  if (permissionCodes.includes('admin_llm_chat')) {
+    const roles = await this.getUserRoles(userId);
+    if (roles.some((r) => r.role_name === 'owner' || r.role_name === 'admin')) {
+      return true;
+    }
+  }
   const permissions = await this.getUserPermissions(userId);
   const userPermissionCodes = permissions.map(p => p.permission_code);
   return permissionCodes.some(code => userPermissionCodes.includes(code));
