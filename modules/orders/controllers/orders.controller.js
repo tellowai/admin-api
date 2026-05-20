@@ -8,29 +8,7 @@ const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
 const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
 const AppleOrphanDecoder = require('../services/apple-orphan-decoder.service');
-
-function normPlanField(v) {
-  if (v == null || v === '') return '';
-  const s = typeof Buffer !== 'undefined' && Buffer.isBuffer(v) ? v.toString('utf8') : String(v);
-  return s.trim().toLowerCase();
-}
-
-/**
- * Badge bucket — payment_plans.plan_type + billing_interval (stitched in controller from payment_plans).
- * Credits: only monthly|yearly are subscriptions; all other credit packs (onetime, NULL, legacy rows) are one-time.
- * alacarte: single|bundle + alacarte · addon: addon + onetime
- */
-function purchaseCategoryFromPlan(planType, billingInterval) {
-  const pt = normPlanField(planType);
-  const bi = normPlanField(billingInterval);
-  if (pt === 'credits') {
-    if (bi === 'monthly' || bi === 'yearly') return 'subscription';
-    return 'onetime';
-  }
-  if ((pt === 'single' || pt === 'bundle') && bi === 'alacarte') return 'alacarte';
-  if (pt === 'addon' && bi === 'onetime') return 'addon';
-  return 'other';
-}
+const { purchaseCategoryFromPlan } = require('../utils/purchaseCategory.util');
 
 const MAX_EXPORT_ROWS = 25000;
 /** Skip ClickHouse enrichment on CSV export above this many rows (single IN clause). */

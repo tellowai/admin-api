@@ -411,10 +411,15 @@ exports.getPurchasingCustomersTable = async function (req, res) {
     const offset = (page - 1) * limit;
     const search = q.search != null ? String(q.search).trim() : '';
 
+    const sortBy = q.sort != null ? String(q.sort).trim() : 'last_purchased_at';
+    const sortDir = q.sort_dir != null ? String(q.sort_dir).trim().toLowerCase() : 'desc';
+
     const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
       search,
       limit,
       offset,
+      sortBy,
+      sortDir,
       useMaster: true
     });
 

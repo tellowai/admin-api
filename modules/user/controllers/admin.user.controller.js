@@ -17,6 +17,7 @@ const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
+const { purchaseCategoryFromPlan } = require('../../orders/utils/purchaseCategory.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -468,12 +469,18 @@ exports.getUserOrders = async function (req, res) {
 
     const data = orders.map(order => {
       const plan = order.payment_plan_id ? planMap[order.payment_plan_id] : null;
+      const planType = plan ? plan.plan_type : null;
+      const billingInterval = plan ? plan.billing_interval : null;
       const tid = orderTemplateStitch.parseTemplateIdFromTransactionNotes(order.transaction_notes);
       const pid = orderTemplateStitch.parsePackIdFromTransactionNotes(order.transaction_notes);
       const { transaction_notes: _tn, ...rest } = order;
       return {
         ...rest,
+        plan_type: planType ?? null,
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
+        plan_heading: plan ? (plan.plan_heading || plan.plan_name || null) : null,
+        billing_interval: billingInterval ?? null,
+        purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
         template_id: tid,
         template_name: tid ? (templateNameById[tid] ?? null) : null,
         pack_id: pid,
