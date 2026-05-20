@@ -17,6 +17,7 @@ function sendEvent(res, event, data, id) {
   res.write(`id: ${eid}\n`);
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+  if (typeof res.flush === 'function') res.flush();
   return eid;
 }
 

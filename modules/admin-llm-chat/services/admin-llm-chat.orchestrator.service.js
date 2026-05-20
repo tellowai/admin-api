@@ -16,6 +16,7 @@ const contextSummaryService = require('./context.summary.service');
 const contextBreakdown = require('./context.breakdown.service');
 const titleService = require('./conversation.title.service');
 const { formatProviderError } = require('./provider-error.util');
+const messageScope = require('./message-scope.util');
 const { redactValue, truncatePreview } = require('./pii.redactor');
 const logger = require('../../../config/lib/logger');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
@@ -138,6 +139,85 @@ class TurnTraceBuilder {
   }
 }
 
+/** Stream a fixed refusal without calling the LLM (off-topic guard). */
+async function runRefusalTurn({
+  conversation,
+  userId,
+  modelMeta,
+  userMessage,
+  refusalText,
+  res,
+  sendEvent,
+}) {
+  const seq = await MessageModel.nextSequenceNo(conversation.conversation_id);
+  const turnId = uuidv4();
+  const userMsgId = uuidv4();
+  const assistantMsgId = uuidv4();
+
+  await MessageModel.createMany([
+    {
+      message_id: userMsgId,
+      conversation_id: conversation.conversation_id,
+      turn_id: turnId,
+      client_message_id: userMessage.client_message_id || null,
+      role: 'user',
+      content: userMessage.content,
+      sequence_no: seq,
+    },
+    {
+      message_id: assistantMsgId,
+      conversation_id: conversation.conversation_id,
+      turn_id: turnId,
+      role: 'assistant',
+      content: '',
+      model_provider: modelMeta.provider,
+      model_id: modelMeta.id,
+      sequence_no: seq + 1,
+      finish_reason: 'in_progress',
+    },
+  ]);
+
+  sendEvent('meta', {
+    conversationId: conversation.conversation_id,
+    messageId: assistantMsgId,
+    model: modelMeta.id,
+    provider: modelMeta.provider,
+  });
+
+  const trace = [{ type: 'text', text: refusalText }];
+  sendEvent('segment_start', { kind: 'text', index: 0 });
+  for (const chunk of refusalText.split(/(\s+)/)) {
+    if (chunk) sendEvent('token', { text: chunk });
+  }
+  sendEvent('segment_end', { kind: 'text', index: 0 });
+  sendEvent('final_segment', { index: 0 });
+
+  const startedAt = Date.now();
+  await MessageModel.finalize(assistantMsgId, {
+    content: refusalText,
+    content_parts: { trace },
+    finish_reason: 'stop',
+    tokens_in: 0,
+    tokens_out: 0,
+    cost_usd: 0,
+    latency_ms: Date.now() - startedAt,
+  });
+
+  sendEvent('done', {
+    finishReason: 'stop',
+    content: refusalText,
+    trace,
+    usage: {
+      tokensIn: 0,
+      tokensOut: 0,
+      costUsd: 0,
+      effectiveContextTokens: (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0),
+      contextLimit: modelMeta.contextWindow || 128000,
+      contextPct: 0,
+    },
+  });
+}
+
 async function runStreamingTurn({
   conversation,
   userId,
@@ -167,6 +247,20 @@ async function runStreamingTurn({
       sendEvent('done', { finishReason: 'duplicate', messageId: dup.message_id });
       return;
     }
+  }
+
+  const scopeCheck = messageScope.evaluateUserMessage(userMessage.content);
+  if (scopeCheck.refuse) {
+    await runRefusalTurn({
+      conversation,
+      userId,
+      modelMeta,
+      userMessage,
+      refusalText: scopeCheck.message,
+      res,
+      sendEvent,
+    });
+    return;
   }
 
   let summary = await ContextSummaryModel.getLatest(conversation.conversation_id);
