@@ -20,6 +20,7 @@ function preprocessClickHouseSql(sql) {
   const trimmed = String(sql || '').trim().replace(/;+\s*$/, '');
   const tables = extractTablesFromSql(trimmed);
   let out = rewriteIlikeForClickHouse(trimmed);
+  out = rewriteShadowedAggregateAliases(out);
   out = normalizeDateColumnInSql(out, tables);
   out = rewriteSelectStar(out, tables);
   return { sql: out, tables };
@@ -56,6 +57,37 @@ function rewriteIlikeForClickHouse(sql) {
       return `lower(toString(${col})) LIKE lower('${esc(pattern)}')`;
     },
   );
+}
+
+/**
+ * ClickHouse: sum(spend) AS spend makes bare `spend` in countDistinctIf/HAVING refer to the
+ * aggregate alias → ILLEGAL_AGGREGATION. Rename shadowed aliases; fix HAVING/ORDER BY refs.
+ */
+function rewriteShadowedAggregateAliases(sql) {
+  const renames = new Map();
+  const shadowRe = /\b(sum|avg|min|max|count)\s*\(\s*([a-zA-Z_]\w*)\s*\)\s+AS\s+\2\b/gi;
+  let out = sql.replace(shadowRe, (match, fn, col) => {
+    const alias = `agg_${col}`;
+    renames.set(col.toLowerCase(), { col, alias, fn: fn.toLowerCase() });
+    return `${fn}(${col}) AS ${alias}`;
+  });
+  if (!renames.size) return out;
+
+  const replaceClause = (keyword, body) => {
+    let clause = body;
+    renames.forEach(({ col, alias }) => {
+      clause = clause.replace(new RegExp(`\\b${col}\\b`, 'gi'), alias);
+    });
+    return `${keyword}${clause}`;
+  };
+
+  out = out.replace(/\bHAVING\b([\s\S]*?)(?=\bORDER\s+BY\b|\bLIMIT\b|$)/i, (m, body) => (
+    replaceClause('HAVING', body)
+  ));
+  out = out.replace(/\bORDER\s+BY\b([\s\S]*?)(?=\bLIMIT\b|$)/i, (m, body) => (
+    replaceClause('ORDER BY', body)
+  ));
+  return out;
 }
 
 /** Replace SELECT * with explicit allow-listed columns (clearer errors + avoids SELECT *). */
@@ -186,4 +218,5 @@ module.exports = {
   normalizeDateColumnInSql,
   rewriteSelectStar,
   rewriteIlikeForClickHouse,
+  rewriteShadowedAggregateAliases,
 };
