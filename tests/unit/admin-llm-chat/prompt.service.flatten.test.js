@@ -70,6 +70,35 @@ describe('prompt.service flattenToolCallsForProvider', () => {
     expect(messages[toolIdx - 1].tool_calls[0].function.name).to.equal('get_table_schema');
   });
 
+  it('drops duplicate standalone tool rows after assistant tool_calls expansion', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [
+        { role: 'user', content: 'schema?', sequence_no: 1 },
+        {
+          role: 'assistant',
+          content: null,
+          model_provider: 'anthropic',
+          tool_calls: [{
+            tool_call_id: 'toolu_abc',
+            tool_name: 'get_table_schema',
+            arguments_json: { table: 'orders_daily_stats' },
+            result_json: '{"success":true}',
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'toolu_abc',
+          content: '{"success":true}',
+        },
+      ],
+      'System',
+      { activeProvider: 'anthropic', supportsVision: true },
+    );
+    const toolRows = messages.filter((m) => m.role === 'tool');
+    expect(toolRows).to.have.length(1);
+    expect(toolRows[0].tool_call_id).to.equal('toolu_abc');
+  });
+
   it('flattens cross-provider tool calls into assistant text block', () => {
     const rows = promptService.flattenToolCallsForProvider(toolCalls, 'anthropic', 'openai');
     expect(rows).to.have.length(1);
@@ -113,14 +142,16 @@ describe('context.summary.service thresholds', () => {
     expect(pct).to.equal(0.5);
   });
 
-  it('shouldSummarize at AUTO threshold', () => {
-    expect(contextSummaryService.shouldSummarize(
+  it('computeUsedPct crosses AUTO threshold for legacy fallback', () => {
+    const high = contextSummaryService.computeUsedPct(
       { total_tokens_in: 85000, total_tokens_out: 0 },
       model,
-    )).to.equal(true);
-    expect(contextSummaryService.shouldSummarize(
+    );
+    const low = contextSummaryService.computeUsedPct(
       { total_tokens_in: 50000, total_tokens_out: 0 },
       model,
-    )).to.equal(false);
+    );
+    expect(high).to.be.at.least(0.85);
+    expect(low).to.be.below(0.85);
   });
 });

@@ -135,6 +135,10 @@ function getTableSchema({ table }) {
     revenue_hint: meta.currency_column
       ? `Include ${meta.currency_column} in SELECT and GROUP BY when summing total_revenue, amount_total, or spend.`
       : null,
+    related_tables: meta.related_tables || [],
+    cross_table_hint: meta.related_tables?.length
+      ? 'related_tables are optional ideas — use list_clickhouse_tables to find other tables too.'
+      : 'Use list_clickhouse_tables to see other tables that might answer the question.',
   };
 }
 

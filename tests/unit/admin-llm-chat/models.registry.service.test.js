@@ -37,8 +37,16 @@ describe('models.registry.service', () => {
   it('resolves default model from json', () => {
     const def = registry.getDefaultModel();
     assert.ok(def);
-    assert.ok(def.id);
-    assert.ok(['openai', 'anthropic'].includes(def.provider));
+    assert.strictEqual(def.id, 'gpt-5.5');
+    assert.strictEqual(def.provider, 'openai');
+  });
+
+  it('marks default on enabled models for client list', () => {
+    const models = registry.getEnabledModelsForClient();
+    const flagged = models.filter((m) => m.default);
+    assert.strictEqual(flagged.length, 1);
+    assert.strictEqual(flagged[0].id, 'gpt-5.5');
+    assert.strictEqual(flagged[0].provider, 'openai');
   });
 
   it('uses openai gpt-4o-mini for summarizer', () => {

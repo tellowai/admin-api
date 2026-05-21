@@ -2,7 +2,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
-const { TOOL_DEFINITIONS, toOpenAITools, toAnthropicTools } = require('../constants/tool.registry');
+const { getEnabledToolDefinitions, toOpenAITools, toAnthropicTools } = require('../constants/tool.registry');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const { executeTool } = require('../tools/tool.executor');
 const MessageModel = require('../models/message.model');
@@ -67,6 +67,11 @@ class TurnTraceBuilder {
   startSegment(kind) {
     if (this.currentKind === 'text' && this.textBuffer) {
       this.trace[this.segmentIndex].text = this.textBuffer;
+      this.sendEvent('segment_end', {
+        kind: 'text',
+        index: this.segmentIndex,
+        text: this.textBuffer,
+      });
       this.textBuffer = '';
     }
     this.segmentIndex += 1;
@@ -125,18 +130,28 @@ class TurnTraceBuilder {
       seg.rowsReturned = result?.rows?.length ?? null;
       seg.resultPreview = truncatePreview(redactValue(formatToolResultPreview(result)), 2048);
     }
-    this.sendEvent('segment_end', { kind: 'tool', index: this.segmentIndex });
+    this.sendEvent('segment_end', {
+      kind: 'tool',
+      index: this.segmentIndex,
+      toolCallId: id,
+      status: seg?.status || 'completed',
+      durationMs,
+    });
     this.currentKind = null;
   }
 
   finalize() {
     if (this.currentKind === 'text' && this.textBuffer) {
       this.trace[this.segmentIndex].text = this.textBuffer;
-      this.sendEvent('segment_end', { kind: 'text', index: this.segmentIndex });
+      this.sendEvent('segment_end', {
+        kind: 'text',
+        index: this.segmentIndex,
+        text: this.textBuffer,
+      });
     }
-    const textSegments = this.trace.filter((s) => s.type === 'text' && s.text);
-    const finalSeg = textSegments.length ? textSegments[textSegments.length - 1] : null;
-    const content = finalSeg?.text || this.textBuffer || '';
+    const content = this.finalTextSegmentIndex != null
+      ? (this.trace[this.finalTextSegmentIndex]?.text || '')
+      : '';
     return { trace: this.trace, content, content_parts: { trace: this.trace } };
   }
 }
@@ -236,12 +251,6 @@ async function runStreamingTurn({
     return;
   }
 
-  if ((conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0) >= CONSTANTS.CONVERSATION_TOKEN_CAP) {
-    sendEvent('error', { code: 'BUDGET_EXCEEDED', message: 'Conversation token cap reached. Start a new chat.', retryable: false });
-    sendEvent('done', { finishReason: 'budget_exceeded' });
-    return;
-  }
-
   if (userMessage.client_message_id) {
     const dup = await MessageModel.findByClientMessageId(conversation.conversation_id, userMessage.client_message_id);
     if (dup) {
@@ -266,15 +275,46 @@ async function runStreamingTurn({
   }
 
   let summary = await ContextSummaryModel.getLatest(conversation.conversation_id);
-  const usedPct = contextSummaryService.computeUsedPct(conversation, modelMeta);
-  if (contextSummaryService.shouldSummarize(conversation, modelMeta)) {
-    sendEvent('context_summarizing', { reason: 'auto', usedPct });
+  const billedTokens = (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0);
+  const pendingUserContent = typeof userMessage.content === 'string' ? userMessage.content : '';
+
+  if (billedTokens >= CONSTANTS.CONVERSATION_TOKEN_CAP) {
+    sendEvent('context_warning', {
+      reason: 'conversation_billed_cap',
+      usedPct: Math.min(1, billedTokens / CONSTANTS.CONVERSATION_TOKEN_CAP),
+      limit: CONSTANTS.CONVERSATION_TOKEN_CAP,
+      billedTokens,
+    });
+  }
+
+  const breakdownOpts = { pendingUserContent, summary };
+  let effectivePct = await contextSummaryService.computeEffectiveUsedPct(
+    conversation,
+    modelMeta,
+    userId,
+    breakdownOpts,
+  );
+  if (effectivePct == null) {
+    effectivePct = contextSummaryService.computeUsedPct(conversation, modelMeta);
+  }
+
+  const shouldRunSummary = await contextSummaryService.shouldSummarize(conversation, modelMeta, userId, breakdownOpts)
+    || (billedTokens >= CONSTANTS.CONVERSATION_TOKEN_CAP && !summary);
+
+  if (shouldRunSummary) {
+    sendEvent('context_summarizing', { reason: 'auto', usedPct: effectivePct });
     summary = await contextSummaryService.summarize(conversation, { userId }) || summary;
     if (summary) {
+      effectivePct = await contextSummaryService.computeEffectiveUsedPct(
+        conversation,
+        modelMeta,
+        userId,
+        { pendingUserContent, summary },
+      ) ?? effectivePct;
       sendEvent('context_summarized', {
         summaryId: summary.summary_id,
         throughSequenceNo: summary.through_sequence_no,
-        usedPct: contextSummaryService.computeUsedPct(conversation, modelMeta),
+        usedPct: effectivePct,
       });
       if (global.kafkaProducer) {
         kafkaCtrl.sendMessage(
@@ -284,8 +324,12 @@ async function runStreamingTurn({
         ).catch(() => {});
       }
     }
-  } else if (usedPct >= CONSTANTS.CONTEXT_USAGE_WARN_PCT) {
-    sendEvent('context_warning', { usedPct, limit: modelMeta.contextWindow });
+  } else if (effectivePct >= CONSTANTS.CONTEXT_USAGE_WARN_PCT) {
+    sendEvent('context_warning', {
+      reason: 'context_window',
+      usedPct: effectivePct,
+      limit: modelMeta.contextWindow,
+    });
   }
 
   let resolvedUser;
@@ -381,7 +425,8 @@ async function runStreamingTurn({
   });
 
   const provider = await LLMProviderFactory.createProvider(modelMeta.provider);
-  const tools = modelMeta.provider === 'anthropic' ? toAnthropicTools(TOOL_DEFINITIONS) : toOpenAITools(TOOL_DEFINITIONS);
+  const toolDefs = getEnabledToolDefinitions();
+  const tools = modelMeta.provider === 'anthropic' ? toAnthropicTools(toolDefs) : toOpenAITools(toolDefs);
   const traceBuilder = new TurnTraceBuilder(sendEvent);
   let toolCallCount = 0;
   const maxTools = CONSTANTS.MAX_TOOL_CALLS_PER_TURN;
@@ -395,7 +440,7 @@ async function runStreamingTurn({
     const nudge = summaryNudge
       ? [{
         role: 'user',
-        content: 'Based on the tool results above, answer the user in clear prose. Do not call more tools. If queries failed or tables are missing, say so and suggest next steps.',
+        content: 'Based on the tool results above, answer the user now. Do not call more tools. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.',
         sequence_no: seq,
       }]
       : [];
@@ -415,6 +460,10 @@ async function runStreamingTurn({
     let roundTokensIn = 0;
     let roundTokensOut = 0;
 
+    if (!allowTools) {
+      traceBuilder.markFinalSegment();
+    }
+
     await new Promise((resolve, reject) => {
       provider.streamChatCompletion({
         model: modelMeta.id,
@@ -426,7 +475,10 @@ async function runStreamingTurn({
         onDelta: ({ text }) => {
           sendEvent('thinking', {});
           traceBuilder.appendText(text);
-          sendEvent('token', { text });
+          // Tool-planning chatter stays in reasoning trace only; final answer round streams to UI.
+          if (!allowTools) {
+            sendEvent('token', { text });
+          }
         },
         onThinking: () => sendEvent('thinking', {}),
         onToolCallStart: ({ id, name }) => {
@@ -453,6 +505,7 @@ async function runStreamingTurn({
 
     if (pendingToolCalls.length && toolCallCount < maxTools) {
       if (!sawToolThisRound) traceBuilder.markFinalSegment();
+      sendEvent('thinking', { phase: 'tools' });
       const callsForRound = [...pendingToolCalls];
       const toolResults = [];
       const toolRowsToInsert = [];
@@ -462,7 +515,7 @@ async function runStreamingTurn({
         const result = await executeTool(tc.name, tc.arguments, { userId });
         const durationMs = Date.now() - start;
         toolRowsToInsert.push({
-          tool_call_id: uuidv4(),
+          tool_call_id: tc.id,
           message_id: assistantMsgId,
           tool_name: tc.name,
           arguments_json: redactValue(tc.arguments),
@@ -492,30 +545,26 @@ async function runStreamingTurn({
           ? result.envelope
           : JSON.stringify(result.envelope || {});
         toolResults.push({
-          role: 'tool',
           tool_call_id: tc.id,
           content: toolContent,
-          content_stub: `[tool:${tc.name}]`,
         });
       }
       if (toolRowsToInsert.length) {
         await ToolCallModel.createMany(toolRowsToInsert);
       }
       pendingToolCalls.length = 0;
-      const toolRoundMessages = [
-        {
-          role: 'assistant',
-          content: null,
-          model_provider: modelMeta.provider,
-          tool_calls: callsForRound.map((tc) => ({
-            tool_call_id: tc.id,
-            tool_name: tc.name,
-            arguments_json: tc.arguments,
-          })),
-        },
-        ...toolResults,
-      ];
-      turnExtraMessages.push(...toolRoundMessages);
+      const resultsById = new Map(toolResults.map((t) => [t.tool_call_id, t.content]));
+      turnExtraMessages.push({
+        role: 'assistant',
+        content: null,
+        model_provider: modelMeta.provider,
+        tool_calls: callsForRound.map((tc) => ({
+          tool_call_id: tc.id,
+          tool_name: tc.name,
+          arguments_json: tc.arguments,
+          result_json: resultsById.get(tc.id) || '',
+        })),
+      });
       return runLoop({ allowTools: true });
     }
 
@@ -645,15 +694,66 @@ async function runStreamingTurn({
       }
     }
   } catch (error) {
-    const formatted = formatProviderError(error);
     const partial = traceBuilder.finalize();
+    const partialText = String(partial.content || '').trim();
+    const hasPartial = partialText.length > 0 || (partial.trace || []).some((s) => s.type === 'tool');
+
+    if (signal?.aborted) {
+      logger.info('admin_llm_chat stream aborted', {
+        conversationId: conversation.conversation_id,
+        userId,
+      });
+      await MessageModel.finalize(assistantMsgId, {
+        content: partial.content || '',
+        content_parts: partial.content_parts,
+        finish_reason: 'stop',
+        tokens_in: turnTokensIn,
+        tokens_out: turnTokensOut,
+        cost_usd: estimateCost(modelMeta, turnTokensIn, turnTokensOut),
+        latency_ms: Date.now() - startedAt,
+      });
+      sendEvent('done', {
+        finishReason: 'aborted',
+        content: partial.content,
+        trace: partial.trace,
+      });
+      return;
+    }
+
+    const rawMsg = String(error?.message || '');
+    const streamDropped = /terminated|econnreset|socket hang up/i.test(rawMsg);
+    if (streamDropped && hasPartial) {
+      logger.warn('admin_llm_chat stream disconnected with partial output', {
+        conversationId: conversation.conversation_id,
+        userId,
+        raw: rawMsg,
+      });
+      await MessageModel.finalize(assistantMsgId, {
+        content: partial.content || '',
+        content_parts: partial.content_parts,
+        finish_reason: 'stop',
+        tokens_in: turnTokensIn,
+        tokens_out: turnTokensOut,
+        cost_usd: estimateCost(modelMeta, turnTokensIn, turnTokensOut),
+        latency_ms: Date.now() - startedAt,
+      });
+      sendEvent('done', {
+        finishReason: 'aborted',
+        content: partial.content,
+        trace: partial.trace,
+      });
+      return;
+    }
+
+    const formatted = formatProviderError(error);
     logger.error('admin-llm-chat stream error', {
       code: formatted.code,
       message: formatted.message,
       raw: error.message,
     });
+    const partialContent = String(partial.content || '').trim();
     await MessageModel.finalize(assistantMsgId, {
-      content: partial.content || '(failed)',
+      content: partialContent || (hasPartial ? '' : '(failed)'),
       content_parts: partial.content_parts,
       finish_reason: 'error',
       tokens_in: turnTokensIn,

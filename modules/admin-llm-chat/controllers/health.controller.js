@@ -41,6 +41,7 @@ exports.health = async (req, res) => {
       },
       tools: {
         query_clickhouse: CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED ? 'ok' : 'disabled',
+        run_analysis_code: CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED ? 'ok' : 'disabled',
       },
       clickhouseReadonly: clickhouseStatus,
       clickhouseSchemaVersion: schemaCache.SCHEMA_VERSION,

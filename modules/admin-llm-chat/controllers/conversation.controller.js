@@ -11,7 +11,7 @@ const AttachmentModel = require('../models/attachment.model');
 const attachmentStorage = require('../services/attachment.storage.service');
 
 exports.listModels = async (req, res) => {
-  return res.status(HTTP.OK).json({ data: modelsRegistry.getEnabledModels() });
+  return res.status(HTTP.OK).json({ data: modelsRegistry.getEnabledModelsForClient() });
 };
 
 exports.listConversations = async (req, res) => {
@@ -68,23 +68,19 @@ exports.getConversation = async (req, res) => {
   const summary = pagePayload.summarySkipped
     ? undefined
     : pagePayload.summary;
-  const contextUsage = beforeSequenceNo == null
-    ? await contextBreakdown.computeForConversation(conv, req.user.userId, {
-      summary,
-      messages: enriched,
-    })
-    : null;
-  const resolvedContextUsage = contextUsage || (() => {
+  // Full conversation context for the meter — never based on the paginated message window.
+  const resolvedContextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId) || (() => {
     const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);
-    const effectiveTokens = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
+    const billed = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
     const contextLimit = modelMeta?.contextWindow || 128000;
     return {
-      effectiveTokens,
+      effectiveTokens: billed,
       limit: contextLimit,
-      pct: contextLimit > 0 ? effectiveTokens / contextLimit : 0,
+      pct: contextLimit > 0 ? billed / contextLimit : 0,
       breakdown: [],
       estimated: false,
-      billedTokens: effectiveTokens,
+      billedTokens: billed,
+      remainingTokens: Math.max(0, contextLimit - billed),
     };
   })();
   return res.status(HTTP.OK).json({

@@ -1,6 +1,6 @@
 'use strict';
 
-const { TOOL_DEFINITIONS, toOpenAITools, toAnthropicTools } = require('../constants/tool.registry');
+const { getEnabledToolDefinitions, toOpenAITools, toAnthropicTools } = require('../constants/tool.registry');
 const promptService = require('./prompt.service');
 const modelsRegistry = require('./models.registry.service');
 const conversationData = require('./conversation-data.service');
@@ -88,9 +88,10 @@ function analyzeMessages(messages, modelId) {
 }
 
 function estimateToolsTokens(modelMeta) {
+  const toolDefs = getEnabledToolDefinitions();
   const tools = modelMeta.provider === 'anthropic'
-    ? toAnthropicTools(TOOL_DEFINITIONS)
-    : toOpenAITools(TOOL_DEFINITIONS);
+    ? toAnthropicTools(toolDefs)
+    : toOpenAITools(toolDefs);
   return estimateTokens(JSON.stringify(tools), modelMeta.id);
 }
 
@@ -144,15 +145,18 @@ async function computeBreakdown({
   const effectiveTokens = breakdown.reduce((sum, row) => sum + row.tokens, 0);
   const limit = modelMeta.contextWindow || 128000;
   const billedTokens = (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0);
+  const remainingTokens = Math.max(0, limit - effectiveTokens);
 
   return {
     effectiveTokens,
     limit,
+    remainingTokens,
     pct: limit > 0 ? effectiveTokens / limit : 0,
     breakdown,
     estimated: true,
     billedTokens,
     maxOutputTokens: modelMeta.maxOutputTokens || null,
+    scopeNote: 'Estimates the next model request (full thread + system), not the messages visible on screen.',
   };
 }
 

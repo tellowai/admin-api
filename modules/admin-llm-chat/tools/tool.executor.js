@@ -1,6 +1,7 @@
 'use strict';
 
 const clickhouseTool = require('./clickhouse.tool');
+const { runAnalysisCode } = require('./analysis-code.tool');
 const MemoryModel = require('../models/memory.model');
 
 async function executeTool(name, args, { userId }) {
@@ -18,6 +19,8 @@ async function executeTool(name, args, { userId }) {
       return wrapped(await clickhouseTool.queryClickhouse(args));
     case 'get_date_context':
       return wrapped(clickhouseTool.getDateContext(args));
+    case 'run_analysis_code':
+      return wrapped(runAnalysisCode(args));
     case 'remember':
       await MemoryModel.upsertMemory(userId, args.key, args.value);
       return wrapped({ success: true, remembered: { key: args.key, value: args.value } });

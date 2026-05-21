@@ -1,7 +1,7 @@
 {
   "defaultModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-6"
+    "provider": "openai",
+    "modelId": "gpt-5.5"
   },
   "summarizer": {
     "provider": "openai",
@@ -51,13 +51,6 @@
       "maxOutputTokens": 128000,
       "inputCostPer1M": 5,
       "outputCostPer1M": 30
-    },
-    {
-      "id": "claude-sonnet-4-20250514",
-      "provider": "anthropic",
-      "displayName": "Claude Sonnet 4",
-      "contextWindow": 200000,
-      "maxOutputTokens": 8192
     },
     {
       "id": "claude-haiku-4-5",

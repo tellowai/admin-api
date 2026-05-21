@@ -8,6 +8,7 @@ const modelsRegistry = require('./models.registry.service');
 const { completeShortText } = require('./llm-auxiliary.client');
 const ContextSummaryModel = require('../models/context.summary.model');
 const conversationData = require('./conversation-data.service');
+const contextBreakdown = require('./context.breakdown.service');
 const { redactString, truncatePreview } = require('./pii.redactor');
 const circuitBreaker = require('./circuit-breaker.util');
 const rateLimit = require('./rate-limit.service');
@@ -25,13 +26,25 @@ function loadSummaryPrompt() {
   }
 }
 
+/** Legacy: lifetime billed tokens vs model window (misleading after summarization). */
 function computeUsedPct(conversation, modelMeta) {
   const used = (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0);
   const limit = modelMeta?.contextWindow || 128000;
   return limit > 0 ? used / limit : 0;
 }
 
-function shouldSummarize(conversation, modelMeta) {
+/** Effective context that will be sent on the next turn (respects summary + recent tail). */
+async function computeEffectiveUsedPct(conversation, modelMeta, userId, options = {}) {
+  if (!modelMeta) return null;
+  const usage = await contextBreakdown.computeForConversation(conversation, userId, options);
+  return usage?.pct ?? null;
+}
+
+async function shouldSummarize(conversation, modelMeta, userId, options = {}) {
+  const effectivePct = await computeEffectiveUsedPct(conversation, modelMeta, userId, options);
+  if (effectivePct != null) {
+    return effectivePct >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
+  }
   return computeUsedPct(conversation, modelMeta) >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
 }
 
@@ -124,6 +137,7 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
 
 module.exports = {
   computeUsedPct,
+  computeEffectiveUsedPct,
   shouldSummarize,
   summarize,
 };

@@ -9,6 +9,11 @@ const DEFAULT_MODELS_PATH = path.join(__dirname, '../constants/models.json');
 
 const PROVIDERS = ['openai', 'anthropic'];
 
+/** Retired registry / DB ids → current Anthropic API model id */
+const LEGACY_MODEL_ALIASES = {
+  'claude-sonnet-4-20250514': { provider: 'anthropic', modelId: 'claude-sonnet-4-6' },
+};
+
 let cached = null;
 let cachedPath = null;
 let cachedMtimeMs = null;
@@ -120,10 +125,32 @@ function getEnabledModels() {
   return getAllModels().filter((m) => isProviderEnabled(m.provider));
 }
 
+function withDefaultFlag(models) {
+  const def = getDefaultModel();
+  if (!def) return models.map((m) => ({ ...m, default: false }));
+  return models.map((m) => ({
+    ...m,
+    default: m.id === def.id && m.provider === def.provider,
+  }));
+}
+
+function getEnabledModelsForClient() {
+  return withDefaultFlag(getEnabledModels());
+}
+
+function resolveLegacyAlias(modelId, provider) {
+  const alias = LEGACY_MODEL_ALIASES[modelId];
+  if (!alias) return null;
+  const p = provider ? String(provider).toLowerCase() : null;
+  if (p && alias.provider !== p) return null;
+  return getAllModels().find((m) => m.id === alias.modelId && m.provider === alias.provider) || null;
+}
+
 function findModel(modelId, provider) {
   if (!modelId) return null;
   const p = provider ? String(provider).toLowerCase() : null;
-  return getAllModels().find((m) => m.id === modelId && (!p || m.provider === p)) || null;
+  return getAllModels().find((m) => m.id === modelId && (!p || m.provider === p)) || null
+    || resolveLegacyAlias(modelId, provider);
 }
 
 function resolveModel(modelId, provider) {
@@ -169,6 +196,8 @@ module.exports = {
   resolveModelsPath,
   getAllModels,
   getEnabledModels,
+  getEnabledModelsForClient,
+  withDefaultFlag,
   findModel,
   resolveModel,
   getDefaultModel,

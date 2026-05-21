@@ -9,6 +9,7 @@ const { redactValue, truncatePreview } = require('./pii.redactor');
 
 const PROMPTS_DIR = path.join(__dirname, '../constants/system.prompts');
 const BUSINESS_CONTEXT_PATH = path.join(__dirname, '../constants/business_context.json');
+const { formatRelationshipsGuide } = require('../constants/table.relationships');
 
 const VERBATIM_TAIL = 6;
 
@@ -42,12 +43,14 @@ async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM
     : '';
   const businessContext = `Business context:\n${JSON.stringify(biz, null, 2)}`;
   const tables = `Available ClickHouse tables:\n${tableCatalog}`;
+  const crossTable = formatRelationshipsGuide();
   return {
     base,
     businessContext,
     tableCatalog: tables,
+    crossTable,
     memories: memoryBlock,
-    full: `${base}\n\n${businessContext}\n\n${tables}${memoryBlock}`,
+    full: `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${memoryBlock}`,
   };
 }
 
@@ -191,6 +194,40 @@ function messageToApiRows(m, activeProvider, supportsVision) {
   }];
 }
 
+/**
+ * Drop standalone tool rows when the same tool_call_id was already emitted via
+ * assistant tool_calls expansion (avoids duplicate Anthropic tool_result blocks).
+ */
+function repairDuplicateToolResults(apiRows) {
+  const out = [];
+  let assistantToolIds = null;
+  const toolEmitted = new Set();
+
+  for (const row of apiRows) {
+    if (row.role === 'assistant' && row.tool_calls?.length) {
+      assistantToolIds = new Set(row.tool_calls.map((tc) => tc.id || tc.tool_call_id));
+      toolEmitted.clear();
+      out.push(row);
+      continue;
+    }
+    if (row.role === 'tool') {
+      const id = row.tool_call_id;
+      if (assistantToolIds?.has(id)) {
+        if (toolEmitted.has(id)) continue;
+        toolEmitted.add(id);
+      } else {
+        assistantToolIds = null;
+        toolEmitted.clear();
+      }
+    } else {
+      assistantToolIds = null;
+      toolEmitted.clear();
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 /** OpenAI requires each tool message to follow an assistant message with matching tool_calls. */
 function repairOpenaiToolMessageSequence(apiRows) {
   const out = [];
@@ -277,6 +314,7 @@ function buildMessagesForProvider(history, systemText, options = {}) {
   });
 
   let sanitized = apiRows.map((row) => sanitizeMessageRow(row, activeProvider));
+  sanitized = repairDuplicateToolResults(sanitized);
   if (activeProvider === 'openai') {
     sanitized = repairOpenaiToolMessageSequence(sanitized);
   }

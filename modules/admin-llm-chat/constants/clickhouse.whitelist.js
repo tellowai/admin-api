@@ -8,7 +8,8 @@
 module.exports = {
   analytics_events_raw: {
     required_date_column: 'timestamp',
-    description: 'Raw product analytics events (hub). Filter with toDate(timestamp).',
+    description: 'Raw product analytics events (hub). Filter with toDate(timestamp). Use when daily stats lack a dimension.',
+    related_tables: ['orders_daily_stats', 'template_daily_stats', 'attribution_daily_stats'],
     columns: [
       'timestamp', 'event_name', 'object_id', 'object_type', 'user_id', 'device_id',
       'app_version', 'build_number', 'os_name', 'os_version', 'device_brand', 'device_model',
@@ -68,6 +69,7 @@ module.exports = {
   orders_daily_stats: {
     required_date_column: 'report_date',
     description: 'Daily order lifecycle counts (created/completed/failed). Include currency when summing amount_total.',
+    related_tables: ['template_daily_stats', 'revenue_daily_stats', 'analytics_events_raw'],
     currency_column: 'currency',
     columns: [
       'report_date', 'status', 'product_classification', 'payment_gateway', 'plan_type',
@@ -93,7 +95,8 @@ module.exports = {
   },
   template_daily_stats: {
     required_date_column: 'report_date',
-    description: 'Daily template views/tries/downloads/successes (one table for all template metrics).',
+    description: 'Daily template views/tries/downloads/successes (one table for all template metrics). output_type distinguishes image vs video.',
+    related_tables: ['orders_daily_stats', 'ai_execution_daily_stats', 'analytics_events_raw'],
     columns: [
       'report_date', 'template_id', 'output_type', 'generation_type', 'app_version', 'build_number',
       'os_name', 'os_version', 'device_brand', 'device_model', 'screen_resolution', 'network_type',
