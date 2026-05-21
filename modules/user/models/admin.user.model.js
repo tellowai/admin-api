@@ -273,3 +273,48 @@ LIMIT ?
 
     return await mysqlQueryRunner.runQueryInMaster(sql, params);
 };
+
+/**
+ * Broader consumer search for admin "create support ticket" (multiple rows; pick one in UI).
+ * @param {'mobile'|'name'} type
+ * @param {string} rawQ
+ * @param {number} [limit]
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
+exports.searchEndUsersForSupportTicket = async function (type, rawQ, limit) {
+  const cap =
+    typeof limit === 'number' && limit > 0 ? Math.min(Math.max(limit, 1), 50) : 25;
+  const t = String(type || 'mobile').toLowerCase();
+
+  if (t === 'mobile') {
+    return await exports.lookupEndUsersByMobile(rawQ, cap);
+  }
+
+  const q = String(rawQ || '').trim();
+  if (q.length < 2) {
+    return [];
+  }
+
+  const escapeLike = (s) =>
+    String(s).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+  const pattern = `%${escapeLike(q)}%`;
+
+  if (t === 'name') {
+    const sql = `
+      SELECT user_id, email, first_name, last_name, mobile, display_name, profile_pic, profile_pic_bucket, profile_pic_asset_key
+      FROM user
+      WHERE deleted_at IS NULL
+        AND (
+          display_name LIKE ?
+          OR first_name LIKE ?
+          OR last_name LIKE ?
+          OR CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, '')) LIKE ?
+        )
+      ORDER BY display_name ASC, user_id ASC
+      LIMIT ?
+    `;
+    return await mysqlQueryRunner.runQueryInSlave(sql, [pattern, pattern, pattern, pattern, cap]);
+  }
+
+  return [];
+};

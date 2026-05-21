@@ -4,6 +4,60 @@ const SupportService = require('../services/support.service');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 
+exports.createTicket = async function (req, res) {
+  try {
+    const { user_id: userId, message } = req.body || {};
+    if (!userId) {
+      return res.status(400).send({ message: 'user_id is required' });
+    }
+    const text = message != null ? String(message).trim() : '';
+    if (!text) {
+      return res.status(400).send({ message: 'message is required' });
+    }
+
+    const data = await SupportService.createTicketFromAdmin({
+      userId: String(userId),
+      message: text,
+      adminId: req.user.userId
+    });
+
+    try {
+      await kafkaCtrl.sendMessage(
+        TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+        [{
+          value: {
+            admin_user_id: req.user.userId,
+            entity_type: 'SUPPORT_TICKETS',
+            action_name: 'CREATE_TICKET',
+            entity_id: data.ticket_id,
+            additional_data: JSON.stringify({ user_id: userId })
+          }
+        }],
+        'create_admin_activity_log'
+      );
+    } catch (kafkaErr) {
+      console.error('Create ticket: activity log (Kafka) failed:', kafkaErr);
+    }
+
+    return res.status(201).send({ message: 'Ticket created successfully', data });
+  } catch (err) {
+    if (err && err.message === 'User not found') {
+      return res.status(404).send({ message: 'User not found' });
+    }
+    if (err && err.message === 'Message required') {
+      return res.status(400).send({ message: 'message is required' });
+    }
+    if (err && err.message === 'ACTIVE_TICKET_EXISTS') {
+      return res.status(409).send({
+        message: 'This user already has an active support ticket',
+        ticket_id: err.ticketId
+      });
+    }
+    console.error('Create Ticket Error:', err);
+    return res.status(500).send({ message: 'Internal Server Error' });
+  }
+};
+
 exports.listTickets = async function(req, res) {
   try {
     const page = parseInt(req.query.page) || 1;

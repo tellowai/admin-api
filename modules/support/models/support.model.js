@@ -65,6 +65,43 @@ exports.getTicketById = async function(ticketId) {
   return result[0] || null;
 };
 
+exports.findActiveTicketByUserId = async function(userId) {
+  const query = `
+    SELECT ticket_id, status
+    FROM support_tickets
+    WHERE user_id = ? AND status IN ('submitted', 'in_progress')
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `;
+  const result = await mysqlQueryRunner.runQueryInSlave(query, [userId]);
+  return result[0] || null;
+};
+
+exports.insertTicket = async function (data) {
+  const ticketId = crypto.randomUUID();
+  const query = `
+    INSERT INTO support_tickets (
+      ticket_id,
+      user_id,
+      reason,
+      generation_id,
+      template_id,
+      metadata,
+      status
+    ) VALUES (?, ?, ?, ?, ?, ?, 'submitted')
+  `;
+  const params = [
+    ticketId,
+    data.userId,
+    data.reason,
+    data.generationId || null,
+    data.templateId || null,
+    data.metadata || null
+  ];
+  await mysqlQueryRunner.runQueryInMaster(query, params);
+  return ticketId;
+};
+
 exports.updateTicket = async function(ticketId, updateData) {
   const keys = Object.keys(updateData);
   if (keys.length === 0) return;
