@@ -70,4 +70,21 @@ describe('clickhouse.sql.validator', () => {
     const r = validateClickHouseSql("SELECT 1; DROP TABLE meta_ads_insights_daily");
     expect(r.ok).to.equal(false);
   });
+
+  it('rewrites ILIKE to positionCaseInsensitive for contains patterns', () => {
+    const r = validateClickHouseSql(
+      "SELECT object_id FROM analytics_events_raw WHERE toDate(timestamp) >= '2026-04-23' AND toDate(timestamp) <= '2026-05-21' AND (event_name ILIKE '%order%' OR object_type ILIKE '%order%') ORDER BY timestamp DESC LIMIT 5",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include("positionCaseInsensitive(event_name, 'order')");
+    expect(r.sql).to.include("positionCaseInsensitive(object_type, 'order')");
+    expect(r.sql).not.to.match(/\bILIKE\b/i);
+  });
+
+  it('allows order_created equality on analytics_events_raw', () => {
+    const r = validateClickHouseSql(
+      "SELECT timestamp, object_id FROM analytics_events_raw WHERE toDate(timestamp) >= '2026-04-23' AND toDate(timestamp) <= '2026-05-21' AND event_name = 'order_created' ORDER BY timestamp DESC LIMIT 5",
+    );
+    expect(r.ok).to.equal(true);
+  });
 });

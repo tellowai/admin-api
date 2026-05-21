@@ -19,7 +19,8 @@ function extractTablesFromSql(sql) {
 function preprocessClickHouseSql(sql) {
   const trimmed = String(sql || '').trim().replace(/;+\s*$/, '');
   const tables = extractTablesFromSql(trimmed);
-  let out = normalizeDateColumnInSql(trimmed, tables);
+  let out = rewriteIlikeForClickHouse(trimmed);
+  out = normalizeDateColumnInSql(out, tables);
   out = rewriteSelectStar(out, tables);
   return { sql: out, tables };
 }
@@ -35,6 +36,26 @@ function normalizeDateColumnInSql(sql, tables = []) {
     out = out.replace(datePred, col);
   }
   return out;
+}
+
+/**
+ * node-sql-parser (MySQL dialect) rejects ClickHouse ILIKE — rewrite before astify.
+ * Containment patterns (%x%) → positionCaseInsensitive; other patterns → lower() LIKE.
+ */
+function rewriteIlikeForClickHouse(sql) {
+  return sql.replace(
+    /(`[^`]+`|[a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)?)\s+ILIKE\s+'((?:[^'\\]|\\.)*)'/gi,
+    (_, col, pattern) => {
+      const hasPrefix = pattern.startsWith('%');
+      const hasSuffix = pattern.endsWith('%');
+      const core = pattern.slice(hasPrefix ? 1 : 0, hasSuffix ? -1 : pattern.length);
+      const esc = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      if (hasPrefix && hasSuffix && core.length > 0) {
+        return `positionCaseInsensitive(${col}, '${esc(core)}') > 0`;
+      }
+      return `lower(toString(${col})) LIKE lower('${esc(pattern)}')`;
+    },
+  );
 }
 
 /** Replace SELECT * with explicit allow-listed columns (clearer errors + avoids SELECT *). */
@@ -164,4 +185,5 @@ module.exports = {
   preprocessClickHouseSql,
   normalizeDateColumnInSql,
   rewriteSelectStar,
+  rewriteIlikeForClickHouse,
 };

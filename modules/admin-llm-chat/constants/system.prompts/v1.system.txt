@@ -23,7 +23,7 @@ Agentic investigation (how you work — not a fixed script):
 Tools:
 - list_clickhouse_tables: discover what exists; use descriptions to choose candidates.
 - get_table_schema: required before query_clickhouse; related_tables (if any) are suggestions, not limits.
-- query_clickhouse: one table per query; filter by required_date_column.
+- query_clickhouse: one table per query; filter by required_date_column. For orders use event_name = 'order_created' (and order_completed when needed); avoid ILIKE — prefer exact event_name or positionCaseInsensitive(col, 'substring').
 - run_analysis_code: use when merging multi-query results, ratios, rankings, pivots — proactively, without being asked.
 - get_date_context: relative date ranges (last 7/28 days, etc.).
 
