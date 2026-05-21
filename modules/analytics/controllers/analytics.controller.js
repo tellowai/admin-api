@@ -1831,7 +1831,9 @@ class AnalyticsController {
    * each calendar day in the picked range (in the client timezone). One row per
    * day, 0-filled for empty days.
    *
-   * Same entitlement rules as `getPurchasesSummary`'s active-subscriptions count
+   * Same-day plan upgrades only (`notes.type = 'upgrade'` with `notes.active_subscription_id`
+   * whose start shares the **same UTC calendar date** as this row) are excluded from the candidate set —
+   * same rules as `getPurchasesSummary`'s active-subscriptions count
    * (see {@link SubscriptionsAnalyticsModel.countRecurringEntitledAt}).
    */
   static async getActiveSubscriptionsDaily(req, res) {

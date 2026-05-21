@@ -20,6 +20,45 @@ const ALIVE_STATUSES = Object.freeze([
   'pending_otp_verification_for_upgrade'
 ]);
 
+function parseMysqlUtcTimestampToMoment(ts) {
+  if (ts instanceof Date) {
+    return moment.utc(ts);
+  }
+  if (typeof ts === 'string' && ts.trim() !== '') {
+    return moment.utc(ts.trim(), 'YYYY-MM-DD HH:mm:ss', true);
+  }
+  return null;
+}
+
+function normalizePreviousSubscriptionId(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s || s.toLowerCase() === 'null') return null;
+  if (!/^\d+$/.test(s)) return null;
+  return s;
+}
+
+/**
+ * Exclude only plan-upgrade rows where the upgraded-from subscription (`notes.active_subscription_id`)
+ * has the same **UTC calendar date** as this row's `COALESCE(start_at, created_at)` (entitlement queries).
+ * Other upgrades remain in the pool. Renewal ranking logic is unchanged.
+ */
+const EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL = `
+  AND NOT (
+    JSON_VALID(s.additional_data)
+    AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.type')), ''))) = 'upgrade'
+    AND EXISTS (
+      SELECT 1 FROM subscriptions p
+      WHERE NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id'))), '') REGEXP '^[0-9]+$'
+        AND p.subscription_id = CAST(
+          NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id'))), '')
+          AS UNSIGNED
+        )
+        AND DATE(COALESCE(s.start_at, s.created_at)) = DATE(COALESCE(p.start_at, p.created_at))
+    )
+  )
+`;
+
 /**
  * Recurring subscriptions entitled to access at a point in time (UTC),
  * aligned with api subscription.model recurringRowIsEntitled semantics.
@@ -28,6 +67,7 @@ const ALIVE_STATUSES = Object.freeze([
  * `COALESCE(start_at, created_at) <= as_of`, only each user's latest row
  * (by `created_at DESC`, `subscription_id DESC`) is considered, then the same
  * status / period-end rules as before apply.
+ * Same-day plan upgrades (`notes.type = 'upgrade'` with same UTC start date as the prior row) are excluded from the candidate set.
  */
 class SubscriptionsAnalyticsModel {
   /**
@@ -35,6 +75,8 @@ class SubscriptionsAnalyticsModel {
    * (UTC). Uses the same status / period-end rules as {@link countRecurringEntitledAt}, but
    * counts rows active for any instant in the range instead of only at range end.
    * One row per user (latest recurring row as of range end).
+   * Same-day plan upgrades only: `notes.type = 'upgrade'` and `notes.active_subscription_id` points to
+   * a row whose start shares the **same UTC calendar date** as this row's start — excluded from the candidate set.
    */
   static async countRecurringEntitledOverlappingRange(rangeStartUtcDatetime, rangeEndUtcDatetime) {
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -50,6 +92,7 @@ class SubscriptionsAnalyticsModel {
           ) AS rn
         FROM subscriptions s
         WHERE s.payment_type = 'recurring'
+          ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
           AND COALESCE(s.start_at, s.created_at) <= ?
       )
       SELECT COUNT(*) AS cnt
@@ -75,6 +118,11 @@ class SubscriptionsAnalyticsModel {
     return Number(rows[0]?.cnt || 0);
   }
 
+  /**
+   * Snapshot count of entitled recurring subscribers at `asOfUtcDatetime` (one per user).
+   * Same-day plan upgrades only: `notes.type = 'upgrade'` and `notes.active_subscription_id` points to
+   * a row whose start shares the **same UTC calendar date** as this row's start — excluded from the candidate set.
+   */
   static async countRecurringEntitledAt(asOfUtcDatetime) {
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
     const query = `
@@ -86,6 +134,7 @@ class SubscriptionsAnalyticsModel {
           ) AS rn
         FROM subscriptions s
         WHERE s.payment_type = 'recurring'
+          ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
           AND COALESCE(s.start_at, s.created_at) <= ?
       )
       SELECT COUNT(*) AS cnt
@@ -119,6 +168,8 @@ class SubscriptionsAnalyticsModel {
    * For each calendar day in the supplied list, count **users** whose latest
    * recurring subscription (as of that instant) was entitled — same rules as
    * {@link countRecurringEntitledAt} but computes all snapshots in one query.
+   * Same-day plan upgrades only: `notes.type = 'upgrade'` and `notes.active_subscription_id` points to
+   * a row whose start shares the **same UTC calendar date** as this row's start — excluded from the candidate set.
    *
    * @param {{ date: string, asOfUtc: string }[]} days
    *   `date` is the calendar day in the client tz (YYYY-MM-DD), `asOfUtc` is
@@ -147,6 +198,7 @@ class SubscriptionsAnalyticsModel {
         INNER JOIN subscriptions s
           ON s.payment_type = 'recurring'
           AND COALESCE(s.start_at, s.created_at) <= d.day_utc
+          ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
       ),
       entitled_latest AS (
         SELECT r.day_utc, r.subscription_id
@@ -205,6 +257,11 @@ class SubscriptionsAnalyticsModel {
    * Renewals are detected via `additional_data.previous_subscription_id` or
    * `additional_data.renewal_count > 0` (matches how `subscription.service.js` writes renewal rows).
    * Anything else with `payment_type = 'recurring'` is counted as an initial subscription event.
+   * A renewal row is skipped when `previous_subscription_id` resolves to a parent whose
+   * `COALESCE(start_at, created_at)` falls on the same calendar day as this row in `tz`
+   * (avoids same-day activation + first-cycle charge counting as both new and renewal).
+   * Same-day **plan upgrade** rows (`notes.type = 'upgrade'` with `notes.active_subscription_id` whose
+   * start falls on the same calendar day as this row in `tz`) are omitted from the chart buckets.
    *
    * @param {Object} opts
    * @param {string} opts.startCal YYYY-MM-DD
@@ -216,7 +273,7 @@ class SubscriptionsAnalyticsModel {
     const { startCal, endCal, tz } = opts;
     const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
 
-    // Pull each recurring subscription row created in the window, plus the renewal markers.
+    // Pull each recurring subscription row whose start falls in the window.
     // Bucketing into local-tz calendar days happens in Node so we don't depend on MySQL named-tz tables.
     const query = `
       SELECT
@@ -229,7 +286,14 @@ class SubscriptionsAnalyticsModel {
             OR CAST(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.renewal_count')) AS UNSIGNED) > 0
           ) THEN 1
           ELSE 0
-        END AS is_renewal
+        END AS is_renewal,
+        JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) AS prev_sub_id_raw,
+        CASE
+          WHEN JSON_VALID(s.additional_data) AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.type')), ''))) = 'upgrade'
+          THEN 1
+          ELSE 0
+        END AS is_upgrade,
+        JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
       WHERE s.payment_type = 'recurring'
         AND COALESCE(s.start_at, s.created_at) >= ?
@@ -238,20 +302,67 @@ class SubscriptionsAnalyticsModel {
 
     const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeStartUtc, rangeEndUtc]);
 
+    const prevIds = new Set();
+    for (const r of rows || []) {
+      if (Number(r.is_renewal) === 1) {
+        const pid = normalizePreviousSubscriptionId(r.prev_sub_id_raw);
+        if (pid) prevIds.add(pid);
+      }
+      if (Number(r.is_upgrade) === 1) {
+        const upId = normalizePreviousSubscriptionId(r.upgrade_parent_id_raw);
+        if (upId) prevIds.add(upId);
+      }
+    }
+
+    /** @type {Map<string, string>} subscription_id -> calendar day (client tz) of parent's COALESCE(start_at, created_at) */
+    const parentStartDayById = new Map();
+    if (prevIds.size > 0) {
+      const idList = [...prevIds];
+      const placeholders = idList.map(() => '?').join(', ');
+      const parentRows = await MysqlQueryRunner.runQueryInSlave(
+        `SELECT subscription_id,
+          DATE_FORMAT(COALESCE(start_at, created_at), '%Y-%m-%d %H:%i:%s') AS ts_utc
+         FROM subscriptions
+         WHERE subscription_id IN (${placeholders})`,
+        idList
+      );
+      for (const pr of parentRows || []) {
+        const m = parseMysqlUtcTimestampToMoment(pr.ts_utc);
+        if (!m || !m.isValid()) continue;
+        parentStartDayById.set(String(pr.subscription_id), m.tz(tz).format('YYYY-MM-DD'));
+      }
+    }
+
     // Bucket into calendar days in `tz`.
+    // Omit same-day plan upgrades (upgrade row vs prior subscription start, client tz).
+    // Suppress a "renewal" row when its parent subscription started the same calendar day (Razorpay
+    // activation + charged with paid_count > 1 on one day).
     const buckets = new Map();
     for (const r of rows || []) {
-      const ts = r.ts_utc;
-      let m;
-      if (ts instanceof Date) {
-        m = moment.utc(ts);
-      } else if (typeof ts === 'string' && ts.trim() !== '') {
-        m = moment.utc(ts.trim(), 'YYYY-MM-DD HH:mm:ss', true);
-      } else {
-        continue;
-      }
-      if (!m.isValid()) continue;
+      const m = parseMysqlUtcTimestampToMoment(r.ts_utc);
+      if (!m || !m.isValid()) continue;
       const day = m.tz(tz).format('YYYY-MM-DD');
+
+      if (Number(r.is_upgrade) === 1) {
+        const upPid = normalizePreviousSubscriptionId(r.upgrade_parent_id_raw);
+        if (upPid) {
+          const upgradedFromDay = parentStartDayById.get(upPid);
+          if (upgradedFromDay && upgradedFromDay === day) {
+            continue;
+          }
+        }
+      }
+
+      if (Number(r.is_renewal) === 1) {
+        const pid = normalizePreviousSubscriptionId(r.prev_sub_id_raw);
+        if (pid) {
+          const parentDay = parentStartDayById.get(pid);
+          if (parentDay && parentDay === day) {
+            continue;
+          }
+        }
+      }
+
       const cur = buckets.get(day) || { initial: 0, renewal: 0 };
       if (Number(r.is_renewal) === 1) cur.renewal += 1;
       else cur.initial += 1;
