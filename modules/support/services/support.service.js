@@ -257,6 +257,44 @@ async function enrichMessagesWithUsers(messages) {
   });
 }
 
+exports.createTicketFromAdmin = async function ({ userId, message, adminId }) {
+  const users = await SupportModel.getUsersByIds([userId]);
+  if (!users.length) {
+    throw new Error('User not found');
+  }
+
+  const existing = await SupportModel.findActiveTicketByUserId(userId);
+  if (existing) {
+    const err = new Error('ACTIVE_TICKET_EXISTS');
+    err.ticketId = existing.ticket_id;
+    throw err;
+  }
+
+  const text = message != null ? String(message).trim() : '';
+  if (!text) {
+    throw new Error('Message required');
+  }
+
+  const ticketId = await SupportModel.insertTicket({
+    userId,
+    reason: text,
+    generationId: null,
+    templateId: null,
+    metadata: null
+  });
+
+  const ticket = await SupportModel.getTicketById(ticketId);
+  await SupportModel.insertTicketMessage(ticketId, 'admin', adminId, text, null);
+  await autoAssignTicketToMessagingAdmin(ticketId, ticket, adminId);
+
+  void fcmSupportNotify.notifyUserSupportReply(userId, ticketId, {
+    title: 'Support',
+    body: truncateForPush(text)
+  });
+
+  return { ticket_id: ticketId };
+};
+
 exports.listTickets = async function({ page, limit, status, assigned_to, search }) {
   const tickets = await SupportModel.listTickets(page, limit, status, assigned_to, search);
   const total = await SupportModel.countTickets(status, assigned_to, search);
