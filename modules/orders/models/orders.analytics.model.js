@@ -457,6 +457,27 @@ const PURCHASE_AT_ORDERS_ELIGIBLE_SQL = `COALESCE(completed_at, created_at)`;
 const PURCHASE_AT_SUBSCRIPTIONS_SQL = `COALESCE(s.start_at, s.created_at)`;
 const PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL = `COALESCE(start_at, created_at)`;
 
+/** Upgrade check for subscription rows linked to orders (`s_link` alias). */
+const SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL = `
+  JSON_VALID(s_link.additional_data)
+  AND JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.notes.type')) = 'upgrade'
+`;
+
+/**
+ * Completed order has a recurring initial/renewal subscription row within ±2 days
+ * (same window as subscriptions analytics order link).
+ */
+const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
+  EXISTS (
+    SELECT 1 FROM subscriptions s_link
+    WHERE s_link.user_id = o.user_id
+      AND s_link.payment_type = 'recurring'
+      AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL})
+      AND COALESCE(s_link.start_at, s_link.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+      AND COALESCE(s_link.start_at, s_link.created_at) <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+  )
+`;
+
 /**
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
@@ -474,7 +495,7 @@ function purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc) {
  * - `alacarte_purchases`: completed orders on à la carte plans
  * - `addon_purchases`: completed orders on add-on plans
  * - `subscription_purchases`: initial + renewal subscription rows, plus completed credit /
- *   subscription-plan orders (monthly, yearly, one-time packs)
+ *   subscription-plan orders not already represented by a linked subscription row (±2 days)
  * - `total_purchases`: `alacarte + addon + subscription` (all from SQL)
  *
  * @param {Object} opts
@@ -555,9 +576,9 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
         SUM(CASE WHEN ${ORDER_IS_ADDON_SQL} THEN 1 ELSE 0 END) AS addon_purchases,
         SUM(
           CASE
-            WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} THEN 1
             WHEN ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
-            WHEN pp.pp_id IS NULL THEN 1
+            WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
+            WHEN pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
             ELSE 0
           END
         ) AS subscription_order_purchases,
