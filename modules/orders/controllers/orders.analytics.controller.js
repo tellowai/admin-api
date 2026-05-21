@@ -289,6 +289,10 @@ exports.getOrdersVolumeSummary = async function (req, res) {
  *   - `renewal`  → rows tagged with previous_subscription_id / renewal_count > 0
  *   - `count`    → initial + renewal (for back-compat with the single-bar chart)
  *
+ * TODO(de-dupe renewal MRR): Subscription renewals now also emit completed `orders` rows with
+ * transaction_notes JSON containing renewal=true / purchase_subject=subscription_renewal (see OrderService.createRenewalOrder).
+ * Any analytics that UNION subscription-derived renewals with `orders` should filter those renewal-flagged orders to avoid double-counting renewal MRR until aggregation is redesigned.
+ *
  * Sourced from `subscriptions` (not `orders`) so RC/Apple/Google renewals,
  * which don't always create a fresh `orders` row, are included.
  */
