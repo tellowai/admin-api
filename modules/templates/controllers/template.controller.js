@@ -2,6 +2,7 @@
 
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const TemplateModel = require('../models/template.model');
+const TemplatePlatformPricingModel = require('../models/templatePlatformPricing.model');
 const TemplateTagDefinitionModel = require('../models/template.tag.definition.model');
 const TemplateTagFacetModel = require('../models/template.tag.facet.model');
 const TemplateTagsModel = require('../models/template.tags.model');
@@ -44,6 +45,27 @@ const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
  * @param {number} credits
  * @returns {number|null} Computed price in INR, or null if credits invalid
  */
+async function persistTemplatePlatformPricing(templateId, templateData) {
+  const catalog = {
+    credits: templateData.credits,
+    member_price: templateData.member_price,
+    member_original_price: templateData.member_original_price,
+    alacarte_price: templateData.alacarte_price,
+    alacarte_original_price: templateData.alacarte_original_price
+  };
+  if (templateData.platform_pricing && typeof templateData.platform_pricing === 'object') {
+    await TemplatePlatformPricingModel.upsertPlatformPricingFromPayload(templateId, templateData.platform_pricing);
+    const hasAnyPlatform = ['android', 'ios', 'web'].some(
+      (p) => templateData.platform_pricing[p] && typeof templateData.platform_pricing[p] === 'object'
+    );
+    if (!hasAnyPlatform) {
+      await TemplatePlatformPricingModel.syncAllPlatformsFromCatalog(templateId, catalog);
+    }
+  } else {
+    await TemplatePlatformPricingModel.syncAllPlatformsFromCatalog(templateId, catalog);
+  }
+}
+
 function computeAlacartePriceFromCredits(credits) {
   if (!credits || credits < 1) return null;
   const rawInr = Math.floor((credits / 50) * 83.33);
@@ -691,6 +713,17 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
       }
     ];
   }
+
+  try {
+    const pricingRows = await TemplatePlatformPricingModel.getPlatformPricingByTemplateIds([template.template_id]);
+    template.platform_pricing = TemplatePlatformPricingModel.buildPlatformPricingMapFromRows(pricingRows);
+  } catch (err) {
+    logger.warn('Failed to load template platform pricing', {
+      template_id: template.template_id,
+      message: err.message
+    });
+    template.platform_pricing = { android: {}, ios: {}, web: {} };
+  }
 }
 
 
@@ -734,7 +767,7 @@ exports.listTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : undefined;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : undefined;
 
     const ie = req.query.is_effects;
     let isEffectsFilter;
@@ -1387,7 +1420,7 @@ exports.searchTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : null;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : null;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : null;
     const listSort = parseTemplateListSort(req.query);
     const nameOnly =
       req.query.name_only === 'true' ||
@@ -1945,7 +1978,14 @@ exports.createTemplate = async function (req, res) {
       delete templateData.audio_workflow_timeline;
     }
 
+    const platformPricingPayload = templateData.platform_pricing;
+    delete templateData.platform_pricing;
+
     await TemplateModel.createTemplate(templateData, clips);
+    await persistTemplatePlatformPricing(templateData.template_id, {
+      ...templateData,
+      platform_pricing: platformPricingPayload
+    });
 
     // Create template tags if provided
     if (templateTagIds && templateTagIds.length > 0) {
@@ -3641,6 +3681,9 @@ exports.updateTemplate = async function (req, res) {
       delete templateData.audio_workflow_timeline;
     }
 
+    const platformPricingPayload = templateData.platform_pricing;
+    delete templateData.platform_pricing;
+
     let updated;
     if (hasClips) {
       // Use transaction for template updates with clips
@@ -3648,6 +3691,20 @@ exports.updateTemplate = async function (req, res) {
     } else {
       // Use regular update for templates without clips
       updated = await TemplateModel.updateTemplate(templateId, templateData);
+    }
+
+    if (platformPricingPayload !== undefined) {
+      await persistTemplatePlatformPricing(templateId, {
+        ...templateData,
+        ...existingTemplate,
+        platform_pricing: platformPricingPayload
+      });
+    } else if (
+      templateData.credits !== undefined ||
+      templateData.member_price !== undefined ||
+      templateData.alacarte_price !== undefined
+    ) {
+      await persistTemplatePlatformPricing(templateId, { ...existingTemplate, ...templateData });
     }
 
     // Update template tags if provided

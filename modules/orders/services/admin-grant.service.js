@@ -411,7 +411,7 @@ exports.grantTemplate = async function (opts) {
     err.httpStatusCode = 409;
     throw err;
   }
-  // `template_type` values in this codebase: 'free' | 'standard' | 'premium' | 'exclusive' | 'ai'.
+  // `template_type` values in this codebase: 'free' | 'standard' | 'premium' | 'exclusive' | 'ai' | 'cinematic'.
   // Free templates need no entitlement; reject so admins don't accumulate no-op rows.
   const tType = template.template_type != null ? String(template.template_type).toLowerCase() : '';
   if (tType === 'free') {
