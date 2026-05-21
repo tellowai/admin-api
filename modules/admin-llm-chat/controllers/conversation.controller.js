@@ -68,26 +68,15 @@ exports.getConversation = async (req, res) => {
   const summary = pagePayload.summarySkipped
     ? undefined
     : pagePayload.summary;
+  const contextSummaries = summary ? [summary] : [];
   // Full conversation context for the meter — never based on the paginated message window.
-  const resolvedContextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId) || (() => {
-    const modelMeta = modelsRegistry.resolveModel(conv.model_id, conv.model_provider);
-    const billed = (conv.total_tokens_in || 0) + (conv.total_tokens_out || 0);
-    const contextLimit = modelMeta?.contextWindow || 128000;
-    return {
-      effectiveTokens: billed,
-      limit: contextLimit,
-      pct: contextLimit > 0 ? billed / contextLimit : 0,
-      breakdown: [],
-      estimated: false,
-      billedTokens: billed,
-      remainingTokens: Math.max(0, contextLimit - billed),
-    };
-  })();
+  const resolvedContextUsage = await contextBreakdown.computeForConversation(conv, req.user.userId);
   return res.status(HTTP.OK).json({
     data: {
       conversation: conv,
       messages: enriched,
       summary,
+      context_summaries: contextSummaries,
       contextUsage: resolvedContextUsage,
       pagination: pagePayload.pagination,
     },

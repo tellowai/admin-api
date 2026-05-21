@@ -19,7 +19,7 @@ const AttachmentModel = require('../models/attachment.model');
 const titleService = require('./conversation.title.service');
 const { formatProviderError } = require('./provider-error.util');
 const messageScope = require('./message-scope.util');
-const { redactValue, truncatePreview } = require('./pii.redactor');
+const { redactValue, redactString, truncatePreview } = require('./pii.redactor');
 const logger = require('../../../config/lib/logger');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
@@ -119,8 +119,17 @@ class TurnTraceBuilder {
   }
 
   onToolEnd({ id, name, arguments: args, durationMs, result }) {
-    const seg = this.trace.find((s) => s.type === 'tool' && s.toolCallId === id)
-      || this.trace[this.segmentIndex];
+    let seg = id != null
+      ? this.trace.find((s) => s.type === 'tool' && s.toolCallId === id)
+      : null;
+    if (!seg) {
+      seg = [...this.trace].reverse().find(
+        (s) => s.type === 'tool' && s.status === 'running' && (!name || s.name === name),
+      );
+    }
+    if (!seg) {
+      seg = [...this.trace].reverse().find((s) => s.type === 'tool' && s.status === 'running');
+    }
     if (seg && seg.type === 'tool') {
       seg.toolCallId = id;
       seg.name = name;
@@ -149,6 +158,11 @@ class TurnTraceBuilder {
         text: this.textBuffer,
       });
     }
+    this.trace.forEach((seg) => {
+      if (seg.type === 'tool' && seg.status === 'running') {
+        seg.status = 'completed';
+      }
+    });
     const content = this.finalTextSegmentIndex != null
       ? (this.trace[this.finalTextSegmentIndex]?.text || '')
       : '';
@@ -275,17 +289,7 @@ async function runStreamingTurn({
   }
 
   let summary = await ContextSummaryModel.getLatest(conversation.conversation_id);
-  const billedTokens = (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0);
   const pendingUserContent = typeof userMessage.content === 'string' ? userMessage.content : '';
-
-  if (billedTokens >= CONSTANTS.CONVERSATION_TOKEN_CAP) {
-    sendEvent('context_warning', {
-      reason: 'conversation_billed_cap',
-      usedPct: Math.min(1, billedTokens / CONSTANTS.CONVERSATION_TOKEN_CAP),
-      limit: CONSTANTS.CONVERSATION_TOKEN_CAP,
-      billedTokens,
-    });
-  }
 
   const breakdownOpts = { pendingUserContent, summary };
   let effectivePct = await contextSummaryService.computeEffectiveUsedPct(
@@ -294,27 +298,35 @@ async function runStreamingTurn({
     userId,
     breakdownOpts,
   );
-  if (effectivePct == null) {
-    effectivePct = contextSummaryService.computeUsedPct(conversation, modelMeta);
-  }
 
-  const shouldRunSummary = await contextSummaryService.shouldSummarize(conversation, modelMeta, userId, breakdownOpts)
-    || (billedTokens >= CONSTANTS.CONVERSATION_TOKEN_CAP && !summary);
+  const shouldRunSummary = await contextSummaryService.shouldSummarize(
+    conversation,
+    modelMeta,
+    userId,
+    breakdownOpts,
+  );
 
   if (shouldRunSummary) {
-    sendEvent('context_summarizing', { reason: 'auto', usedPct: effectivePct });
+    sendEvent('context_summarizing', { reason: 'context_window', usedPct: effectivePct });
     summary = await contextSummaryService.summarize(conversation, { userId }) || summary;
     if (summary) {
-      effectivePct = await contextSummaryService.computeEffectiveUsedPct(
-        conversation,
-        modelMeta,
-        userId,
-        { pendingUserContent, summary },
-      ) ?? effectivePct;
+      const postSummaryUsage = await contextBreakdown.computeForConversation(conversation, userId, {
+        pendingUserContent,
+        summary,
+      });
+      effectivePct = postSummaryUsage?.pct ?? effectivePct;
+      if (postSummaryUsage) {
+        sendEvent('context_usage', postSummaryUsage);
+      }
       sendEvent('context_summarized', {
         summaryId: summary.summary_id,
         throughSequenceNo: summary.through_sequence_no,
+        throughMessageId: summary.through_message_id,
+        summaryPreview: truncatePreview(redactString(summary.summary_text || ''), 1200),
+        summarizerProvider: summary.summarizer_provider,
+        summarizerModelId: summary.summarizer_model_id,
         usedPct: effectivePct,
+        contextUsage: postSummaryUsage,
       });
       if (global.kafkaProducer) {
         kafkaCtrl.sendMessage(
@@ -324,12 +336,6 @@ async function runStreamingTurn({
         ).catch(() => {});
       }
     }
-  } else if (effectivePct >= CONSTANTS.CONTEXT_USAGE_WARN_PCT) {
-    sendEvent('context_warning', {
-      reason: 'context_window',
-      usedPct: effectivePct,
-      limit: modelMeta.contextWindow,
-    });
   }
 
   let resolvedUser;
@@ -569,7 +575,24 @@ async function runStreamingTurn({
     }
 
     if (pendingToolCalls.length) {
+      const skipped = [...pendingToolCalls];
       pendingToolCalls.length = 0;
+      for (const tc of skipped) {
+        traceBuilder.onToolEnd({
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
+          durationMs: 0,
+          result: { success: false, error: 'Tool call skipped (limit or policy)' },
+        });
+        sendEvent('tool_end', {
+          toolCallId: tc.id,
+          name: tc.name,
+          durationMs: 0,
+          status: 'failed',
+          resultPreview: { success: false, error: 'skipped' },
+        });
+      }
       await runLoop({ allowTools: false, summaryNudge: true });
     } else {
       traceBuilder.markFinalSegment();
@@ -626,8 +649,7 @@ async function runStreamingTurn({
       ],
       summary,
     }) || turnContextUsage;
-    const effectiveTokens = turnContextUsage?.effectiveTokens
-      ?? ((conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0) + turnTokensIn + turnTokensOut);
+    const effectiveTokens = turnContextUsage?.effectiveTokens ?? 0;
     const contextLimit = turnContextUsage?.limit || modelMeta.contextWindow || 128000;
     const contextPct = turnContextUsage?.pct ?? (contextLimit > 0 ? effectiveTokens / contextLimit : 0);
 

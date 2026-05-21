@@ -42,10 +42,8 @@ async function computeEffectiveUsedPct(conversation, modelMeta, userId, options 
 
 async function shouldSummarize(conversation, modelMeta, userId, options = {}) {
   const effectivePct = await computeEffectiveUsedPct(conversation, modelMeta, userId, options);
-  if (effectivePct != null) {
-    return effectivePct >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
-  }
-  return computeUsedPct(conversation, modelMeta) >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
+  if (effectivePct == null) return false;
+  return effectivePct >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
 }
 
 async function buildSummaryInput(messages, toolByMsg) {
