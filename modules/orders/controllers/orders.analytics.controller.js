@@ -13,9 +13,9 @@ const {
 } = require('../constants/subscription-event-types');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
+/** Statuses where past period end → show as expired (still entitled in DB). */
+const PERIOD_DRIVEN_DISPLAY_STATUSES = new Set([
   'active',
-  'renewed',
   'pending',
   'trial',
   'paused',
@@ -33,8 +33,14 @@ function subscriptionPeriodEndMs(row) {
 }
 
 function displaySubscriptionStatus(row) {
-  const status = row.status != null ? String(row.status) : '';
-  if (ACTIVE_SUBSCRIPTION_STATUSES.has(status)) {
+  const status =
+    row.status != null ? String(row.status).trim().toLowerCase() : '';
+  // Superseded row after a billing renewal — show as expired in admin (no separate "renewed" status).
+  if (status === 'renewed') return 'expired';
+  if (status === 'cancelled' || status === 'expired') {
+    return status;
+  }
+  if (PERIOD_DRIVEN_DISPLAY_STATUSES.has(status)) {
     const endMs = subscriptionPeriodEndMs(row);
     if (endMs != null && endMs <= Date.now()) return 'expired';
   }
@@ -157,7 +163,10 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
       payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
-      subscription_status: displaySubscriptionStatus(r),
+      subscription_status:
+        r._display_status != null && String(r._display_status).trim() !== ''
+          ? String(r._display_status).trim().toLowerCase()
+          : displaySubscriptionStatus(r),
       plan_credits: credits,
       plan_bonus_credits: bonus_credits,
       credit_balance: wallet ? wallet.balance : 0,
@@ -243,7 +252,7 @@ exports.getOrdersStatusSummary = async function (req, res) {
   }
 };
 
-/** GET /admin/orders/analytics/volume-summary — total orders + distinct users (created_at in range). */
+/** GET /admin/orders/analytics/volume-summary — completed orders + distinct users (completed_at in range). */
 exports.getOrdersVolumeSummary = async function (req, res) {
   try {
     const q = req.validatedQuery;
@@ -318,6 +327,42 @@ exports.getSubscriptionPurchasesDaily = async function (req, res) {
   } catch (err) {
     console.error('getSubscriptionPurchasesDaily error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load subscription purchase analytics' });
+  }
+};
+
+/**
+ * GET /admin/orders/analytics/purchases-daily
+ * Dashboard purchases metric: one count per payment — completed purchase orders (incl. renewal
+ * ledger) plus subscription rows only when no matching completed order exists.
+ */
+exports.getPurchasesDaily = async function (req, res) {
+  try {
+    const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date);
+    const endCal = toCalendarDate(q.end_date);
+    const paymentGateway =
+      q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
+
+    const result = await OrdersAnalyticsModel.getPurchasesDaily({
+      startCal,
+      endCal,
+      tz,
+      paymentGateway: paymentGateway || undefined
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: result.daily,
+      total_count: result.total_count
+    });
+  } catch (err) {
+    console.error('getPurchasesDaily error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load purchases analytics' });
   }
 };
 
@@ -406,7 +451,7 @@ function buildPurchasingCustomerUserDetails(row) {
   return Object.keys(details).length ? details : null;
 }
 
-/** GET /admin/orders/analytics/purchasing-customers — purchasers in date range (paginated). */
+/** GET /admin/orders/analytics/purchasing-customers — purchasers in date range (paginated; one count per payment). */
 exports.getPurchasingCustomersTable = async function (req, res) {
   try {
     const q = req.validatedQuery;

@@ -1,6 +1,7 @@
 'use strict';
 
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const SubscriptionsAnalyticsModel = require('../../analytics/models/subscriptions.analytics.model');
 const moment = require('moment-timezone');
 
 /**
@@ -320,7 +321,10 @@ exports.getOrdersVolumeSummary = async function (opts) {
   const query = `
     SELECT COUNT(*) AS total_orders, COUNT(DISTINCT user_id) AS unique_users
     FROM orders o
-    WHERE o.created_at >= ? AND o.created_at <= ?${filterPart.sql}
+    WHERE o.status = 'completed'
+      AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+      AND COALESCE(o.completed_at, o.created_at) >= ?
+      AND COALESCE(o.completed_at, o.created_at) <= ?${filterPart.sql}
   `;
   const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
@@ -380,6 +384,18 @@ const ORDER_IS_ONETIME_CREDITS_SQL = `
   pp.pp_id IS NOT NULL
   AND pp.plan_type = 'credits'
   AND (pp.billing_interval IS NULL OR pp.billing_interval NOT IN ('monthly', 'yearly'))
+`;
+
+/** Renewal ledger rows from {@link OrderService.createRenewalOrder} (Apple/Google/RC/Razorpay). */
+const ORDER_IS_RENEWAL_LEDGER_SQL = `
+  (
+    JSON_VALID(o.transaction_notes)
+    AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.purchase_subject')), ''))) = 'subscription_renewal'
+  )
+  OR (
+    JSON_VALID(o.transaction_notes)
+    AND JSON_EXTRACT(o.transaction_notes, '$.renewal') IN (true, 'true', 1, '1')
+  )
 `;
 
 /** Plan upgrade rows — excluded from initial + renewal (matches admin subscription table). */
@@ -463,9 +479,41 @@ const SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL = `
   AND JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.notes.type')) = 'upgrade'
 `;
 
+/** `parent_subscription_id` on renewal ledger orders ({@link OrderService.createRenewalOrder}). */
+const ORDER_PARENT_SUBSCRIPTION_ID_EXPR = `
+  NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.parent_subscription_id'))), '')
+`;
+
+const ORDER_HAS_PARENT_SUBSCRIPTION_ID_SQL = `
+  JSON_VALID(o.transaction_notes)
+  AND ${ORDER_PARENT_SUBSCRIPTION_ID_EXPR} IS NOT NULL
+  AND LOWER(${ORDER_PARENT_SUBSCRIPTION_ID_EXPR}) <> 'null'
+`;
+
+/** Renewal subscription row (`previous_subscription_id` / `renewal_count` in additional_data). */
+const SUBSCRIPTION_IS_RENEWAL_ROW_FOR_LINK_SQL = `
+  JSON_VALID(s_link.additional_data)
+  AND (
+    (
+      JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.previous_subscription_id')) IS NOT NULL
+      AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.previous_subscription_id'))) <> ''
+      AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.previous_subscription_id')))) <> 'null'
+    )
+    OR IFNULL(
+      CAST(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.renewal_count'))), '') AS UNSIGNED),
+      0
+    ) > 0
+  )
+`;
+
 /**
- * Completed order has a recurring initial/renewal subscription row within ±2 days
- * (same window as subscriptions analytics order link).
+ * Completed order already has a matching recurring subscription row (dedupe orders vs subscriptions).
+ *
+ * Renewal ledger: link by `parent_subscription_id` → `previous_subscription_id`, or by
+ * `subscriptions.created_at` (renewal rows use billing-period `start_at`, which can be weeks
+ * before the ledger order and broke the old ±2 day `start_at` window).
+ *
+ * Initial / other orders: keep ±2 day window on `start_at` / `created_at`.
  */
 const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
   EXISTS (
@@ -473,10 +521,222 @@ const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
     WHERE s_link.user_id = o.user_id
       AND s_link.payment_type = 'recurring'
       AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL})
-      AND COALESCE(s_link.start_at, s_link.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
-      AND COALESCE(s_link.start_at, s_link.created_at) <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+      AND (
+        (
+          ${ORDER_HAS_PARENT_SUBSCRIPTION_ID_SQL}
+          AND (
+            s_link.subscription_id = ${ORDER_PARENT_SUBSCRIPTION_ID_EXPR}
+            OR (
+              ${SUBSCRIPTION_IS_RENEWAL_ROW_FOR_LINK_SQL}
+              AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.previous_subscription_id'))) =
+                ${ORDER_PARENT_SUBSCRIPTION_ID_EXPR}
+            )
+          )
+        )
+        OR (
+          (${ORDER_IS_RENEWAL_LEDGER_SQL})
+          AND ${SUBSCRIPTION_IS_RENEWAL_ROW_FOR_LINK_SQL}
+          AND s_link.created_at >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+          AND s_link.created_at <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+        )
+        OR (
+          NOT (${ORDER_IS_RENEWAL_LEDGER_SQL})
+          AND COALESCE(s_link.start_at, s_link.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+          AND COALESCE(s_link.start_at, s_link.created_at) <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+        )
+      )
   )
 `;
+
+/**
+ * Per-order CASE for subscription-related purchase counts ({@link listPurchasingCustomersForAdmin}).
+ * Renewal ledger rows always count; initial plan orders dedupe against a nearby subscription row.
+ */
+const ORDER_SUBSCRIPTION_PURCHASE_COUNT_CASE_SQL = `
+  CASE
+    WHEN ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
+    WHEN ${ORDER_IS_RENEWAL_LEDGER_SQL} THEN 1
+    WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
+    WHEN pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
+    ELSE 0
+  END
+`;
+
+/**
+ * Completed orders that count as a purchase on the dashboard.
+ * Renewal ledger rows always count (+1 order, +1 purchase). Initial subscription plan orders
+ * still dedupe when a matching `subscriptions` row exists in the ±2 day window.
+ */
+const ORDER_PURCHASE_EVENTS_SQL = `
+  (
+    ${ORDER_IS_ALACARTE_SQL}
+    OR ${ORDER_IS_ADDON_SQL}
+    OR ${ORDER_IS_ONETIME_CREDITS_SQL}
+    OR ${ORDER_IS_RENEWAL_LEDGER_SQL}
+    OR (${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}))
+    OR (pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}))
+  )
+`;
+
+/** Renewal subscription row (`s` alias) — mirrors {@link SUBSCRIPTION_IS_RENEWAL_ROW_FOR_LINK_SQL}. */
+const SUBSCRIPTION_IS_RENEWAL_ROW_SQL = `
+  JSON_VALID(s.additional_data)
+  AND (
+    (
+      JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) IS NOT NULL
+      AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id'))) <> ''
+      AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')))) <> 'null'
+    )
+    OR IFNULL(
+      CAST(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.renewal_count'))), '') AS UNSIGNED),
+      0
+    ) > 0
+  )
+`;
+
+/**
+ * Subscription row already represented by a completed order (inverse of order-side dedupe).
+ * When a renewal ledger order exists, count the order only — not the subscription row too.
+ */
+const SUBSCRIPTION_REPRESENTED_BY_COMPLETED_ORDER_SQL = `
+  EXISTS (
+    SELECT 1 FROM orders o
+    LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
+    WHERE o.user_id = s.user_id
+      AND o.status = 'completed'
+      AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+      AND (
+        (
+          (${ORDER_IS_RENEWAL_LEDGER_SQL})
+          AND (
+            (
+              ${ORDER_HAS_PARENT_SUBSCRIPTION_ID_SQL}
+              AND JSON_VALID(s.additional_data)
+              AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.parent_subscription_id'))) =
+                TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')))
+            )
+            OR (
+              ${SUBSCRIPTION_IS_RENEWAL_ROW_SQL}
+              AND o.created_at >= DATE_SUB(COALESCE(s.created_at, s.start_at), INTERVAL 2 DAY)
+              AND o.created_at <= DATE_ADD(COALESCE(s.created_at, s.start_at), INTERVAL 2 DAY)
+            )
+          )
+        )
+        OR (
+          NOT (${SUBSCRIPTION_IS_RENEWAL_ROW_SQL})
+          AND (${ORDER_IS_SUBSCRIPTION_PLAN_SQL})
+          AND COALESCE(s.start_at, s.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+          AND COALESCE(s.start_at, s.created_at) <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+        )
+      )
+  )
+`;
+
+/**
+ * Subscription purchase rows in range that are not already covered by a completed order.
+ * @param {string} rangeStartUtc
+ * @param {string} rangeEndUtc
+ * @returns {Promise<object[]>}
+ */
+async function fetchSubscriptionPurchaseRowsNotRepresentedByOrder(rangeStartUtc, rangeEndUtc) {
+  const query = `
+    SELECT
+      DATE_FORMAT(COALESCE(s.start_at, s.created_at), '%Y-%m-%d %H:%i:%s') AS ts_utc,
+      CASE
+        WHEN ${SUBSCRIPTION_IS_RENEWAL_ROW_SQL} THEN 1
+        ELSE 0
+      END AS is_renewal,
+      JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) AS prev_sub_id_raw,
+      CASE
+        WHEN JSON_VALID(s.additional_data)
+          AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.type')), ''))) = 'upgrade'
+        THEN 1
+        ELSE 0
+      END AS is_upgrade,
+      JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
+    FROM subscriptions s
+    INNER JOIN user u ON u.user_id = s.user_id AND (u.DELETED_AT IS NULL)
+    WHERE s.payment_type = 'recurring'
+      AND COALESCE(s.start_at, s.created_at) >= ?
+      AND COALESCE(s.start_at, s.created_at) <= ?
+      AND NOT (${SUBSCRIPTION_REPRESENTED_BY_COMPLETED_ORDER_SQL})
+  `;
+  const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeStartUtc, rangeEndUtc]);
+  return rows || [];
+}
+
+/**
+ * Daily purchase events for admin dashboard — one increment per payment.
+ * Completed purchase orders (including renewal ledger) + subscription rows only when no
+ * matching completed order exists (legacy store paths without a ledger row).
+ *
+ * @param {Object} opts
+ * @param {string} opts.startCal YYYY-MM-DD
+ * @param {string} opts.endCal YYYY-MM-DD
+ * @param {string} opts.tz IANA
+ * @param {string} [opts.paymentGateway]
+ * @returns {Promise<{ daily: { date: string, count: number, renewal: number }[], total_count: number }>}
+ */
+exports.getPurchasesDaily = async function (opts) {
+  const { startCal, endCal, tz, paymentGateway } = opts;
+  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const gatewayPart = gatewayFilterClause(paymentGateway);
+
+  const orderQuery = `
+    SELECT DATE_FORMAT(${PURCHASE_AT_ORDERS_SQL}, '%Y-%m-%d %H:%i:%s') AS ts_utc
+    FROM orders o
+    LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
+    WHERE o.status = 'completed'
+      AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+      AND ${PURCHASE_AT_ORDERS_SQL} >= ? AND ${PURCHASE_AT_ORDERS_SQL} <= ?
+      AND (${ORDER_PURCHASE_EVENTS_SQL})
+      ${gatewayPart.sql}
+  `;
+  const orderParams = [rangeStartUtc, rangeEndUtc, ...gatewayPart.params];
+  const orderRows = await MysqlQueryRunner.runQueryInSlave(orderQuery, orderParams);
+
+  const dayCounts = new Map();
+  const bump = (dayKey, n = 1) => {
+    if (!dayKey) return;
+    const cur = dayCounts.get(dayKey) || { count: 0, renewal: 0 };
+    cur.count += n;
+    dayCounts.set(dayKey, cur);
+  };
+
+  for (const r of orderRows || []) {
+    bump(calendarDayInTzFromUtcWallTime(r.ts_utc, tz));
+  }
+
+  const subRows = await fetchSubscriptionPurchaseRowsNotRepresentedByOrder(
+    rangeStartUtc,
+    rangeEndUtc
+  );
+  const subBuckets = await SubscriptionsAnalyticsModel.bucketSubscriptionPurchaseRowsByDay(
+    subRows,
+    tz
+  );
+  for (const [dayKey, v] of subBuckets.entries()) {
+    const initial = Number(v.initial) || 0;
+    const renewal = Number(v.renewal) || 0;
+    const add = initial + renewal;
+    if (add <= 0) continue;
+    const cur = dayCounts.get(dayKey) || { count: 0, renewal: 0 };
+    cur.count += add;
+    cur.renewal += renewal;
+    dayCounts.set(dayKey, cur);
+  }
+
+  const daily = Array.from(dayCounts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, v]) => ({
+      date,
+      count: v.count,
+      renewal: v.renewal
+    }));
+
+  const total_count = daily.reduce((sum, d) => sum + (Number(d.count) || 0), 0);
+  return { daily, total_count };
+};
 
 /**
  * @param {string} rangeStartUtc
@@ -491,11 +751,12 @@ function purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc) {
  * Paginated customers who have at least one purchase in the calendar date range
  * (completed order and/or initial/renewal subscription row).
  *
- * Purchase counts are computed in SQL (not summed on the client):
+ * Purchase counts are computed in SQL (not summed on the client) — one increment per payment,
+ * aligned with {@link getPurchasesDaily}:
  * - `alacarte_purchases`: completed orders on à la carte plans
  * - `addon_purchases`: completed orders on add-on plans
- * - `subscription_purchases`: initial + renewal subscription rows, plus completed credit /
- *   subscription-plan orders not already represented by a linked subscription row (±2 days)
+ * - `subscription_purchases`: renewal ledger + other subscription-related orders, plus
+ *   subscription rows only when no matching completed order exists
  * - `total_purchases`: `alacarte + addon + subscription` (all from SQL)
  *
  * @param {Object} opts
@@ -568,20 +829,14 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       SELECT user_id FROM subscriptions s
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
         AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} <= ?
+        AND NOT (${SUBSCRIPTION_REPRESENTED_BY_COMPLETED_ORDER_SQL})
     ) eligible ON eligible.user_id = u.user_id
     LEFT JOIN (
       SELECT
         o.user_id,
         SUM(CASE WHEN ${ORDER_IS_ALACARTE_SQL} THEN 1 ELSE 0 END) AS alacarte_purchases,
         SUM(CASE WHEN ${ORDER_IS_ADDON_SQL} THEN 1 ELSE 0 END) AS addon_purchases,
-        SUM(
-          CASE
-            WHEN ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
-            WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
-            WHEN pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
-            ELSE 0
-          END
-        ) AS subscription_order_purchases,
+        SUM(${ORDER_SUBSCRIPTION_PURCHASE_COUNT_CASE_SQL}) AS subscription_order_purchases,
         MAX(${PURCHASE_AT_ORDERS_SQL}) AS last_order_at
       FROM orders o
       LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
@@ -597,6 +852,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       FROM subscriptions s
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
         AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
+        AND NOT (${SUBSCRIPTION_REPRESENTED_BY_COMPLETED_ORDER_SQL})
       GROUP BY s.user_id
     ) sstats ON sstats.user_id = u.user_id
     LEFT JOIN user_credits uc ON uc.user_id = u.user_id

@@ -39,6 +39,14 @@ module.exports = function (app) {
     );
 
   app
+    .route('/admin/orders/analytics/purchases-daily')
+    .get(
+      AuthMiddleware.isAdminUser,
+      ordersAnalyticsValidator.validateOrdersAnalyticsQuery,
+      ordersAnalyticsController.getPurchasesDaily
+    );
+
+  app
     .route('/admin/orders/analytics/user-subscriptions')
     .get(
       AuthMiddleware.isAdminUser,

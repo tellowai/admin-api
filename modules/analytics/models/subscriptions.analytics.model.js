@@ -252,56 +252,57 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Daily breakdown of recurring subscription events (initial purchases + renewals) in [startCal, endCal].
+   * Recurring subscription rows in range — same pool as the admin subscriptions table
+   * (active users only). Used by charts and dashboard purchase totals.
    *
-   * Renewals are detected via `additional_data.previous_subscription_id` or
-   * `additional_data.renewal_count > 0` (matches how `subscription.service.js` writes renewal rows).
-   * Anything else with `payment_type = 'recurring'` is counted as an initial subscription event.
-   * A renewal row is skipped when `previous_subscription_id` resolves to a parent whose
-   * `COALESCE(start_at, created_at)` falls on the same calendar day as this row in `tz`
-   * (avoids same-day activation + first-cycle charge counting as both new and renewal).
-   * Same-day **plan upgrade** rows (`notes.type = 'upgrade'` with `notes.active_subscription_id` whose
-   * start falls on the same calendar day as this row in `tz`) are omitted from the chart buckets.
-   *
-   * @param {Object} opts
-   * @param {string} opts.startCal YYYY-MM-DD
-   * @param {string} opts.endCal YYYY-MM-DD
-   * @param {string} opts.tz IANA timezone for calendar day bucketing
-   * @returns {Promise<{ daily: Array<{ date: string, initial: number, renewal: number, count: number }> }>}
+   * @param {string} rangeStartUtc
+   * @param {string} rangeEndUtc
+   * @param {{ useMaster?: boolean }} [options]
+   * @returns {Promise<object[]>}
    */
-  static async getSubscriptionEventsDaily(opts) {
-    const { startCal, endCal, tz } = opts;
-    const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
-
-    // Pull each recurring subscription row whose start falls in the window.
-    // Bucketing into local-tz calendar days happens in Node so we don't depend on MySQL named-tz tables.
+  static async fetchRecurringSubscriptionPurchaseRows(rangeStartUtc, rangeEndUtc, options = {}) {
+    const runQuery = options.useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
     const query = `
       SELECT
         DATE_FORMAT(COALESCE(s.start_at, s.created_at), '%Y-%m-%d %H:%i:%s') AS ts_utc,
         CASE
           WHEN JSON_VALID(s.additional_data) AND (
-            JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) IS NOT NULL
-              AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> ''
-              AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> 'null'
-            OR CAST(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.renewal_count')) AS UNSIGNED) > 0
+            (
+              JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) IS NOT NULL
+              AND TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id'))) <> ''
+              AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')))) <> 'null'
+            )
+            OR IFNULL(
+              CAST(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.renewal_count'))), '') AS UNSIGNED),
+              0
+            ) > 0
           ) THEN 1
           ELSE 0
         END AS is_renewal,
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) AS prev_sub_id_raw,
         CASE
-          WHEN JSON_VALID(s.additional_data) AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.type')), ''))) = 'upgrade'
+          WHEN JSON_VALID(s.additional_data)
+            AND LOWER(TRIM(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.type')), ''))) = 'upgrade'
           THEN 1
           ELSE 0
         END AS is_upgrade,
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
+      INNER JOIN user u ON u.user_id = s.user_id AND (u.DELETED_AT IS NULL)
       WHERE s.payment_type = 'recurring'
         AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
     `;
+    const rows = await runQuery(query, [rangeStartUtc, rangeEndUtc]);
+    return rows || [];
+  }
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeStartUtc, rangeEndUtc]);
-
+  /**
+   * @param {object[]} rows from {@link fetchRecurringSubscriptionPurchaseRows}
+   * @param {string} tz IANA
+   * @returns {Promise<Map<string, { initial: number, renewal: number }>>}
+   */
+  static async bucketSubscriptionPurchaseRowsByDay(rows, tz) {
     const prevIds = new Set();
     for (const r of rows || []) {
       if (Number(r.is_renewal) === 1) {
@@ -314,7 +315,6 @@ class SubscriptionsAnalyticsModel {
       }
     }
 
-    /** @type {Map<string, string>} subscription_id -> calendar day (client tz) of parent's COALESCE(start_at, created_at) */
     const parentStartDayById = new Map();
     if (prevIds.size > 0) {
       const idList = [...prevIds];
@@ -333,10 +333,6 @@ class SubscriptionsAnalyticsModel {
       }
     }
 
-    // Bucket into calendar days in `tz`.
-    // Omit same-day plan upgrades (upgrade row vs prior subscription start, client tz).
-    // Suppress a "renewal" row when its parent subscription started the same calendar day (Razorpay
-    // activation + charged with paid_count > 1 on one day).
     const buckets = new Map();
     for (const r of rows || []) {
       const m = parseMysqlUtcTimestampToMoment(r.ts_utc);
@@ -368,6 +364,29 @@ class SubscriptionsAnalyticsModel {
       else cur.initial += 1;
       buckets.set(day, cur);
     }
+
+    return buckets;
+  }
+
+  /**
+   * Daily breakdown of recurring subscription events (initial purchases + renewals) in [startCal, endCal].
+   * Aligned with the admin subscriptions table row pool (recurring + active users).
+   *
+   * @param {Object} opts
+   * @param {string} opts.startCal YYYY-MM-DD
+   * @param {string} opts.endCal YYYY-MM-DD
+   * @param {string} opts.tz IANA timezone for calendar day bucketing
+   * @returns {Promise<{ daily: Array<{ date: string, initial: number, renewal: number, count: number }> }>}
+   */
+  static async getSubscriptionEventsDaily(opts) {
+    const { startCal, endCal, tz } = opts;
+    const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
+
+    const rows = await SubscriptionsAnalyticsModel.fetchRecurringSubscriptionPurchaseRows(
+      rangeStartUtc,
+      rangeEndUtc
+    );
+    const buckets = await SubscriptionsAnalyticsModel.bucketSubscriptionPurchaseRowsByDay(rows, tz);
 
     const daily = Array.from(buckets.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -472,6 +491,34 @@ class SubscriptionsAnalyticsModel {
    * @param {boolean} [opts.useMaster] read from primary (avoids replica lag after admin writes / seeds)
    * @returns {Promise<{ rows: object[], total: number }>}
    */
+  /**
+   * Status filter for admin table — must match {@link displaySubscriptionStatusSqlExpr} rules.
+   * "active" is explicit (DB status active + period not ended); other filters use `_display_status`.
+   *
+   * @param {string} [subscriptionDisplayStatus]
+   * @returns {{ sql: string, params: any[] }}
+   */
+  static buildSubscriptionDisplayStatusFilterClause(subscriptionDisplayStatus) {
+    const rawSt =
+      subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
+    if (!rawSt) return { sql: '', params: [] };
+
+    if (rawSt === 'active') {
+      return {
+        sql: `
+          AND LOWER(TRIM(COALESCE(t.status, ''))) = 'active'
+          AND (
+            COALESCE(t.current_period_end, t.renews_at, t.end_at) IS NULL
+            OR COALESCE(t.current_period_end, t.renews_at, t.end_at) > UTC_TIMESTAMP()
+          )
+        `,
+        params: []
+      };
+    }
+
+    return { sql: ' AND t._display_status = ? ', params: [rawSt] };
+  }
+
   static async listUserSubscriptionsForAdminRange(opts) {
     const {
       startCal,
@@ -520,8 +567,9 @@ class SubscriptionsAnalyticsModel {
     const et = ['renewal', 'initial', 'upgrade', 'one_time'].includes(rawEt) ? rawEt : '';
     const eventClause = et ? { sql: ' AND t._event_type = ? ', params: [et] } : { sql: '', params: [] };
 
-    const rawSt = subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
-    const statusClause = rawSt ? { sql: ' AND t._display_status = ? ', params: [rawSt] } : { sql: '', params: [] };
+    const statusClause = SubscriptionsAnalyticsModel.buildSubscriptionDisplayStatusFilterClause(
+      subscriptionDisplayStatus
+    );
 
     const innerParams = [rangeStartUtc, rangeEndUtc, ...planClause.params];
 
@@ -573,6 +621,7 @@ class SubscriptionsAnalyticsModel {
       FROM subscriptions s
       INNER JOIN user u ON u.user_id = s.user_id
       WHERE (u.DELETED_AT IS NULL)
+        AND s.payment_type = 'recurring'
         AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
         ${planClause.sql}
@@ -602,8 +651,9 @@ class SubscriptionsAnalyticsModel {
         ) AS _event_type,
         (
           CASE
+            WHEN LOWER(TRIM(COALESCE(inner_sub.status, ''))) = 'renewed' THEN 'expired'
             WHEN LOWER(TRIM(COALESCE(inner_sub.status, ''))) IN (
-              'active','renewed','pending','trial','paused','upgraded',
+              'active','pending','trial','paused','upgraded',
               'active_non_recurring','upgraded_non_recurring','pending_otp_verification_for_upgrade'
             )
             AND COALESCE(inner_sub.current_period_end, inner_sub.renews_at, inner_sub.end_at) IS NOT NULL

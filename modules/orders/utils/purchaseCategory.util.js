@@ -1,9 +1,27 @@
 'use strict';
 
+const { parseTransactionNotesObject } = require('./orderTemplateStitch.util');
+
 function normPlanField(v) {
   if (v == null || v === '') return '';
   const s = typeof Buffer !== 'undefined' && Buffer.isBuffer(v) ? v.toString('utf8') : String(v);
   return s.trim().toLowerCase();
+}
+
+/**
+ * Renewal ledger orders (OrderService.createRenewalOrder) tag transaction_notes.
+ *
+ * @param {unknown} transactionNotes
+ * @returns {boolean}
+ */
+function isSubscriptionRenewalFromTransactionNotes(transactionNotes) {
+  const parsed = parseTransactionNotesObject(transactionNotes);
+  if (!parsed) return false;
+  const subject =
+    parsed.purchase_subject != null ? String(parsed.purchase_subject).trim().toLowerCase() : '';
+  if (subject === 'subscription_renewal') return true;
+  if (parsed.renewal === true || parsed.renewal === 'true' || parsed.renewal === 1) return true;
+  return false;
 }
 
 /**
@@ -26,7 +44,24 @@ function purchaseCategoryFromPlan(planType, billingInterval) {
   return 'other';
 }
 
+/**
+ * Order list badge: renewal ledger rows override plan-based "subscription".
+ *
+ * @param {string|null|undefined} planType
+ * @param {string|null|undefined} billingInterval
+ * @param {unknown} [transactionNotes]
+ * @returns {'alacarte'|'subscription'|'subscription_renewal'|'onetime'|'addon'|'other'}
+ */
+function purchaseCategoryFromOrder(planType, billingInterval, transactionNotes) {
+  if (isSubscriptionRenewalFromTransactionNotes(transactionNotes)) {
+    return 'subscription_renewal';
+  }
+  return purchaseCategoryFromPlan(planType, billingInterval);
+}
+
 module.exports = {
   normPlanField,
-  purchaseCategoryFromPlan
+  isSubscriptionRenewalFromTransactionNotes,
+  purchaseCategoryFromPlan,
+  purchaseCategoryFromOrder
 };
