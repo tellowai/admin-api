@@ -87,4 +87,16 @@ describe('clickhouse.sql.validator', () => {
     );
     expect(r.ok).to.equal(true);
   });
+
+  it('rewrites shadowed aggregate aliases for meta ads campaign query', () => {
+    const sql = "SELECT campaign_id, any(campaign_name) AS campaign_name, currency, countDistinctIf(adset_id, spend > 0 OR impressions > 0) AS active_ad_sets, countDistinctIf(ad_id, spend > 0 OR impressions > 0) AS active_ad_creatives, sum(spend) AS spend, sum(impressions) AS impressions, sum(clicks) AS clicks FROM meta_ads_insights_daily WHERE date = '2026-05-21' GROUP BY campaign_id, currency HAVING spend > 0 OR impressions > 0 ORDER BY spend DESC";
+    const r = validateClickHouseSql(sql);
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('sum(spend) AS agg_spend');
+    expect(r.sql).to.include('sum(impressions) AS agg_impressions');
+    expect(r.sql).to.include('countDistinctIf(adset_id, spend > 0 OR impressions > 0)');
+    expect(r.sql).to.match(/HAVING\s+agg_spend\s*>\s*0/i);
+    expect(r.sql).to.match(/ORDER BY\s+agg_spend\s+DESC/i);
+    expect(r.sql).not.to.match(/\bAS\s+spend\b/i);
+  });
 });

@@ -57,6 +57,15 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         retryable: true,
       };
     }
+    if (msg.includes('ILLEGAL_AGGREGATION')) {
+      return {
+        success: false,
+        error: 'ILLEGAL_AGGREGATION',
+        message: 'Aggregate alias shadows a column (e.g. sum(spend) AS spend with HAVING spend > 0). Use agg_* aliases or HAVING sum(spend) > 0.',
+        hint: 'Do not alias sum(spend) AS spend; use AS agg_spend and HAVING agg_spend > 0, or HAVING sum(spend) > 0. Row filters in countDistinctIf must use raw column names only.',
+        retryable: true,
+      };
+    }
     if (msg.includes('UNKNOWN_TABLE') || msg.includes('does not exist')) {
       const table = (runSql.match(/\bFROM\s+(?:`?\w+`?\.)?`?(\w+)`?/i) || [])[1];
       return {
