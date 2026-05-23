@@ -2,7 +2,7 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
-const VALID_PLAN_TYPES = ['single', 'bundle', 'credits', 'addon'];
+const VALID_PLAN_TYPES = ['single', 'bundle', 'credits', 'addon', 'membership'];
 
 /**
  * List payment plans with pagination.
