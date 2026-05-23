@@ -371,8 +371,8 @@ exports.togglePlanStatus = async function (req, res) {
       }
 
       // Validate plan_type
-      if (!plan.plan_type || !['single', 'bundle', 'credits', 'addon'].includes(plan.plan_type)) {
-        errors.push({ field: 'plan_type', message: 'Plan type must be one of: single, bundle, credits, addon' });
+      if (!plan.plan_type || !['single', 'bundle', 'credits', 'addon', 'membership'].includes(plan.plan_type)) {
+        errors.push({ field: 'plan_type', message: 'Plan type must be one of: single, bundle, credits, addon, membership' });
       }
 
       // Validate current_price
@@ -390,8 +390,9 @@ exports.togglePlanStatus = async function (req, res) {
         errors.push({ field: 'billing_interval', message: 'Billing interval is required' });
       }
 
-      // Validate validity_days
-      if (!plan.validity_days || plan.validity_days <= 0) {
+      // Validate validity_days (recurring membership is billed via store interval, not local validity)
+      const isMembership = plan.plan_type === 'membership';
+      if (!isMembership && (!plan.validity_days || plan.validity_days <= 0)) {
         errors.push({ field: 'validity_days', message: 'Validity days must be greater than 0' });
       }
 
