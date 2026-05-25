@@ -762,6 +762,18 @@ exports.listTemplates = async function (req, res) {
     }
 
     const listSort = parseTemplateListSort(req.query);
+    const ttdIdRaw = req.query.ttd_id;
+    const ttdId =
+      ttdIdRaw != null && String(ttdIdRaw).trim() !== '' ? String(ttdIdRaw).trim() : undefined;
+
+    let templateIdsFilter = null;
+    if (ttdId) {
+      templateIdsFilter = await TemplateTagsModel.getActiveTemplateIdsForTtdId(ttdId);
+      if (!templateIdsFilter.length) {
+        return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });
+      }
+    }
+
     const paginationParams = {
       ...PaginationCtrl.getPaginationParams(req.query),
       status: req.query.status || undefined,
@@ -773,7 +785,8 @@ exports.listTemplates = async function (req, res) {
       template_type_filter: templateTypeFilter,
       is_effects: isEffectsFilter,
       ...listSort,
-      ...(listSearch ? { q: listSearch } : {})
+      ...(listSearch ? { q: listSearch } : {}),
+      ...(templateIdsFilter ? { template_ids: templateIdsFilter } : {})
     };
     const templates = await TemplateModel.listTemplates(paginationParams);
 
@@ -1411,6 +1424,18 @@ exports.searchTemplates = async function (req, res) {
       req.query.name_only === true ||
       req.query.name_only === '1' ||
       req.query.name_only === 1;
+    const ttdIdRaw = req.query.ttd_id;
+    const ttdId =
+      ttdIdRaw != null && String(ttdIdRaw).trim() !== '' ? String(ttdIdRaw).trim() : undefined;
+
+    let templateIdsFilter = null;
+    if (ttdId) {
+      templateIdsFilter = await TemplateTagsModel.getActiveTemplateIdsForTtdId(ttdId);
+      if (!templateIdsFilter.length) {
+        return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });
+      }
+    }
+
     const templates = await TemplateModel.searchTemplates(
       q,
       paginationParams.page,
@@ -1424,7 +1449,10 @@ exports.searchTemplates = async function (req, res) {
       templateTypeFilter,
       listSort.sort_by,
       listSort.sort_dir,
-      { nameOnly }
+      {
+        nameOnly,
+        ...(templateIdsFilter ? { template_ids: templateIdsFilter } : {})
+      }
     );
 
     // Batch fetch related data (no queries in loop); stitch in controller

@@ -12,6 +12,19 @@ function parseAdditionalData(raw) {
   }
 }
 
+function sortFacetTags(tags) {
+  return [...tags].sort((a, b) => {
+    const sortA = a.additional_data?.sort;
+    const sortB = b.additional_data?.sort;
+    const orderA =
+      sortA != null && sortA !== '' && !Number.isNaN(Number(sortA)) ? Number(sortA) : 9999;
+    const orderB =
+      sortB != null && sortB !== '' && !Number.isNaN(Number(sortB)) ? Number(sortB) : 9999;
+    if (orderA !== orderB) return orderA - orderB;
+    return String(a.tag_name || '').localeCompare(String(b.tag_name || ''));
+  });
+}
+
 /**
  * List all facets with their associated tags from the database
  */
@@ -66,17 +79,16 @@ exports.getTagsForFacet = async function(facetId) {
       updated_at
     FROM template_tag_definitions
     WHERE facet_id = ?
-    AND archived_at IS NULL
-    ORDER BY
-      COALESCE(CAST(JSON_UNQUOTE(JSON_EXTRACT(additional_data, '$.sort')) AS UNSIGNED), 9999) ASC,
-      tag_name ASC
+      AND archived_at IS NULL
+    ORDER BY tag_name ASC
   `;
 
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [facetId]);
-  return rows.map((row) => ({
+  const tags = rows.map((row) => ({
     ...row,
     additional_data: parseAdditionalData(row.additional_data)
   }));
+  return sortFacetTags(tags);
 };
 
 /**

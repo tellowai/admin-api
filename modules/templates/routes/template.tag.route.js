@@ -23,6 +23,41 @@ module.exports = function(app) {
     TemplateTagCtrl.createTemplateTagDefinition
   );
 
+  // Search template tag definitions
+  app.route(
+    versionConfig.routePrefix + '/template-tags/search'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateTagCtrl.searchTemplateTagDefinitions
+  );
+
+  // Reorder tags within a facet
+  app.route(
+    versionConfig.routePrefix + '/template-tags/reorder'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateTagValidator.validateReorderTemplateTagsData,
+    TemplateTagCtrl.reorderTemplateTagDefinitions
+  );
+
+  // Bulk archive template tag definitions
+  app.route(
+    versionConfig.routePrefix + '/template-tags/archive/bulk'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateTagValidator.validateBulkArchiveTemplateTagsData,
+    TemplateTagCtrl.bulkArchiveTemplateTagDefinitions
+  );
+
+  // Bulk unarchive template tag definitions
+  app.route(
+    versionConfig.routePrefix + '/template-tags/unarchive/bulk'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateTagValidator.validateBulkUnarchiveTemplateTagsData,
+    TemplateTagCtrl.bulkUnarchiveTemplateTagDefinitions
+  );
+
   // Get template tag definition by ID
   app.route(
     versionConfig.routePrefix + '/template-tags/:tagId'
@@ -48,29 +83,4 @@ module.exports = function(app) {
     TemplateTagCtrl.archiveTemplateTagDefinition
   );
 
-  // Search template tag definitions
-  app.route(
-    versionConfig.routePrefix + '/template-tags/search'
-  ).get(
-    AuthMiddleware.isAuthorizedJWT,
-    TemplateTagCtrl.searchTemplateTagDefinitions
-  );
-
-  // Bulk archive template tag definitions
-  app.route(
-    versionConfig.routePrefix + '/template-tags/archive/bulk'
-  ).post(
-    AuthMiddleware.isAuthorizedJWT,
-    TemplateTagValidator.validateBulkArchiveTemplateTagsData,
-    TemplateTagCtrl.bulkArchiveTemplateTagDefinitions
-  );
-
-  // Bulk unarchive template tag definitions
-  app.route(
-    versionConfig.routePrefix + '/template-tags/unarchive/bulk'
-  ).post(
-    AuthMiddleware.isAuthorizedJWT,
-    TemplateTagValidator.validateBulkUnarchiveTemplateTagsData,
-    TemplateTagCtrl.bulkUnarchiveTemplateTagDefinitions
-  );
 };

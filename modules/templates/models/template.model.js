@@ -22,6 +22,12 @@ function applyTemplateTypeFilter(conditions, params, filter) {
   params.push(filter);
 }
 
+function applyTemplateIdsFilter(conditions, params, templateIds) {
+  if (!templateIds || !templateIds.length) return;
+  conditions.push(`template_id IN (${templateIds.map(() => '?').join(',')})`);
+  params.push(...templateIds);
+}
+
 const TEMPLATE_LIST_SORT_COLUMNS = {
   updated_at: 'updated_at',
   created_at: 'created_at',
@@ -93,6 +99,8 @@ exports.listTemplates = async function (pagination) {
   } else if (pagination.is_effects === false) {
     conditions.push('(is_effects IS NULL OR is_effects = 0 OR is_effects = FALSE)');
   }
+
+  applyTemplateIdsFilter(conditions, params, pagination.template_ids);
 
   const searchText =
     pagination.q != null && String(pagination.q).trim() !== ''
@@ -457,6 +465,8 @@ exports.searchTemplates = async function (
       conditions.push("ios_status = 'active'");
     }
   }
+
+  applyTemplateIdsFilter(conditions, params, extra && extra.template_ids);
 
   params.push(limit, offset);
 
