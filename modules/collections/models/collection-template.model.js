@@ -156,20 +156,28 @@ exports.getCollectionTemplates = async function(collectionId, pagination) {
   );
 };
 
-exports.getTemplatesByIds = async function(templateIds) {
-  const query = `
-    SELECT 
+const COLLECTION_TEMPLATE_SELECT_FIELDS = `
       template_id,
       template_name,
       template_code,
+      template_output_type,
       description,
       prompt,
       faces_needed,
       cf_r2_key,
       cf_r2_url,
+      cf_r2_bucket,
+      thumb_frame_asset_key,
+      thumb_frame_bucket,
       credits,
       additional_data,
       created_at
+`;
+
+exports.getTemplatesByIds = async function(templateIds) {
+  const query = `
+    SELECT 
+      ${COLLECTION_TEMPLATE_SELECT_FIELDS}
     FROM templates
     WHERE template_id IN (?)
     AND archived_at IS NULL
@@ -243,17 +251,7 @@ exports.getTemplatesByFilters = async function(facetValues, attributeFilters, pa
   const whereClause = whereConditions.join(' AND ');
   const query = `
     SELECT 
-      template_id,
-      template_name,
-      template_code,
-      description,
-      prompt,
-      faces_needed,
-      cf_r2_key,
-      cf_r2_url,
-      credits,
-      additional_data,
-      created_at
+      ${COLLECTION_TEMPLATE_SELECT_FIELDS}
     FROM templates
     WHERE ${whereClause}
     AND archived_at IS NULL

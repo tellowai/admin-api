@@ -609,10 +609,25 @@ exports.getCollectionTemplates = async function(req, res) {
 };
 
 function processCollectionTemplateRow(processedTemplate) {
+  const publicBucketUrl = config.os2.r2.public.bucketUrl;
+
   if (processedTemplate.cf_r2_key) {
-    processedTemplate.r2_url = `${config.os2.r2.public.bucketUrl}/${processedTemplate.cf_r2_key}`;
+    processedTemplate.r2_url = `${publicBucketUrl}/${processedTemplate.cf_r2_key}`;
   } else {
-    processedTemplate.r2_url = processedTemplate.cf_r2_url;
+    processedTemplate.r2_url = processedTemplate.cf_r2_url || null;
+  }
+
+  if (processedTemplate.thumb_frame_asset_key) {
+    const bucket = processedTemplate.thumb_frame_bucket || 'public';
+    const publicBucketName = config.os2?.r2?.public?.bucket;
+    const isPublic = bucket === 'public' || bucket === publicBucketName;
+    if (isPublic) {
+      processedTemplate.thumb_frame_url = `${publicBucketUrl}/${processedTemplate.thumb_frame_asset_key}`;
+    }
+  }
+
+  if (processedTemplate.template_output_type === 'image' && processedTemplate.r2_url) {
+    processedTemplate.thumb_frame_url = processedTemplate.thumb_frame_url || processedTemplate.r2_url;
   }
 
   if (processedTemplate.faces_needed && typeof processedTemplate.faces_needed === 'string') {
