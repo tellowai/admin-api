@@ -110,11 +110,19 @@ exports.updateRemoteConfigValueByKey = async function (req, res, next) {
       rc_value: strValue
     };
     await RemoteConfigDbo.createOrUpdateRemoteConfig(payload);
-    if (payload.rc_key_name === 'output_logo_overlay_config' || payload.rc_key_name === 'free_template_video_logo_config') {
+    const overlayCacheKeys = {
+      output_logo_overlay_config: ['output_logo_overlay_config_json'],
+      free_template_video_logo_config: ['free_template_video_logo_config_json', 'output_logo_overlay_config_json'],
+      output_watermark_config: ['output_watermark_config_json'],
+      video_outro_config: ['video_outro_config_json']
+    };
+    const keysToDelete = overlayCacheKeys[payload.rc_key_name];
+    if (keysToDelete && keysToDelete.length > 0) {
       try {
         const RedisService = require('../../core/models/redis.promise.model');
-        await RedisService.deleteData('output_logo_overlay_config_json');
-        await RedisService.deleteData('free_template_video_logo_config_json');
+        for (const k of keysToDelete) {
+          await RedisService.deleteData(k);
+        }
       } catch (_) {
         /* non-fatal */
       }
