@@ -198,79 +198,65 @@ exports.countCollectionTemplates = async function(collectionId) {
   return Number(row?.total) || 0;
 };
 
-exports.getTemplateIdsByFacetTagCodes = async function(facetKey, tagCodes) {
-  if (!facetKey || !tagCodes || tagCodes.length === 0) {
+exports.getFacetsByFacetKeys = async function(facetKeys) {
+  if (!facetKeys || facetKeys.length === 0) {
     return [];
   }
 
-  const placeholders = tagCodes.map(() => '?').join(',');
-  const tagDefQuery = `
-    SELECT ttd.ttd_id
-    FROM template_tag_definitions ttd
-    INNER JOIN template_tag_facets f ON f.facet_id = ttd.facet_id
-    WHERE f.facet_key = ?
-    AND ttd.tag_code IN (${placeholders})
-    AND ttd.archived_at IS NULL
-    AND f.archived_at IS NULL
+  const placeholders = facetKeys.map(() => '?').join(',');
+  const query = `
+    SELECT facet_id, facet_key
+    FROM template_tag_facets
+    WHERE facet_key IN (${placeholders})
+    AND archived_at IS NULL
   `;
 
-  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefQuery, [facetKey, ...tagCodes]);
-  if (tagDefinitions.length === 0) {
+  return await mysqlQueryRunner.runQueryInSlave(query, facetKeys);
+};
+
+exports.getTagDefinitionsByFacetIds = async function(facetIds) {
+  if (!facetIds || facetIds.length === 0) {
     return [];
   }
 
-  const tagDefIds = tagDefinitions.map(td => td.ttd_id);
-  const templateIdsQuery = `
-    SELECT DISTINCT template_id
+  const placeholders = facetIds.map(() => '?').join(',');
+  const query = `
+    SELECT ttd_id, facet_id, tag_code
+    FROM template_tag_definitions
+    WHERE facet_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, facetIds);
+};
+
+exports.getTemplateTagsByTtdIds = async function(ttdIds) {
+  if (!ttdIds || ttdIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = ttdIds.map(() => '?').join(',');
+  const query = `
+    SELECT template_id, ttd_id
     FROM template_tags
-    WHERE ttd_id IN (${tagDefIds.map(() => '?').join(',')})
+    WHERE ttd_id IN (${placeholders})
     AND deleted_at IS NULL
   `;
 
-  const results = await mysqlQueryRunner.runQueryInSlave(templateIdsQuery, tagDefIds);
-  return results.map(row => row.template_id);
+  return await mysqlQueryRunner.runQueryInSlave(query, ttdIds);
 };
 
-exports.getTemplateIdsMatchingFacetFilters = async function(facetFilters) {
-  if (!facetFilters || facetFilters.length === 0) {
-    return null;
-  }
-
-  let intersection = null;
-
-  for (const facetFilter of facetFilters) {
-    const tagCodes = Array.isArray(facetFilter.tagCodes) ? facetFilter.tagCodes : [facetFilter.tagCodes];
-    const ids = await exports.getTemplateIdsByFacetTagCodes(facetFilter.facet, tagCodes);
-    const idSet = new Set(ids);
-
-    if (intersection === null) {
-      intersection = idSet;
-    } else {
-      intersection = new Set([...intersection].filter((id) => idSet.has(id)));
-    }
-
-    if (intersection.size === 0) {
-      return [];
-    }
-  }
-
-  return [...intersection];
-};
-
-async function buildTemplatesFilterContext(facetFilters, attributeFilters) {
-  let templateIds = null;
-
-  if (facetFilters && facetFilters.length > 0) {
-    templateIds = await exports.getTemplateIdsMatchingFacetFilters(facetFilters);
-    if (templateIds.length === 0) {
-      return null;
-    }
-  }
-
+function buildAttributeFilterClause(attributeFilters, templateIds) {
   const whereConditions = [];
   const queryParams = [];
 
-  Object.keys(attributeFilters || {}).forEach(attrName => {
+  if (templateIds && templateIds.length > 0) {
+    const placeholders = templateIds.map(() => '?').join(',');
+    whereConditions.push(`template_id IN (${placeholders})`);
+    queryParams.push(...templateIds);
+  }
+
+  Object.keys(attributeFilters || {}).forEach((attrName) => {
     const filter = attributeFilters[attrName];
     if (filter.op === '=') {
       whereConditions.push(`${attrName} = ?`);
@@ -282,12 +268,6 @@ async function buildTemplatesFilterContext(facetFilters, attributeFilters) {
     }
   });
 
-  if (templateIds && templateIds.length > 0) {
-    const placeholders = templateIds.map(() => '?').join(',');
-    whereConditions.push(`template_id IN (${placeholders})`);
-    queryParams.push(...templateIds);
-  }
-
   if (whereConditions.length === 0) {
     return null;
   }
@@ -298,8 +278,8 @@ async function buildTemplatesFilterContext(facetFilters, attributeFilters) {
   };
 }
 
-exports.countTemplatesByFilters = async function(facetFilters, attributeFilters) {
-  const filterContext = await buildTemplatesFilterContext(facetFilters, attributeFilters);
+exports.countTemplatesByAttributeFilters = async function(templateIds, attributeFilters) {
+  const filterContext = buildAttributeFilterClause(attributeFilters, templateIds);
   if (!filterContext) {
     return 0;
   }
@@ -315,8 +295,8 @@ exports.countTemplatesByFilters = async function(facetFilters, attributeFilters)
   return Number(row?.total) || 0;
 };
 
-exports.getTemplatesByFilters = async function(facetFilters, attributeFilters, pagination) {
-  const filterContext = await buildTemplatesFilterContext(facetFilters, attributeFilters);
+exports.getTemplatesByAttributeFilters = async function(templateIds, attributeFilters, pagination) {
+  const filterContext = buildAttributeFilterClause(attributeFilters, templateIds);
   if (!filterContext) {
     return [];
   }

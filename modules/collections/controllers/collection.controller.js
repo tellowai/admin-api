@@ -3,6 +3,7 @@
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const CollectionModel = require('../models/collection.model');
 const CollectionTemplateModel = require('../models/collection-template.model');
+const CollectionTemplateFilterService = require('../services/collection-template.filter.service');
 const CollectionErrorHandler = require('../middlewares/collection.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
@@ -592,8 +593,11 @@ exports.getCollectionTemplates = async function(req, res) {
       }
 
       const { facetFilters, attributeFilters } = extractFiltersFromRule(ruleJson);
-      total = await CollectionTemplateModel.countTemplatesByFilters(facetFilters, attributeFilters);
-      const templates = await CollectionTemplateModel.getTemplatesByFilters(
+      total = await CollectionTemplateFilterService.countTemplatesByRuleFilters(
+        facetFilters,
+        attributeFilters
+      );
+      const templates = await CollectionTemplateFilterService.getTemplatesByRuleFilters(
         facetFilters,
         attributeFilters,
         paginationParams
