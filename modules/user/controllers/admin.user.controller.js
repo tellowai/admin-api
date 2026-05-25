@@ -17,7 +17,7 @@ const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
-const { purchaseCategoryFromPlan } = require('../../orders/utils/purchaseCategory.util');
+const { purchaseCategoryFromOrder } = require('../../orders/utils/purchaseCategory.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -480,7 +480,7 @@ exports.getUserOrders = async function (req, res) {
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
         plan_heading: plan ? (plan.plan_heading || plan.plan_name || null) : null,
         billing_interval: billingInterval ?? null,
-        purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
+        purchase_category: purchaseCategoryFromOrder(order, plan ? { plan_type: plan.plan_type, billing_interval: plan.billing_interval } : null),
         template_id: tid,
         template_name: tid ? (templateNameById[tid] ?? null) : null,
         pack_id: pid,
