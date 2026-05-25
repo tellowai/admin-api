@@ -9,7 +9,7 @@ const ordersAnalyticsQuerySchema = Joi.object({
   start_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
   end_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
   tz: Joi.string().optional().allow(''),
-  product_type: Joi.string().valid('', 'alacarte', 'subscription', 'onetime', 'addon').optional().allow(''),
+  product_type: Joi.string().valid('', 'alacarte', 'subscription', 'subscription_renewal', 'onetime', 'addon').optional().allow(''),
   payment_gateway: Joi.string()
     .valid(
       '',
