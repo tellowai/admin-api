@@ -19,6 +19,20 @@ function pairKey(uid, pid) {
   return `${uid}::${pid}`;
 }
 
+/**
+ * RevenueCat customer-list exports often use semicolon delimiters; scheduled transaction exports use commas.
+ */
+function detectCsvDelimiter(text) {
+  const sample = String(text || '').slice(0, 65536);
+  const lines = sample.split(/\r?\n/).filter((l) => String(l).trim());
+  const line = lines[0] || '';
+  if (!line) return ',';
+  const semi = (line.match(/;/g) || []).length;
+  const comma = (line.match(/,/g) || []).length;
+  if (semi > 1 && semi >= comma) return ';';
+  return ',';
+}
+
 /** Split RevenueCat CSV fields like `all_purchased_products_ids` ("a,b,c" or JSON array). */
 function splitPurchasedProductIds(raw) {
   if (raw == null || raw === '') return [];
@@ -66,10 +80,10 @@ function parseComparableRow(norm) {
     norm.user_id ||
     null;
 
-  /** Active Customers export often leaves product columns empty — SKUs appear under `all_purchased_products_ids`. */
+  /** Customer list CSV uses `all_purchased_product_ids` (singular "product"); other exports vary. */
   const fromPurchasedList = splitPurchasedProductIds(
-    norm.all_purchased_products_ids ||
-      norm.all_purchased_product_ids ||
+    norm.all_purchased_product_ids ||
+      norm.all_purchased_products_ids ||
       norm.purchased_product_ids ||
       norm.all_subscription_product_ids ||
       ''
@@ -96,11 +110,26 @@ function parseComparableRow(norm) {
 
   const product_id = product_id_candidates[0] || null;
 
+  /** Prefer original / family id (Apple original_transaction_id, Play purchase token, RC scheduled export names). */
   let provider_subscription_id =
+    norm.original_store_transaction_id ||
     norm.original_transaction_id ||
     norm.original_transaction_id_android ||
-    norm.store_transaction_id ||
+    norm.original_transaction_identifier ||
     norm.latest_transaction_original_transaction_identifier ||
+    norm.latest_original_transaction_identifier ||
+    norm.latest_original_transaction_id ||
+    norm.google_play_original_transaction_id ||
+    norm.transaction_id_original ||
+    norm.purchase_token ||
+    norm.android_purchase_token ||
+    norm.store_transaction_id ||
+    norm.latest_store_transaction_id ||
+    norm.latest_transaction_id ||
+    norm.transaction_id ||
+    norm.apple_order_id ||
+    norm.order_id ||
+    norm.latest_transaction_original_transaction_id ||
     norm.original_customer_id ||
     null;
 
@@ -296,6 +325,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
     const parsed = Papa.parse(text, {
       header: true,
       skipEmptyLines: true,
+      delimiter: detectCsvDelimiter(text),
       transformHeader: (h) => String(h || '').trim()
     });
 
@@ -356,7 +386,18 @@ exports.compareRevenueCatCsv = async function (req, res) {
 
       let action_required = 'cannot_activate';
       let reason = '';
-      let sub = resolved.sub;
+      let sub = resolved.sub || (uid && pid ? subByPair.get(pairKey(uid, pid)) || null : null);
+
+      const fromCsvTx =
+        p.provider_subscription_id != null && String(p.provider_subscription_id).trim() !== ''
+          ? String(p.provider_subscription_id).trim()
+          : '';
+      const fromDbTx =
+        sub && sub.provider_subscription_id != null && String(sub.provider_subscription_id).trim() !== ''
+          ? String(sub.provider_subscription_id).trim()
+          : '';
+      /** Customer list CSV has no tx columns; reuse MySQL subscription id when row already exists. */
+      const effectiveProviderSubId = fromCsvTx || fromDbTx || null;
 
       // Validation order: (1) user identity & existence → (2) product id → (3) idempotency + plan mapping → sync state
       if (!uid) {
@@ -368,10 +409,10 @@ exports.compareRevenueCatCsv = async function (req, res) {
       } else if (!pid) {
         reason =
           'Missing product id / SKU (set product_identifier or all_purchased_products_ids)';
-      } else if (!p.provider_subscription_id) {
-        reason = 'Missing original transaction / store transaction id for idempotency';
+      } else if (!effectiveProviderSubId) {
+        reason =
+          'Missing original / store transaction id. Customer list exports omit this field — use RevenueCat scheduled transaction export (e.g. original_store_transaction_id), or fix delimiter if the file is semicolon-separated.';
       } else {
-        sub = sub || subByPair.get(pairKey(uid, pid)) || null;
         const plan =
           resolved.plan || (pid ? planByProduct.get(String(pid).trim()) || null : null);
         if (!plan) {
@@ -415,7 +456,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
       outRows.push({
         app_user_id: uid,
         product_id: pid,
-        provider_subscription_id: p.provider_subscription_id,
+        provider_subscription_id: effectiveProviderSubId,
         rc_expires_date: p.expires_date,
         rc_purchase_date: p.purchase_date,
         db_purchase_date: sub ? sub.start_at : null,
