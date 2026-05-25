@@ -15,6 +15,29 @@ exports.multerCsvUpload = multer({
   fileFilter: (_req, _file, cb) => cb(null, true)
 }).single('file');
 
+function pairKey(uid, pid) {
+  return `${uid}::${pid}`;
+}
+
+/** Split RevenueCat CSV fields like `all_purchased_products_ids` ("a,b,c" or JSON array). */
+function splitPurchasedProductIds(raw) {
+  if (raw == null || raw === '') return [];
+  let s = String(raw).trim();
+  if (!s) return [];
+  const unquoted = s.replace(/^['"]+|['"]+$/g, '');
+  if (unquoted.startsWith('[')) {
+    try {
+      const j = JSON.parse(unquoted);
+      if (Array.isArray(j)) {
+        return [...new Set(j.map((x) => String(x).trim()).filter(Boolean))];
+      }
+    } catch (_e) {
+      /* fall through — treat as plain string */
+    }
+  }
+  return [...new Set(s.split(/[,;|]/).map((x) => x.trim()).filter(Boolean))];
+}
+
 function normalizeHeaders(row) {
   const out = {};
   if (!row || typeof row !== 'object') return out;
@@ -43,12 +66,35 @@ function parseComparableRow(norm) {
     norm.user_id ||
     null;
 
-  const product_id =
+  /** Active Customers export often leaves product columns empty — SKUs appear under `all_purchased_products_ids`. */
+  const fromPurchasedList = splitPurchasedProductIds(
+    norm.all_purchased_products_ids ||
+      norm.all_purchased_product_ids ||
+      norm.purchased_product_ids ||
+      norm.all_subscription_product_ids ||
+      ''
+  );
+
+  const product_from_cols =
     norm.product_identifier ||
     norm.product_id ||
     norm.current_product_identifier ||
     norm.offer_identifier ||
     null;
+
+  const product_trim = product_from_cols != null ? String(product_from_cols).trim() : '';
+
+  /** Explicit CSV product first, then tokens from purchased-products list (order preserved). */
+  const product_id_candidates = [];
+  const pushCand = (v) => {
+    const x = v != null ? String(v).trim() : '';
+    if (!x || product_id_candidates.includes(x)) return;
+    product_id_candidates.push(x);
+  };
+  if (product_trim) pushCand(product_trim);
+  for (const x of fromPurchasedList) pushCand(x);
+
+  const product_id = product_id_candidates[0] || null;
 
   let provider_subscription_id =
     norm.original_transaction_id ||
@@ -100,6 +146,7 @@ function parseComparableRow(norm) {
   return {
     app_user_id: app_user_id != null ? String(app_user_id).trim() : null,
     product_id: product_id != null ? String(product_id).trim() : null,
+    product_id_candidates,
     provider_subscription_id:
       provider_subscription_id != null ? String(provider_subscription_id).trim() : null,
     expires_date: expires_raw != null ? String(expires_raw).trim() : null,
@@ -185,6 +232,60 @@ async function loadLatestRevenueCatOrderHints(userIds) {
   return m;
 }
 
+/** Product/SKU candidates from a parsed row (column + all_purchased_products_ids). */
+function rowProductCandidates(p) {
+  if (Array.isArray(p.product_id_candidates) && p.product_id_candidates.length) {
+    return p.product_id_candidates;
+  }
+  return p.product_id ? [p.product_id] : [];
+}
+
+/**
+ * Choose which SKU reconciles this row: prefer a recurring plan mapping, then an existing DB sub
+ * for user+SKU, then any mapped plan.
+ */
+function pickResolvedProductForCompare(p, uid, subByPair, planByProduct) {
+  const cands = rowProductCandidates(p);
+  if (!cands.length) return { product_id: null, plan: null, sub: null };
+
+  const subFor = (sku) =>
+    uid && sku ? subByPair.get(pairKey(uid, String(sku).trim())) || null : null;
+
+  for (const id of cands) {
+    const sku = String(id).trim();
+    if (!sku) continue;
+    const plan = planByProduct.get(sku) || null;
+    const bi = plan ? String(plan.billing_interval || '').toLowerCase() : '';
+    if (plan && bi !== 'onetime') {
+      return { product_id: sku, plan, sub: subFor(sku) };
+    }
+  }
+
+  for (const id of cands) {
+    const sku = String(id).trim();
+    if (!sku) continue;
+    const sub = subFor(sku);
+    if (sub) {
+      const plan = planByProduct.get(sku) || null;
+      return { product_id: sku, plan, sub };
+    }
+  }
+
+  for (const id of cands) {
+    const sku = String(id).trim();
+    if (!sku) continue;
+    const plan = planByProduct.get(sku) || null;
+    if (plan) {
+      return { product_id: sku, plan, sub: subFor(sku) };
+    }
+  }
+
+  const first = cands.map((c) => String(c).trim()).find(Boolean);
+  return first
+    ? { product_id: first, plan: null, sub: subFor(first) }
+    : { product_id: null, plan: null, sub: null };
+}
+
 exports.compareRevenueCatCsv = async function (req, res) {
   try {
     if (!req.file || !req.file.buffer) {
@@ -219,13 +320,20 @@ exports.compareRevenueCatCsv = async function (req, res) {
 
     const pairs = [];
     for (const p of comparable) {
-      if (p.app_user_id && p.product_id) pairs.push({ user_id: p.app_user_id, provider_plan_id: p.product_id });
+      if (!p.app_user_id) continue;
+      for (const planId of rowProductCandidates(p)) {
+        pairs.push({ user_id: p.app_user_id, provider_plan_id: planId });
+      }
     }
     const subByPair = await loadSubscriptionsForPairs(pairs);
     const orderHint = await loadLatestRevenueCatOrderHints(userIds);
-    const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(
-      comparable.map((x) => x.product_id).filter(Boolean)
-    );
+    const allSkuForPlans = [];
+    for (const p of comparable) {
+      for (const id of rowProductCandidates(p)) {
+        allSkuForPlans.push(id);
+      }
+    }
+    const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(allSkuForPlans);
 
     const userDetailRows = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
     const userDetailsById = new Map();
@@ -233,7 +341,6 @@ exports.compareRevenueCatCsv = async function (req, res) {
       userDetailsById.set(String(u.user_id), u);
     }
 
-    const key = (uid, pid) => `${uid}::${pid}`;
     let total = 0;
     let in_sync = 0;
     let missing = 0;
@@ -244,11 +351,12 @@ exports.compareRevenueCatCsv = async function (req, res) {
     for (const p of comparable) {
       total += 1;
       const uid = p.app_user_id;
-      const pid = p.product_id;
+      const resolved = pickResolvedProductForCompare(p, uid, subByPair, planByProduct);
+      const pid = resolved.product_id;
 
       let action_required = 'cannot_activate';
       let reason = '';
-      let sub = null;
+      let sub = resolved.sub;
 
       // Validation order: (1) user identity & existence → (2) product id → (3) idempotency + plan mapping → sync state
       if (!uid) {
@@ -258,14 +366,17 @@ exports.compareRevenueCatCsv = async function (req, res) {
       } else if (!userExists.get(String(uid))) {
         reason = 'User not found in database';
       } else if (!pid) {
-        reason = 'Missing product id / identifier in row';
+        reason =
+          'Missing product id / SKU (set product_identifier or all_purchased_products_ids)';
       } else if (!p.provider_subscription_id) {
         reason = 'Missing original transaction / store transaction id for idempotency';
       } else {
-        sub = subByPair.get(key(uid, pid)) || null;
-        const plan = pid ? planByProduct.get(String(pid).trim()) || null : null;
+        sub = sub || subByPair.get(pairKey(uid, pid)) || null;
+        const plan =
+          resolved.plan || (pid ? planByProduct.get(String(pid).trim()) || null : null);
         if (!plan) {
-          reason = `No internal payment plan mapped for SKU "${pid}"`;
+          const skuList = rowProductCandidates(p).filter(Boolean).join(', ') || String(pid);
+          reason = `No internal payment plan mapped for SKU(s): ${skuList}`;
         } else if (String(plan.billing_interval || '').toLowerCase() === 'onetime') {
           reason = 'Plan maps to onetime billing — not a subscription tier';
         } else {
@@ -291,13 +402,15 @@ exports.compareRevenueCatCsv = async function (req, res) {
         cannot_activate += 1;
       }
 
-      /** Prefer CSV product id; fallback to DB subscription `provider_plan_id` for display if mapping differs. */
+      /** Resolved plan / DB provider_plan_id for display (SKU may come from all_purchased_products_ids). */
       const planRow =
-        pid && planByProduct.get(String(pid).trim())
+        resolved.plan ||
+        (pid && planByProduct.get(String(pid).trim())
           ? planByProduct.get(String(pid).trim())
-          : sub && sub.provider_plan_id != null && planByProduct.get(String(sub.provider_plan_id).trim())
-            ? planByProduct.get(String(sub.provider_plan_id).trim())
-            : null;
+          : null) ||
+        (sub && sub.provider_plan_id != null && planByProduct.get(String(sub.provider_plan_id).trim())
+          ? planByProduct.get(String(sub.provider_plan_id).trim())
+          : null);
 
       outRows.push({
         app_user_id: uid,
@@ -306,7 +419,11 @@ exports.compareRevenueCatCsv = async function (req, res) {
         rc_expires_date: p.expires_date,
         rc_purchase_date: p.purchase_date,
         db_purchase_date: sub ? sub.start_at : null,
-        subscription_plan_name: planRow ? planRow.subscription_name : null,
+        subscription_plan_name: planRow
+          ? planRow.subscription_name
+          : sub && sub.provider_plan_id
+            ? String(sub.provider_plan_id)
+            : null,
         rc_entitlement_status: p.entitlement_status,
         rc_active: rcRowLooksActive(p),
         user_exists: uid ? userExists.has(String(uid)) : false,
