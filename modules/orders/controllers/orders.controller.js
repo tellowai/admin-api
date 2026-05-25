@@ -8,7 +8,7 @@ const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
 const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
 const AppleOrphanDecoder = require('../services/apple-orphan-decoder.service');
-const { purchaseCategoryFromPlan } = require('../utils/purchaseCategory.util');
+const { purchaseCategoryFromOrder } = require('../utils/purchaseCategory.util');
 
 const MAX_EXPORT_ROWS = 25000;
 /** Skip ClickHouse enrichment on CSV export above this many rows (single IN clause). */
@@ -49,7 +49,7 @@ function mapRowToAdminOrder(o, planById, userById, templateNameById, packNameByI
     plan_name: plan ? plan.plan_name ?? null : null,
     plan_heading: plan ? plan.plan_heading ?? null : null,
     billing_interval: billingInterval ?? null,
-    purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
+    purchase_category: purchaseCategoryFromOrder(o, plan),
     user_details: userById[o.user_id] || null,
     template_id: templateId,
     template_name: templateName,

@@ -157,7 +157,10 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
       payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
-      subscription_status: displaySubscriptionStatus(r),
+      subscription_status:
+        r._display_status != null && String(r._display_status).trim() !== ''
+          ? String(r._display_status)
+          : displaySubscriptionStatus(r),
       plan_credits: credits,
       plan_bonus_credits: bonus_credits,
       credit_balance: wallet ? wallet.balance : 0,
@@ -272,7 +275,8 @@ exports.getOrdersVolumeSummary = async function (req, res) {
       endCal,
       tz,
       ppIds,
-      paymentGateway: paymentGateway || undefined
+      paymentGateway: paymentGateway || undefined,
+      productTypeLedger: productType || ''
     });
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });

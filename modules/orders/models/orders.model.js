@@ -17,7 +17,7 @@ const GATEWAY_APPLE_IAP = 'apple_iap';
 
 /**
  * Single-table: payment plan ids that match the admin "product type" bucket (for filtering orders by payment_plan_id).
- * @param {string} productType - alacarte | addon | onetime | subscription
+ * @param {string} productType - alacarte | addon | onetime | subscription | subscription_renewal
  * @returns {Promise<number[]>} pp_id list (may be empty)
  */
 exports.getPpIdsMatchingProductType = async function (productType) {
@@ -56,6 +56,14 @@ exports.getPpIdsMatchingProductType = async function (productType) {
     const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
     return rows.map((r) => r.pp_id).filter((id) => id != null);
   }
+  if (pt === 'subscription_renewal') {
+    const q = `
+      SELECT pp_id FROM payment_plans
+      WHERE plan_type = 'credits' AND billing_interval IN ('monthly', 'yearly')
+    `;
+    const rows = await MysqlQueryRunner.runQueryInSlave(q, []);
+    return rows.map((r) => r.pp_id).filter((id) => id != null);
+  }
   return [];
 };
 
@@ -82,12 +90,27 @@ function buildAdminOrdersWhere(filters) {
     params.push(GATEWAY_GOOGLE_PLAY);
   }
 
-  if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
+  if (productType && ['alacarte', 'addon', 'onetime', 'subscription', 'subscription_renewal'].includes(productType)) {
     if (filters._noMatchingPlans) {
       where.push('0=1');
     } else {
       where.push('o.payment_plan_id IN (?)');
       params.push(filters._ppIdsForProductType || []);
+
+      if (productType === 'subscription') {
+        where.push(`
+          (
+            o.transaction_notes IS NULL
+            OR NOT JSON_VALID(o.transaction_notes)
+            OR LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.purchase_subject')))) <> 'subscription_renewal'
+          )
+        `);
+      } else if (productType === 'subscription_renewal') {
+        where.push(`
+          JSON_VALID(o.transaction_notes)
+          AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+        `);
+      }
     }
   }
 
@@ -155,7 +178,7 @@ async function resolveAdminFilterPayload(filters) {
   const productType = filters.productType && String(filters.productType).trim();
   let _ppIdsForProductType;
   let _noMatchingPlans = false;
-  if (productType && ['alacarte', 'addon', 'onetime', 'subscription'].includes(productType)) {
+  if (productType && ['alacarte', 'addon', 'onetime', 'subscription', 'subscription_renewal'].includes(productType)) {
     _ppIdsForProductType = await exports.getPpIdsMatchingProductType(productType);
     if (_ppIdsForProductType.length === 0) {
       _noMatchingPlans = true;
