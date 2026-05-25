@@ -3,6 +3,7 @@
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const CollectionModel = require('../models/collection.model');
 const CollectionTemplateModel = require('../models/collection-template.model');
+const CollectionTemplateFilterService = require('../services/collection-template.filter.service');
 const CollectionErrorHandler = require('../middlewares/collection.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
@@ -546,87 +547,185 @@ exports.getCollectionTemplates = async function(req, res) {
     }
 
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
-    
-    // Get collection templates
-    const collectionTemplates = await CollectionTemplateModel.getCollectionTemplates(collectionId, paginationParams);
-    
-    if (!collectionTemplates.length) {
-      return res.status(HTTP_STATUS_CODES.OK).json({
-        data: []
-      });
+    let combinedTemplates = [];
+    let total = 0;
+
+    if (collection.is_manual) {
+      total = await CollectionTemplateModel.countCollectionTemplates(collectionId);
+      const collectionTemplates = await CollectionTemplateModel.getCollectionTemplates(collectionId, paginationParams);
+
+      if (collectionTemplates.length) {
+        const templateIds = collectionTemplates.map(ct => ct.template_id);
+        const templates = await CollectionTemplateModel.getTemplatesByIds(templateIds);
+        const templateMap = new Map(templates.map(t => [t.template_id, t]));
+
+        combinedTemplates = collectionTemplates.map(ct => {
+          const template = templateMap.get(ct.template_id);
+          if (!template) return null;
+          return processCollectionTemplateRow({
+            ...template,
+            collection_template_id: ct.collection_template_id,
+            sort_order: ct.sort_order
+          });
+        }).filter(Boolean);
+      }
+    } else {
+      let ruleJson = collection.rule_json;
+      if (!ruleJson) {
+        return res.status(HTTP_STATUS_CODES.OK).json(
+          PaginationCtrl.formatPaginationResponse([], 0, paginationParams)
+        );
+      }
+
+      if (typeof ruleJson === 'string') {
+        try {
+          ruleJson = JSON.parse(ruleJson);
+        } catch (err) {
+          logger.error('Error parsing rule_json:', {
+            error: err.message,
+            value: ruleJson,
+            collectionId
+          });
+          return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+            message: req.t('collection:ERROR_PARSING_RULE_JSON')
+          });
+        }
+      }
+
+      const { facetFilters, attributeFilters } = extractFiltersFromRule(ruleJson);
+      total = await CollectionTemplateFilterService.countTemplatesByRuleFilters(
+        facetFilters,
+        attributeFilters
+      );
+      const templates = await CollectionTemplateFilterService.getTemplatesByRuleFilters(
+        facetFilters,
+        attributeFilters,
+        paginationParams
+      );
+
+      combinedTemplates = templates.map((template) => processCollectionTemplateRow(template)).filter(Boolean);
     }
 
-    // Get template details
-    const templateIds = collectionTemplates.map(ct => ct.template_id);
-    const templates = await CollectionTemplateModel.getTemplatesByIds(templateIds);
-
-    // Create a map of template details for quick lookup
-    const templateMap = new Map(templates.map(t => [t.template_id, t]));
-
-    // Combine collection templates with template details
-    const combinedTemplates = collectionTemplates.map(ct => {
-      const template = templateMap.get(ct.template_id);
-      if (!template) return null;
-
-      // Process template data
-      const processedTemplate = {
-        ...template,
-        collection_template_id: ct.collection_template_id,
-        sort_order: ct.sort_order
-      };
-
-      // Generate R2 URL
-      if (processedTemplate.cf_r2_key) {
-        processedTemplate.r2_url = `${config.os2.r2.public.bucketUrl}/${processedTemplate.cf_r2_key}`;
-      } else {
-        processedTemplate.r2_url = processedTemplate.cf_r2_url;
-      }
-
-      // Parse JSON fields if they are strings
-      if (processedTemplate.faces_needed && typeof processedTemplate.faces_needed === 'string') {
-        try {
-          processedTemplate.faces_needed = JSON.parse(processedTemplate.faces_needed);
-          
-          // Generate R2 URLs for character faces if they exist
-          if (processedTemplate.faces_needed) {
-            processedTemplate.faces_needed = processedTemplate.faces_needed.map(face => {
-              if (face.character_face_r2_key) {
-                face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
-              }
-              return face;
-            });
-          }
-        } catch (err) {
-          logger.error('Error parsing faces_needed:', {
-            error: err.message,
-            value: processedTemplate.faces_needed
-          });
-        }
-      }
-
-      if (processedTemplate.additional_data && typeof processedTemplate.additional_data === 'string') {
-        try {
-          processedTemplate.additional_data = JSON.parse(processedTemplate.additional_data);
-        } catch (err) {
-          logger.error('Error parsing additional_data:', {
-            error: err.message,
-            value: processedTemplate.additional_data
-          });
-        }
-      }
-
-      return processedTemplate;
-    }).filter(Boolean); // Remove any null values from missing templates
-
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      data: combinedTemplates
-    });
+    return res.status(HTTP_STATUS_CODES.OK).json(
+      PaginationCtrl.formatPaginationResponse(combinedTemplates, total, paginationParams)
+    );
 
   } catch (error) {
     logger.error('Error getting collection templates:', { error: error.message, stack: error.stack });
     CollectionErrorHandler.handleCollectionErrors(error, res);
   }
 };
+
+function processCollectionTemplateRow(processedTemplate) {
+  const publicBucketUrl = config.os2.r2.public.bucketUrl;
+
+  if (processedTemplate.cf_r2_key) {
+    processedTemplate.r2_url = `${publicBucketUrl}/${processedTemplate.cf_r2_key}`;
+  } else {
+    processedTemplate.r2_url = processedTemplate.cf_r2_url || null;
+  }
+
+  if (processedTemplate.thumb_frame_asset_key) {
+    const bucket = processedTemplate.thumb_frame_bucket || 'public';
+    const publicBucketName = config.os2?.r2?.public?.bucket;
+    const isPublic = bucket === 'public' || bucket === publicBucketName;
+    if (isPublic) {
+      processedTemplate.thumb_frame_url = `${publicBucketUrl}/${processedTemplate.thumb_frame_asset_key}`;
+    }
+  }
+
+  if (processedTemplate.template_output_type === 'image' && processedTemplate.r2_url) {
+    processedTemplate.thumb_frame_url = processedTemplate.thumb_frame_url || processedTemplate.r2_url;
+  }
+
+  if (processedTemplate.faces_needed && typeof processedTemplate.faces_needed === 'string') {
+    try {
+      processedTemplate.faces_needed = JSON.parse(processedTemplate.faces_needed);
+      if (processedTemplate.faces_needed) {
+        processedTemplate.faces_needed = processedTemplate.faces_needed.map(face => {
+          if (face.character_face_r2_key) {
+            face.r2_url = `${config.os2.r2.public.bucketUrl}/${face.character_face_r2_key}`;
+          }
+          return face;
+        });
+      }
+    } catch (err) {
+      logger.error('Error parsing faces_needed:', {
+        error: err.message,
+        value: processedTemplate.faces_needed
+      });
+    }
+  }
+
+  if (processedTemplate.additional_data && typeof processedTemplate.additional_data === 'string') {
+    try {
+      processedTemplate.additional_data = JSON.parse(processedTemplate.additional_data);
+    } catch (err) {
+      logger.error('Error parsing additional_data:', {
+        error: err.message,
+        value: processedTemplate.additional_data
+      });
+    }
+  }
+
+  return processedTemplate;
+}
+
+function extractFiltersFromRule(ruleJson) {
+  const facetFilters = [];
+  const attributeFilters = {};
+
+  if (!ruleJson || !ruleJson.all) {
+    return { facetFilters, attributeFilters };
+  }
+
+  ruleJson.all.forEach(rule => {
+    if (rule.facet && rule.value) {
+      facetFilters.push({
+        facet: rule.facet,
+        tagCodes: Array.isArray(rule.value) ? rule.value : [rule.value]
+      });
+    } else if (rule.attr && rule.value) {
+      const attrName = mapRuleAttributeName(rule.attr);
+      if (attrName) {
+        if (Array.isArray(rule.value)) {
+          const values = rule.value.map((v) => normalizeRuleAttributeValue(rule.attr, v));
+          attributeFilters[attrName] = { op: 'IN', values };
+        } else {
+          attributeFilters[attrName] = {
+            op: '=',
+            value: normalizeRuleAttributeValue(rule.attr, rule.value)
+          };
+        }
+      }
+    }
+  });
+
+  return { facetFilters, attributeFilters };
+}
+
+function mapRuleAttributeName(attrName) {
+  const attributeMap = {
+    asset_type: 'template_output_type',
+    orientation: 'orientation',
+    generation_type: 'template_clips_assets_type'
+  };
+  return attributeMap[attrName] || null;
+}
+
+function normalizeRuleAttributeValue(attr, value) {
+  if (value == null) return value;
+  if (attr === 'generation_type') {
+    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, '-');
+    if (normalized === 'non-ai' || normalized === 'nonai') return 'non-ai';
+    if (normalized === 'ai') return 'ai';
+    return normalized;
+  }
+  if (attr === 'asset_type' || attr === 'orientation') {
+    return String(value).trim().toLowerCase();
+  }
+  return value;
+}
 
 /**
  * @api {delete} /collections/:collectionId/templates Remove templates from collection

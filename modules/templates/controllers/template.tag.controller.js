@@ -391,6 +391,55 @@ exports.bulkArchiveTemplateTagDefinitions = async function(req, res) {
  *
  * @apiBody {String[]} tag_ids Array of tag definition IDs (min: 1, max: 50)
  */
+/**
+ * @api {post} /template-tags/reorder Reorder tags within a facet
+ * @apiBody {Number} facet_id Facet ID
+ * @apiBody {String[]} tag_ids Ordered tag definition IDs
+ */
+exports.reorderTemplateTagDefinitions = async function(req, res) {
+  try {
+    const { facet_id: facetId, tag_ids: tagIds } = req.validatedBody;
+
+    const facetExists = await TemplateTagFacetModel.checkTemplateTagFacetExists(facetId);
+    if (!facetExists) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: req.t('template_tag:INVALID_FACET_ID')
+      });
+    }
+
+    const updatedCount = await TemplateTagDefinitionModel.reorderTagsInFacet(facetId, tagIds);
+
+    await kafkaCtrl.sendMessage(
+      TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
+      [{
+        value: {
+          admin_user_id: req.user.userId,
+          entity_type: 'TEMPLATE_TAGS',
+          action_name: 'REORDER_TEMPLATE_TAGS',
+          entity_id: String(facetId)
+        }
+      }],
+      'create_admin_activity_log'
+    );
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      message: req.t('template_tag:TEMPLATE_TAGS_REORDERED'),
+      data: { updated_count: updatedCount }
+    });
+  } catch (error) {
+    if (error.code === 'INVALID_TAG_ORDER') {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: req.t('template_tag:INVALID_TAG_ORDER')
+      });
+    }
+    logger.error('Error reordering template tag definitions:', {
+      error: error.message,
+      stack: error.stack
+    });
+    TemplateTagErrorHandler.handleTemplateTagErrors(error, res);
+  }
+};
+
 exports.bulkUnarchiveTemplateTagDefinitions = async function(req, res) {
   try {
     const { tag_ids } = req.validatedBody;

@@ -67,3 +67,20 @@ exports.validateBulkUnarchiveTemplateTagsData = function(req, res, next) {
   req.validatedBody = payloadValidation.value;
   return next(null);
 };
+
+exports.validateReorderTemplateTagsData = function(req, res, next) {
+  const payloadValidation = validationCtrl.validate(
+    templateTagSchema.reorderTemplateTagsSchema,
+    req.body
+  );
+
+  if (payloadValidation.error && payloadValidation.error.length) {
+    return res.status(HTTP_CODES.BAD_REQUEST).json({
+      message: req.t('validation:VALIDATION_FAILED'),
+      data: payloadValidation.error
+    });
+  }
+
+  req.validatedBody = payloadValidation.value;
+  return next(null);
+};
