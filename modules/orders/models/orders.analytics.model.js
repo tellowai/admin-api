@@ -54,6 +54,15 @@ async function getPpIdsForProductFilter(productType) {
     return mapPpIdRows(rows);
   }
 
+  if (t === 'subscription_renewal') {
+    const rows = await MysqlQueryRunner.runQueryInSlave(
+      `SELECT pp_id FROM payment_plans
+       WHERE plan_type = 'credits' AND billing_interval IN ('monthly', 'yearly')`,
+      []
+    );
+    return mapPpIdRows(rows);
+  }
+
   if (t === 'onetime') {
     const rows = await MysqlQueryRunner.runQueryInSlave(
       `SELECT pp_id FROM payment_plans
@@ -119,6 +128,34 @@ function gatewayFilterClause(paymentGateway) {
   const g = paymentGateway != null ? String(paymentGateway).trim() : '';
   if (!g) return { sql: '', params: [] };
   return { sql: ' AND o.payment_gateway = ? ', params: [g] };
+}
+
+/** Renewal ledger rows on orders (purchase_subject stored in JSON). */
+const ORDER_NOTE_IS_SUBSCRIPTION_RENEWAL_SQL = `
+  JSON_VALID(o.transaction_notes)
+  AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+`;
+
+/**
+ * Narrow broad "subscription" plan bucket vs explicit renewal ledger-only bucket.
+ */
+function subscriptionRenewalLedgerFilterPart(productTypeTrim) {
+  const t = productTypeTrim && String(productTypeTrim).trim();
+  if (!t) return { sql: '', params: [] };
+  if (t === 'subscription_renewal') {
+    return { sql: ` AND (${ORDER_NOTE_IS_SUBSCRIPTION_RENEWAL_SQL}) `, params: [] };
+  }
+  if (t === 'subscription') {
+    return {
+      sql: ` AND (
+          o.transaction_notes IS NULL
+          OR NOT JSON_VALID(o.transaction_notes)
+          OR NOT (${ORDER_NOTE_IS_SUBSCRIPTION_RENEWAL_SQL})
+      ) `,
+      params: []
+    };
+  }
+  return { sql: '', params: [] };
 }
 
 /**
@@ -240,7 +277,8 @@ exports.getOrdersStatusDaily = async function (opts) {
     ppIds = await getPpIdsForProductFilter(String(productType).trim());
   }
   const planPart = planFilterClause(ppIds);
-  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
+  const ledgerPart = subscriptionRenewalLedgerFilterPart(productType && String(productType).trim());
+  const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const [created, completed] = await Promise.all([
     queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'created'),
@@ -268,7 +306,8 @@ exports.getOrdersStatusSummary = async function (opts) {
     ppIds = await getPpIdsForProductFilter(String(productType).trim());
   }
   const planPart = planFilterClause(ppIds);
-  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
+  const ledgerPart = subscriptionRenewalLedgerFilterPart(productType && String(productType).trim());
+  const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const [created_count, completed_count, failed_count] = await Promise.all([
     queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'created'),
@@ -308,14 +347,16 @@ exports.getOrdersStatusSummary = async function (opts) {
  * @param {string} opts.tz IANA
  * @param {number[]|null} opts.ppIds payment_plan_id list, or null if not filtering by product bucket
  * @param {string} [opts.paymentGateway]
+ * @param {string} [opts.productTypeLedger] alacarte|subscription|subscription_renewal|… — narrows subscription vs renewal ledger rows
  * @returns {Promise<{ total_orders: number, unique_users: number }>}
  */
 exports.getOrdersVolumeSummary = async function (opts) {
-  const { startCal, endCal, tz, ppIds, paymentGateway } = opts;
+  const { startCal, endCal, tz, ppIds, paymentGateway, productTypeLedger } = opts;
   const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
 
   const planPart = planFilterClause(ppIds);
-  const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
+  const ledgerPart = subscriptionRenewalLedgerFilterPart(productTypeLedger && String(productTypeLedger).trim());
+  const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const query = `
     SELECT COUNT(*) AS total_orders, COUNT(DISTINCT user_id) AS unique_users
@@ -478,6 +519,12 @@ const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
   )
 `;
 
+/** Completed order explicitly tagged renewal ledger (`transaction_notes`), recurring credits plan — may lack linked sub ±2d. */
+const ORDER_IS_RENEWAL_LEDGER_SQL = `
+  (${ORDER_NOTE_IS_SUBSCRIPTION_RENEWAL_SQL})
+  AND (${ORDER_IS_SUBSCRIPTION_PLAN_SQL})
+`;
+
 /**
  * @param {string} rangeStartUtc
  * @param {string} rangeEndUtc
@@ -576,6 +623,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
         SUM(CASE WHEN ${ORDER_IS_ADDON_SQL} THEN 1 ELSE 0 END) AS addon_purchases,
         SUM(
           CASE
+            WHEN ${ORDER_IS_RENEWAL_LEDGER_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
             WHEN ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
             WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
             WHEN pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
