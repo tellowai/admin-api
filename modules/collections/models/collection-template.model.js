@@ -176,4 +176,93 @@ exports.getTemplatesByIds = async function(templateIds) {
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
-}; 
+};
+
+exports.getTemplateIdsByTagCodes = async function(tagCodes) {
+  if (!tagCodes || tagCodes.length === 0) {
+    return [];
+  }
+
+  const placeholders = tagCodes.map(() => '?').join(',');
+  const tagDefQuery = `
+    SELECT ttd_id
+    FROM template_tag_definitions
+    WHERE tag_code IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefQuery, tagCodes);
+  if (tagDefinitions.length === 0) {
+    return [];
+  }
+
+  const tagDefIds = tagDefinitions.map(td => td.ttd_id);
+  const templateIdsQuery = `
+    SELECT DISTINCT template_id
+    FROM template_tags
+    WHERE ttd_id IN (${tagDefIds.map(() => '?').join(',')})
+    AND deleted_at IS NULL
+  `;
+
+  const results = await mysqlQueryRunner.runQueryInSlave(templateIdsQuery, tagDefIds);
+  return results.map(row => row.template_id);
+};
+
+exports.getTemplatesByFilters = async function(facetValues, attributeFilters, pagination) {
+  let templateIds = [];
+
+  if (facetValues && facetValues.length > 0) {
+    templateIds = await exports.getTemplateIdsByTagCodes(facetValues);
+  }
+
+  const whereConditions = [];
+  const queryParams = [];
+
+  Object.keys(attributeFilters).forEach(attrName => {
+    const filter = attributeFilters[attrName];
+    if (filter.op === '=') {
+      whereConditions.push(`${attrName} = ?`);
+      queryParams.push(filter.value);
+    } else if (filter.op === 'IN') {
+      const placeholders = filter.values.map(() => '?').join(',');
+      whereConditions.push(`${attrName} IN (${placeholders})`);
+      queryParams.push(...filter.values);
+    }
+  });
+
+  if (templateIds.length > 0) {
+    const placeholders = templateIds.map(() => '?').join(',');
+    whereConditions.push(`template_id IN (${placeholders})`);
+    queryParams.push(...templateIds);
+  }
+
+  if (whereConditions.length === 0) {
+    return [];
+  }
+
+  const whereClause = whereConditions.join(' AND ');
+  const query = `
+    SELECT 
+      template_id,
+      template_name,
+      template_code,
+      description,
+      prompt,
+      faces_needed,
+      cf_r2_key,
+      cf_r2_url,
+      credits,
+      additional_data,
+      created_at
+    FROM templates
+    WHERE ${whereClause}
+    AND archived_at IS NULL
+    ORDER BY updated_at DESC, template_id DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(
+    query,
+    [...queryParams, pagination.limit, pagination.offset]
+  );
+};
