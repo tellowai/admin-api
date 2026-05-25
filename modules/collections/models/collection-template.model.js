@@ -186,20 +186,35 @@ exports.getTemplatesByIds = async function(templateIds) {
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
 };
 
-exports.getTemplateIdsByTagCodes = async function(tagCodes) {
-  if (!tagCodes || tagCodes.length === 0) {
+exports.countCollectionTemplates = async function(collectionId) {
+  const query = `
+    SELECT COUNT(*) AS total
+    FROM collection_templates
+    WHERE collection_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);
+  return Number(row?.total) || 0;
+};
+
+exports.getTemplateIdsByFacetTagCodes = async function(facetKey, tagCodes) {
+  if (!facetKey || !tagCodes || tagCodes.length === 0) {
     return [];
   }
 
   const placeholders = tagCodes.map(() => '?').join(',');
   const tagDefQuery = `
-    SELECT ttd_id
-    FROM template_tag_definitions
-    WHERE tag_code IN (${placeholders})
-    AND archived_at IS NULL
+    SELECT ttd.ttd_id
+    FROM template_tag_definitions ttd
+    INNER JOIN template_tag_facets f ON f.facet_id = ttd.facet_id
+    WHERE f.facet_key = ?
+    AND ttd.tag_code IN (${placeholders})
+    AND ttd.archived_at IS NULL
+    AND f.archived_at IS NULL
   `;
 
-  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefQuery, tagCodes);
+  const tagDefinitions = await mysqlQueryRunner.runQueryInSlave(tagDefQuery, [facetKey, ...tagCodes]);
   if (tagDefinitions.length === 0) {
     return [];
   }
@@ -216,17 +231,46 @@ exports.getTemplateIdsByTagCodes = async function(tagCodes) {
   return results.map(row => row.template_id);
 };
 
-exports.getTemplatesByFilters = async function(facetValues, attributeFilters, pagination) {
-  let templateIds = [];
+exports.getTemplateIdsMatchingFacetFilters = async function(facetFilters) {
+  if (!facetFilters || facetFilters.length === 0) {
+    return null;
+  }
 
-  if (facetValues && facetValues.length > 0) {
-    templateIds = await exports.getTemplateIdsByTagCodes(facetValues);
+  let intersection = null;
+
+  for (const facetFilter of facetFilters) {
+    const tagCodes = Array.isArray(facetFilter.tagCodes) ? facetFilter.tagCodes : [facetFilter.tagCodes];
+    const ids = await exports.getTemplateIdsByFacetTagCodes(facetFilter.facet, tagCodes);
+    const idSet = new Set(ids);
+
+    if (intersection === null) {
+      intersection = idSet;
+    } else {
+      intersection = new Set([...intersection].filter((id) => idSet.has(id)));
+    }
+
+    if (intersection.size === 0) {
+      return [];
+    }
+  }
+
+  return [...intersection];
+};
+
+async function buildTemplatesFilterContext(facetFilters, attributeFilters) {
+  let templateIds = null;
+
+  if (facetFilters && facetFilters.length > 0) {
+    templateIds = await exports.getTemplateIdsMatchingFacetFilters(facetFilters);
+    if (templateIds.length === 0) {
+      return null;
+    }
   }
 
   const whereConditions = [];
   const queryParams = [];
 
-  Object.keys(attributeFilters).forEach(attrName => {
+  Object.keys(attributeFilters || {}).forEach(attrName => {
     const filter = attributeFilters[attrName];
     if (filter.op === '=') {
       whereConditions.push(`${attrName} = ?`);
@@ -238,22 +282,50 @@ exports.getTemplatesByFilters = async function(facetValues, attributeFilters, pa
     }
   });
 
-  if (templateIds.length > 0) {
+  if (templateIds && templateIds.length > 0) {
     const placeholders = templateIds.map(() => '?').join(',');
     whereConditions.push(`template_id IN (${placeholders})`);
     queryParams.push(...templateIds);
   }
 
   if (whereConditions.length === 0) {
+    return null;
+  }
+
+  return {
+    whereClause: whereConditions.join(' AND '),
+    queryParams
+  };
+}
+
+exports.countTemplatesByFilters = async function(facetFilters, attributeFilters) {
+  const filterContext = await buildTemplatesFilterContext(facetFilters, attributeFilters);
+  if (!filterContext) {
+    return 0;
+  }
+
+  const query = `
+    SELECT COUNT(*) AS total
+    FROM templates
+    WHERE ${filterContext.whereClause}
+    AND archived_at IS NULL
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, filterContext.queryParams);
+  return Number(row?.total) || 0;
+};
+
+exports.getTemplatesByFilters = async function(facetFilters, attributeFilters, pagination) {
+  const filterContext = await buildTemplatesFilterContext(facetFilters, attributeFilters);
+  if (!filterContext) {
     return [];
   }
 
-  const whereClause = whereConditions.join(' AND ');
   const query = `
     SELECT 
       ${COLLECTION_TEMPLATE_SELECT_FIELDS}
     FROM templates
-    WHERE ${whereClause}
+    WHERE ${filterContext.whereClause}
     AND archived_at IS NULL
     ORDER BY updated_at DESC, template_id DESC
     LIMIT ? OFFSET ?
@@ -261,6 +333,6 @@ exports.getTemplatesByFilters = async function(facetValues, attributeFilters, pa
 
   return await mysqlQueryRunner.runQueryInSlave(
     query,
-    [...queryParams, pagination.limit, pagination.offset]
+    [...filterContext.queryParams, pagination.limit, pagination.offset]
   );
 };

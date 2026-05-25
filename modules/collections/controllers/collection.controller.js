@@ -547,30 +547,33 @@ exports.getCollectionTemplates = async function(req, res) {
 
     const paginationParams = PaginationCtrl.getPaginationParams(req.query);
     let combinedTemplates = [];
+    let total = 0;
 
     if (collection.is_manual) {
+      total = await CollectionTemplateModel.countCollectionTemplates(collectionId);
       const collectionTemplates = await CollectionTemplateModel.getCollectionTemplates(collectionId, paginationParams);
-      if (!collectionTemplates.length) {
-        return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });
+
+      if (collectionTemplates.length) {
+        const templateIds = collectionTemplates.map(ct => ct.template_id);
+        const templates = await CollectionTemplateModel.getTemplatesByIds(templateIds);
+        const templateMap = new Map(templates.map(t => [t.template_id, t]));
+
+        combinedTemplates = collectionTemplates.map(ct => {
+          const template = templateMap.get(ct.template_id);
+          if (!template) return null;
+          return processCollectionTemplateRow({
+            ...template,
+            collection_template_id: ct.collection_template_id,
+            sort_order: ct.sort_order
+          });
+        }).filter(Boolean);
       }
-
-      const templateIds = collectionTemplates.map(ct => ct.template_id);
-      const templates = await CollectionTemplateModel.getTemplatesByIds(templateIds);
-      const templateMap = new Map(templates.map(t => [t.template_id, t]));
-
-      combinedTemplates = collectionTemplates.map(ct => {
-        const template = templateMap.get(ct.template_id);
-        if (!template) return null;
-        return processCollectionTemplateRow({
-          ...template,
-          collection_template_id: ct.collection_template_id,
-          sort_order: ct.sort_order
-        });
-      }).filter(Boolean);
     } else {
       let ruleJson = collection.rule_json;
       if (!ruleJson) {
-        return res.status(HTTP_STATUS_CODES.OK).json({ data: [] });
+        return res.status(HTTP_STATUS_CODES.OK).json(
+          PaginationCtrl.formatPaginationResponse([], 0, paginationParams)
+        );
       }
 
       if (typeof ruleJson === 'string') {
@@ -588,9 +591,10 @@ exports.getCollectionTemplates = async function(req, res) {
         }
       }
 
-      const { facetValues, attributeFilters } = extractFiltersFromRule(ruleJson);
+      const { facetFilters, attributeFilters } = extractFiltersFromRule(ruleJson);
+      total = await CollectionTemplateModel.countTemplatesByFilters(facetFilters, attributeFilters);
       const templates = await CollectionTemplateModel.getTemplatesByFilters(
-        facetValues,
+        facetFilters,
         attributeFilters,
         paginationParams
       );
@@ -598,9 +602,9 @@ exports.getCollectionTemplates = async function(req, res) {
       combinedTemplates = templates.map((template) => processCollectionTemplateRow(template)).filter(Boolean);
     }
 
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      data: combinedTemplates
-    });
+    return res.status(HTTP_STATUS_CODES.OK).json(
+      PaginationCtrl.formatPaginationResponse(combinedTemplates, total, paginationParams)
+    );
 
   } catch (error) {
     logger.error('Error getting collection templates:', { error: error.message, stack: error.stack });
@@ -664,20 +668,19 @@ function processCollectionTemplateRow(processedTemplate) {
 }
 
 function extractFiltersFromRule(ruleJson) {
-  const facetValues = [];
+  const facetFilters = [];
   const attributeFilters = {};
 
   if (!ruleJson || !ruleJson.all) {
-    return { facetValues, attributeFilters };
+    return { facetFilters, attributeFilters };
   }
 
   ruleJson.all.forEach(rule => {
     if (rule.facet && rule.value) {
-      if (Array.isArray(rule.value)) {
-        facetValues.push(...rule.value);
-      } else {
-        facetValues.push(rule.value);
-      }
+      facetFilters.push({
+        facet: rule.facet,
+        tagCodes: Array.isArray(rule.value) ? rule.value : [rule.value]
+      });
     } else if (rule.attr && rule.value) {
       const attrName = mapRuleAttributeName(rule.attr);
       if (attrName) {
@@ -694,7 +697,7 @@ function extractFiltersFromRule(ruleJson) {
     }
   });
 
-  return { facetValues, attributeFilters };
+  return { facetFilters, attributeFilters };
 }
 
 function mapRuleAttributeName(attrName) {
