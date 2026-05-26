@@ -3,7 +3,6 @@
 const Papa = require('papaparse');
 const multer = require('multer');
 const crypto = require('crypto');
-const moment = require('moment');
 const { v4: uuidv4 } = require('uuid');
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const ActivationService = require('../services/revenuecat-activation.service');
@@ -337,6 +336,103 @@ function pickCompareSubscription(matchingSubs) {
   return { latest, entitledSub, displaySub: latest };
 }
 
+/**
+ * Resolve `subscriptions.provider_plan_id` to canonical `payment_plans.pp_id` string.
+ */
+function resolveProviderPlanIdToPpId(providerPlanRaw, planByProduct) {
+  if (providerPlanRaw == null) return null;
+  for (const tok of collectProductSkuTokens(providerPlanRaw)) {
+    const m = planByProduct.get(tok) || null;
+    if (m && m.subscription_plan_id != null) return String(m.subscription_plan_id);
+  }
+  const p = normalizePlanSku(providerPlanRaw);
+  if (p && /^\d+$/.test(p)) return p;
+  return null;
+}
+
+/**
+ * First payment_plans row mapped from a DB subscription `provider_plan_id` (composite SKUs, numeric pp_id).
+ */
+function resolvePaymentPlanMetaForDbSub(providerPlanRaw, planByProduct) {
+  if (providerPlanRaw == null) return null;
+  for (const tok of collectProductSkuTokens(providerPlanRaw)) {
+    const m = planByProduct.get(tok) || null;
+    if (m) return m;
+  }
+  const p = normalizePlanSku(providerPlanRaw);
+  if (p && /^\d+$/.test(p)) {
+    const m = planByProduct.get(p) || null;
+    if (m) return m;
+  }
+  return null;
+}
+
+/**
+ * Users who received subscription_credit_history rows mapped to recurring subs; normalized to pp_id keys.
+ * Unresolved SKU tokens accumulated into `missingSkuAccumulator` so caller can widen `planByProduct` (bulk resolve).
+ * @returns {{
+ *   planPpIdsByUser: Map<string, Set<string>>,
+ *   usersWithAnySch: Set<string>
+ * }}
+ */
+async function loadCreditsIssuedByUserPlan(userIds, planByProduct, missingSkuAccumulator) {
+  const planPpIdsByUser = new Map();
+  const usersWithAnySch = new Set();
+  const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+  if (!ids.length) return { planPpIdsByUser, usersWithAnySch };
+
+  const ph = ids.map(() => '?').join(',');
+  const rows = await MysqlQueryRunner.runQueryInSlave(
+    `
+    SELECT sch.user_id, s.provider_plan_id
+    FROM subscription_credit_history sch
+    INNER JOIN subscriptions s ON s.subscription_id = sch.subscription_id
+      AND TRIM(COALESCE(s.payment_type, '')) = 'recurring'
+    WHERE sch.user_id IN (${ph})
+    `,
+    ids
+  );
+
+  const extraSku = missingSkuAccumulator instanceof Set ? missingSkuAccumulator : null;
+
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const uid = r.user_id != null ? String(r.user_id) : '';
+    if (!uid) continue;
+    usersWithAnySch.add(uid);
+    const pid = normalizePlanSku(r.provider_plan_id);
+    if (!pid && r.provider_plan_id != null && extraSku) extraSku.add(String(r.provider_plan_id).trim());
+
+    let effectivePp = resolveProviderPlanIdToPpId(r.provider_plan_id, planByProduct);
+    if (!effectivePp && extraSku && r.provider_plan_id != null) {
+      for (const tok of collectProductSkuTokens(r.provider_plan_id)) {
+        extraSku.add(tok);
+      }
+      continue;
+    }
+    if (!effectivePp) continue;
+    if (!planPpIdsByUser.has(uid)) planPpIdsByUser.set(uid, new Set());
+    planPpIdsByUser.get(uid).add(effectivePp);
+  }
+  return { planPpIdsByUser, usersWithAnySch };
+}
+
+/**
+ * Credits already allocated for CSV row: same payment plan (by pp_id); if no DB sub rows for plan yet,
+ * any prior subscription_credit_history for the user ⇒ treat as credited (avoid double-grant).
+ *
+ * @param {string|null|undefined} targetPpId internal pp_id
+ * @param {boolean} activateMissingSubs
+ * @returns {boolean}
+ */
+function creditsAlreadyIssuedForCompareRow(targetPpId, creditPlanSet, userHasAnySch, activateMissingSubs) {
+  if (targetPpId != null) {
+    if (creditPlanSet && creditPlanSet.has(String(targetPpId))) return true;
+    if (activateMissingSubs && userHasAnySch) return true;
+    return false;
+  }
+  return !!userHasAnySch;
+}
+
 async function loadLatestRevenueCatOrderHints(userIds) {
   if (!userIds.length) return new Map();
   const ph = userIds.map(() => '?').join(',');
@@ -449,10 +545,17 @@ exports.compareRevenueCatCsv = async function (req, res) {
     }
     const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(allSkuForPlans);
 
-    /** Same snapshot as Customers → Active subscriptions (latest recurring row per user, entitled now). */
-    const asOfUtc = moment.utc().format('YYYY-MM-DD HH:mm:ss.SSS');
+    const schMissingSkus = new Set();
+    let creditsPack = await loadCreditsIssuedByUserPlan(userIds, planByProduct, schMissingSkus);
+    if (schMissingSkus.size > 0) {
+      const morePlans = await ActivationService.bulkResolvePlansForRcProductIds([...schMissingSkus]);
+      for (const [k, v] of morePlans.entries()) planByProduct.set(k, v);
+      creditsPack = await loadCreditsIssuedByUserPlan(userIds, planByProduct, null);
+    }
+
+    /** Same snapshot as Customers → Active subscriptions (latest recurring row per user, entitled now). Uses DB UTC_TIMESTAMP. */
     const entitledSnapshotByUser =
-      await SubscriptionsAnalyticsModel.loadEntitledSnapshotSubsByUserIds(userIds, asOfUtc);
+      await SubscriptionsAnalyticsModel.loadEntitledSnapshotSubsByUserIds(userIds);
 
     const userDetailRows = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
     const userDetailsById = new Map();
@@ -558,12 +661,29 @@ exports.compareRevenueCatCsv = async function (req, res) {
         cannot_activate += 1;
       }
 
-      /** Resolved plan name for display (SKU may come from all_purchased_products_ids). */
+      const activateMissingSubs =
+        action_required === 'activate' && matchingSubs.length === 0 && targetPpId != null;
+      const creditsPlanSet = uid ? creditsPack.planPpIdsByUser.get(String(uid)) || null : null;
+      const userAnySch = uid ? creditsPack.usersWithAnySch.has(String(uid)) : false;
+      const credits_already_issued = creditsAlreadyIssuedForCompareRow(
+        targetPpId,
+        creditsPlanSet,
+        userAnySch,
+        activateMissingSubs
+      );
+
+      const snapshotPlanMeta =
+        snapshotSub != null
+          ? resolvePaymentPlanMetaForDbSub(snapshotSub.provider_plan_id, planByProduct)
+          : null;
+      /** Table column: prefer Customers-style latest entitled plan; else CSV-resolved plan; else matched row SKU. */
       const planRowForDisplay =
+        snapshotPlanMeta ||
         planRow ||
-        (sub && sub.provider_plan_id != null && planByProduct.get(String(sub.provider_plan_id).trim())
-          ? planByProduct.get(String(sub.provider_plan_id).trim())
-          : null);
+        (sub != null ? resolvePaymentPlanMetaForDbSub(sub.provider_plan_id, planByProduct) : null);
+      /** Credits / activation idempotency follow the CSV row's resolved tier — keep explicit for tooltips. */
+      const csvPlanName =
+        planRow && planRow.subscription_name != null ? String(planRow.subscription_name) : null;
 
       outRows.push({
         app_user_id: uid,
@@ -578,6 +698,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
           : sub && sub.provider_plan_id
             ? String(sub.provider_plan_id)
             : null,
+        csv_subscription_plan_name: csvPlanName,
         rc_entitlement_status: p.entitlement_status,
         rc_active: true,
         user_exists: uid ? userExists.has(String(uid)) : false,
@@ -588,7 +709,18 @@ exports.compareRevenueCatCsv = async function (req, res) {
         db_provider_subscription_id: sub ? sub.provider_subscription_id : null,
         latest_revenuecat_order_id: uid ? orderHint.get(String(uid)) ?? null : null,
         action_required,
-        reason: reason || null
+        reason: reason || null,
+        credits_already_issued,
+        recommended_include_credits: !credits_already_issued,
+        db_snapshot_subscription_id:
+          snapshotSub && snapshotSub.subscription_id != null ? String(snapshotSub.subscription_id) : null,
+        db_snapshot_period_end:
+          snapshotSub &&
+          (snapshotSub.current_period_end || snapshotSub.renews_at || snapshotSub.end_at)
+            ? snapshotSub.current_period_end || snapshotSub.renews_at || snapshotSub.end_at
+            : null,
+        db_snapshot_provider_plan_id:
+          snapshotSub && snapshotSub.provider_plan_id != null ? String(snapshotSub.provider_plan_id) : null
       });
     }
 
