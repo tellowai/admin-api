@@ -47,6 +47,16 @@ function detectCsvDelimiter(text) {
   return ',';
 }
 
+/** Expand `sku` or Play-style `entitlement:product_id` into candidate SKUs. */
+function expandProductIdTokens(raw) {
+  const x = raw != null ? String(raw).trim() : '';
+  if (!x) return [];
+  if (x.includes(':')) {
+    return [...new Set(x.split(':').map((p) => p.trim()).filter(Boolean))];
+  }
+  return [x];
+}
+
 /** Split RevenueCat CSV fields like `all_purchased_products_ids` ("a,b,c" or JSON array). */
 function splitPurchasedProductIds(raw) {
   if (raw == null || raw === '') return [];
@@ -107,19 +117,20 @@ function parseComparableRow(norm) {
     norm.product_identifier ||
     norm.product_id ||
     norm.current_product_identifier ||
+    norm.latest_product ||
+    norm.latest_entitlement ||
     norm.offer_identifier ||
     null;
-
-  const product_trim = product_from_cols != null ? String(product_from_cols).trim() : '';
 
   /** Explicit CSV product first, then tokens from purchased-products list (order preserved). */
   const product_id_candidates = [];
   const pushCand = (v) => {
-    const x = v != null ? String(v).trim() : '';
-    if (!x || product_id_candidates.includes(x)) return;
-    product_id_candidates.push(x);
+    for (const x of expandProductIdTokens(v)) {
+      if (!x || product_id_candidates.includes(x)) continue;
+      product_id_candidates.push(x);
+    }
   };
-  if (product_trim) pushCand(product_trim);
+  if (product_from_cols != null) pushCand(product_from_cols);
   for (const x of fromPurchasedList) pushCand(x);
 
   const product_id = product_id_candidates[0] || null;
@@ -149,11 +160,13 @@ function parseComparableRow(norm) {
 
   let expires_raw =
     norm.effective_end_date_ms ||
+    norm.latest_expiration_at ||
     norm.expiration_at ||
     norm.expiration_at_ms ||
     norm.expiration ||
     norm.expiration_at_utc ||
     norm.expires_date ||
+    norm.trial_end_at ||
     norm.end_time ||
     null;
 
@@ -164,6 +177,9 @@ function parseComparableRow(norm) {
   }
 
   let purchase_raw =
+    norm.most_recent_purchase_at ||
+    norm.most_recent_renewal_at ||
+    norm.first_purchase_at ||
     norm.latest_purchase_at ||
     norm.purchased_at_ms ||
     norm.purchase_date_ms ||
@@ -197,16 +213,6 @@ function parseComparableRow(norm) {
     entitlement_status: entitlement_status != null ? String(entitlement_status).trim() : null,
     _raw: norm
   };
-}
-
-function rcRowLooksActive(parsed) {
-  const st = parsed.entitlement_status ? String(parsed.entitlement_status).toLowerCase() : '';
-  if (st && /expir|revok|refund|cancel/.test(st) && !/grace|billing/.test(st)) return false;
-  if (parsed.expires_date) {
-    const d = new Date(parsed.expires_date);
-    if (!Number.isNaN(d.getTime()) && d.getTime() <= Date.now()) return false;
-  }
-  return true;
 }
 
 async function loadUsersExistence(userIds) {
@@ -442,20 +448,18 @@ exports.compareRevenueCatCsv = async function (req, res) {
         } else if (String(plan.billing_interval || '').toLowerCase() === 'onetime') {
           reason = 'Plan maps to onetime billing — not a subscription tier';
         } else {
+          /**
+           * Active-customers CSV = every row is RC-active. Compare only to entitled DB recurring
+           * sub for this user + SKU (alive status + period end in future).
+           */
           const dbEntitled = ActivationService.recurringRowIsEntitled(sub);
-          const rcActive = rcRowLooksActive(p);
-
-          if (rcActive && dbEntitled) {
+          if (dbEntitled) {
             action_required = 'none';
             in_sync += 1;
-          } else if (rcActive && !dbEntitled) {
+          } else {
             action_required = 'activate';
             if (!sub) missing += 1;
             else stale += 1;
-          } else {
-            action_required = 'none';
-            reason = 'RevenueCat row does not look active (expired or inactive status)';
-            in_sync += 1;
           }
         }
       }
@@ -488,7 +492,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
             ? String(sub.provider_plan_id)
             : null,
         rc_entitlement_status: p.entitlement_status,
-        rc_active: rcRowLooksActive(p),
+        rc_active: true,
         user_exists: uid ? userExists.has(String(uid)) : false,
         user_details: uid ? userDetailsById.get(String(uid)) || null : null,
         db_subscription_id: sub ? sub.subscription_id : null,
