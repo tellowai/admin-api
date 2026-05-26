@@ -165,14 +165,13 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Per-user entitled snapshot at `asOfUtcDatetime` — same rules as {@link countRecurringEntitledAt}.
-   * Returns only users whose latest recurring row (by `start_at`) is entitled at that instant.
+   * Per-user entitled snapshot at **UTC now** (MySQL UTC_TIMESTAMP()) — same rules as
+   * {@link countRecurringEntitledAt}.
    *
    * @param {string[]} userIds
-   * @param {string} asOfUtcDatetime `YYYY-MM-DD HH:mm:ss[.SSS]` UTC
    * @returns {Promise<Map<string, object>>} user_id → subscription row
    */
-  static async loadEntitledSnapshotSubsByUserIds(userIds, asOfUtcDatetime) {
+  static async loadEntitledSnapshotSubsByUserIds(userIds) {
     const out = new Map();
     const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
     if (!ids.length) return out;
@@ -201,7 +200,7 @@ class SubscriptionsAnalyticsModel {
         WHERE s.payment_type = 'recurring'
           AND s.user_id IN (${ph})
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
-          AND COALESCE(s.start_at, s.created_at) <= ?
+          AND COALESCE(s.start_at, s.created_at) <= UTC_TIMESTAMP()
       )
       SELECT subscription_id,
              user_id,
@@ -222,23 +221,18 @@ class SubscriptionsAnalyticsModel {
             r.status IN (${aliveCsv})
             AND (
               COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
             )
           )
           OR (
             r.status = 'cancelled'
             AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
           )
         )
     `;
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(query, [
-      ...ids,
-      asOfUtcDatetime,
-      asOfUtcDatetime,
-      asOfUtcDatetime
-    ]);
+    const rows = await MysqlQueryRunner.runQueryInSlave(query, [...ids]);
     for (const r of Array.isArray(rows) ? rows : []) {
       if (r.user_id != null) out.set(String(r.user_id), r);
     }
