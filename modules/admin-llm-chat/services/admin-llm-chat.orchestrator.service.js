@@ -443,10 +443,13 @@ async function runStreamingTurn({
 
   const runLoop = async ({ allowTools = true, summaryNudge = false } = {}) => {
     const activeTools = allowTools ? tools : undefined;
+    const summaryNudgeContent = userId === CONSTANTS.DIGEST_SYSTEM_USER_ID
+      ? CONSTANTS.DIGEST_SUMMARY_NUDGE
+      : 'Based on the tool results above, answer the user now. Do not call more tools. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.';
     const nudge = summaryNudge
       ? [{
         role: 'user',
-        content: 'Based on the tool results above, answer the user now. Do not call more tools. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.',
+        content: summaryNudgeContent,
         sequence_no: seq,
       }]
       : [];
