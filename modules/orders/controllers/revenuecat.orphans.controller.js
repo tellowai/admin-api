@@ -3,10 +3,12 @@
 const Papa = require('papaparse');
 const multer = require('multer');
 const crypto = require('crypto');
+const moment = require('moment');
 const { v4: uuidv4 } = require('uuid');
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const ActivationService = require('../services/revenuecat-activation.service');
 const GenerationsModel = require('../../generations/models/generations.model');
+const SubscriptionsAnalyticsModel = require('../../analytics/models/subscriptions.analytics.model');
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
@@ -323,6 +325,18 @@ function findSubscriptionsForCompareRow(uid, skuCandidates, targetPpId, planByPr
   });
 }
 
+/**
+ * Among plan-matched recurring rows (newest `start_at` first), only the latest row decides
+ * Active vs Activate — same idea as Customers active-snapshot / latest-sub views, not an older
+ * entitled row for the same plan.
+ */
+function pickCompareSubscription(matchingSubs) {
+  const latest = matchingSubs.length ? matchingSubs[0] : null;
+  const entitledSub =
+    latest && ActivationService.recurringRowIsEntitled(latest) ? latest : null;
+  return { latest, entitledSub, displaySub: latest };
+}
+
 async function loadLatestRevenueCatOrderHints(userIds) {
   if (!userIds.length) return new Map();
   const ph = userIds.map(() => '?').join(',');
@@ -435,6 +449,11 @@ exports.compareRevenueCatCsv = async function (req, res) {
     }
     const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(allSkuForPlans);
 
+    /** Same snapshot as Customers → Active subscriptions (latest recurring row per user, entitled now). */
+    const asOfUtc = moment.utc().format('YYYY-MM-DD HH:mm:ss.SSS');
+    const entitledSnapshotByUser =
+      await SubscriptionsAnalyticsModel.loadEntitledSnapshotSubsByUserIds(userIds, asOfUtc);
+
     const userDetailRows = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
     const userDetailsById = new Map();
     for (const u of Array.isArray(userDetailRows) ? userDetailRows : []) {
@@ -465,8 +484,12 @@ exports.compareRevenueCatCsv = async function (req, res) {
         uid && pid
           ? findSubscriptionsForCompareRow(uid, skuCandidates, targetPpId, planByProduct, subsByUser)
           : [];
-      const entitledSub = matchingSubs.find((s) => ActivationService.recurringRowIsEntitled(s)) || null;
-      let sub = entitledSub || matchingSubs[0] || null;
+      const { displaySub } = pickCompareSubscription(matchingSubs);
+      const snapshotSub = uid ? entitledSnapshotByUser.get(String(uid)) || null : null;
+      const snapshotMatchesCsv =
+        snapshotSub != null &&
+        subscriptionMatchesResolvedPlan(snapshotSub, targetPpId, skuCandidates, planByProduct);
+      let sub = displaySub;
 
       const fromCsvTx =
         p.provider_subscription_id != null && String(p.provider_subscription_id).trim() !== ''
@@ -507,17 +530,26 @@ exports.compareRevenueCatCsv = async function (req, res) {
           reason = 'Plan maps to onetime billing — not a subscription tier';
         } else {
           /**
-           * Active-customers CSV = every row is RC-active. In sync when any recurring DB sub for
-           * this user maps to the same plan and is entitled (any provider — Apple/Google/RC).
+           * RC row is in sync only when the user is in the current active-subscriptions snapshot
+           * (latest recurring row per user, entitled now) AND that row maps to this CSV plan.
            */
-          if (entitledSub) {
+          if (snapshotMatchesCsv) {
             action_required = 'none';
             in_sync += 1;
-            sub = entitledSub;
+            sub = snapshotSub;
           } else {
             action_required = 'activate';
-            if (!matchingSubs.length) missing += 1;
-            else stale += 1;
+            if (!matchingSubs.length) {
+              missing += 1;
+              reason = snapshotSub
+                ? 'No DB row for this CSV plan (user active on a different subscription)'
+                : 'No matching DB subscription; user not in current active subscriptions';
+            } else {
+              stale += 1;
+              reason = !snapshotSub
+                ? 'User not in current active subscriptions (latest recurring row expired or missing)'
+                : 'Latest DB row for this plan is expired; user active on a different subscription';
+            }
           }
         }
       }
