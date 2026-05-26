@@ -283,6 +283,12 @@ function normalizePlanSku(raw) {
   return raw != null ? String(raw).trim() : '';
 }
 
+/** RevenueCat orphan CSV reconciles subscriptions created/managed via RevenueCat — not legacy direct store rows that share the same plan SKU. */
+function subscriptionRowIsRevenueCatManaged(sub) {
+  const p = sub && sub.provider != null ? String(sub.provider).trim().toLowerCase() : '';
+  return p === 'revenuecat';
+}
+
 /**
  * DB row matches CSV product / resolved payment_plans.pp_id (SKU string or numeric pp_id).
  */
@@ -591,7 +597,12 @@ exports.compareRevenueCatCsv = async function (req, res) {
       const snapshotSub = uid ? entitledSnapshotByUser.get(String(uid)) || null : null;
       const snapshotMatchesCsv =
         snapshotSub != null &&
+        subscriptionRowIsRevenueCatManaged(snapshotSub) &&
         subscriptionMatchesResolvedPlan(snapshotSub, targetPpId, skuCandidates, planByProduct);
+      const snapshotWrongProviderForRc =
+        snapshotSub != null &&
+        subscriptionMatchesResolvedPlan(snapshotSub, targetPpId, skuCandidates, planByProduct) &&
+        !subscriptionRowIsRevenueCatManaged(snapshotSub);
       let sub = displaySub;
 
       const fromCsvTx =
@@ -633,8 +644,8 @@ exports.compareRevenueCatCsv = async function (req, res) {
           reason = 'Plan maps to onetime billing — not a subscription tier';
         } else {
           /**
-           * RC row is in sync only when the user is in the current active-subscriptions snapshot
-           * (latest recurring row per user, entitled now) AND that row maps to this CSV plan.
+           * RC row is in sync only when the entitled snapshot row is RevenueCat-managed (subscriptions.provider),
+           * same internal tier as CSV, and still entitled — not e.g. native Play/App rows that reuse the SKU.
            */
           if (snapshotMatchesCsv) {
             action_required = 'none';
@@ -649,9 +660,11 @@ exports.compareRevenueCatCsv = async function (req, res) {
                 : 'No matching DB subscription; user not in current active subscriptions';
             } else {
               stale += 1;
-              reason = !snapshotSub
-                ? 'User not in current active subscriptions (latest recurring row expired or missing)'
-                : 'Latest DB row for this plan is expired; user active on a different subscription';
+              reason = snapshotWrongProviderForRc
+                ? `Entitled recurring row matches this plan but subscriptions.provider is not revenuecat (got '${snapshotSub.provider != null ? String(snapshotSub.provider).trim() : ''}' ) — reconcile RevenueCat-managed subscription`
+                : !snapshotSub
+                  ? 'User not in current active subscriptions (latest recurring row expired or missing)'
+                  : 'Latest DB row for this plan is expired; user active on a different subscription';
             }
           }
         }
@@ -714,6 +727,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
         recommended_include_credits: !credits_already_issued,
         db_snapshot_subscription_id:
           snapshotSub && snapshotSub.subscription_id != null ? String(snapshotSub.subscription_id) : null,
+        db_snapshot_provider: snapshotSub && snapshotSub.provider != null ? String(snapshotSub.provider) : null,
         db_snapshot_period_end:
           snapshotSub &&
           (snapshotSub.current_period_end || snapshotSub.renews_at || snapshotSub.end_at)
