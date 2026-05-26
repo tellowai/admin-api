@@ -315,6 +315,7 @@ class SubscriptionsAnalyticsModel {
 
   /**
    * UTC bounds for calendar days in a client tz (same semantics as orders analytics).
+   * Inclusive whole days: local `YYYY-MM-DD 00:00:00.000` through `YYYY-MM-DD 23:59:59.999`.
    * @param {string} startCal YYYY-MM-DD
    * @param {string} endCal YYYY-MM-DD
    * @param {string} tz IANA
@@ -327,7 +328,11 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Daily breakdown of recurring subscription events (initial purchases + renewals) in [startCal, endCal].
+   * Daily breakdown of recurring subscription events (initial purchases + renewals) for rows whose
+   * **entitlement window overlaps** [startCal, endCal] in `tz` (same overlap rule as {@link listUserSubscriptionsForAdminRange}).
+   *
+   * Each row is still **bucketed by its purchase/start calendar day** in `tz` (duplicate rows omitted from the picker’s
+   * range naturally drop once buckets are clipped to `[startCal, endCal]`).
    *
    * Renewals are detected via `additional_data.previous_subscription_id` or
    * `additional_data.renewal_count > 0` (matches how `subscription.service.js` writes renewal rows).
@@ -348,7 +353,7 @@ class SubscriptionsAnalyticsModel {
     const { startCal, endCal, tz } = opts;
     const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
 
-    // Pull each recurring subscription row whose start falls in the window.
+    // Pull recurring rows overlapping whole-day UTC bounds — same predicates as {@link listUserSubscriptionsForAdminRange}.
     // Bucketing into local-tz calendar days happens in Node so we don't depend on MySQL named-tz tables.
     const query = `
       SELECT
@@ -371,11 +376,14 @@ class SubscriptionsAnalyticsModel {
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
       WHERE s.payment_type = 'recurring'
-        AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
+        AND (
+          COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
+          OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
+        )
     `;
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeStartUtc, rangeEndUtc]);
+    const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeEndUtc, rangeStartUtc]);
 
     const prevIds = new Set();
     for (const r of rows || []) {
@@ -445,6 +453,7 @@ class SubscriptionsAnalyticsModel {
     }
 
     const daily = Array.from(buckets.entries())
+      .filter(([date]) => date >= startCal && date <= endCal)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, v]) => ({
         date,
@@ -530,9 +539,11 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Admin Purchases tab: subscriptions whose purchase/start instant falls in the UTC window
-   * derived from [startCal, endCal] in `tz`, with optional filters and pagination.
-   * One row per `subscriptions` row in range (renewals appear as separate rows).
+   * Admin Purchases tab: subscriptions that **overlap** the calendar range [startCal, endCal] in `tz`.
+   * Bounds are whole days: first day 00:00:00 through last day 23:59:59.999 (see {@link utcRangeForCalendarDays}).
+   * A row is included when purchase/start is on or before the range end and paid-through (period end) is
+   * on or after the range start, or period end is missing (treated as open-ended for overlap).
+   * One row per matching `subscriptions` row (renewals appear as separate rows).
    *
    * @param {Object} opts
    * @param {string} opts.startCal YYYY-MM-DD
@@ -598,7 +609,7 @@ class SubscriptionsAnalyticsModel {
     const rawSt = subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
     const statusClause = rawSt ? { sql: ' AND t._display_status = ? ', params: [rawSt] } : { sql: '', params: [] };
 
-    const innerParams = [rangeStartUtc, rangeEndUtc, ...planClause.params];
+    const innerParams = [rangeEndUtc, rangeStartUtc, ...planClause.params];
 
     const baseRowsSelect = `
       SELECT
@@ -648,8 +659,11 @@ class SubscriptionsAnalyticsModel {
       FROM subscriptions s
       INNER JOIN user u ON u.user_id = s.user_id
       WHERE (u.DELETED_AT IS NULL)
-        AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
+        AND (
+          COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
+          OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
+        )
         ${planClause.sql}
     `;
 

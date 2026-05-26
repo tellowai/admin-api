@@ -1831,6 +1831,9 @@ class AnalyticsController {
    * each calendar day in the picked range (in the client timezone). One row per
    * day, 0-filled for empty days.
    *
+   * This already includes subscribers who **started before** the range but were still entitled on days
+   * inside the picker (conceptually aligned with the User subscriptions overlap filter; different metric — users vs rows/events).
+   *
    * Same-day plan upgrades only (`notes.type = 'upgrade'` with `notes.active_subscription_id`
    * whose start shares the **same UTC calendar date** as this row) are excluded from the candidate set —
    * same rules as `getPurchasesSummary`'s active-subscriptions count
@@ -1849,8 +1852,8 @@ class AnalyticsController {
       const startCal = moment.tz(queryParams.start_date, tz).format('YYYY-MM-DD');
       const endCal = moment.tz(queryParams.end_date, tz).format('YYYY-MM-DD');
 
-      // Build one entry per calendar day in [startCal, endCal] with that day's
-      // last-instant in the client tz, converted to UTC for the SQL `as-of`.
+      // Build one entry per inclusive calendar day in [startCal, endCal].
+      // Snapshot time is local end-of-day 23:59:59.999, converted to UTC for SQL `as-of`.
       const days = [];
       for (
         let cursor = moment.tz(startCal, tz).startOf('day');
