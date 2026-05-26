@@ -242,20 +242,69 @@ async function requireActiveUser(userId) {
   return rows[0];
 }
 
+/**
+ * MySQL `TIMESTAMP` columns only support ~1970–2038 UTC. RevenueCat exports often use far-future
+ * expirations (e.g. 2099); clamp so INSERT does not fail with ER_WRONG_VALUE.
+ * @see db-migrations/migrations/sqls/20250210062447-alter-subscriptions-table-up.sql
+ */
+const MYSQL_TIMESTAMP_MIN_MS = Date.UTC(1970, 0, 1, 0, 0, 2);
+/** Well inside MySQL TIMESTAMP upper bound (2038-01-19 03:14:07 UTC). */
+const MYSQL_TIMESTAMP_MAX_MS = Date.UTC(2038, 0, 18, 23, 59, 59);
+
 function parseExpiryToMysqlDatetime(expiresRaw) {
   if (expiresRaw == null || expiresRaw === '') return null;
   const s = String(expiresRaw).trim();
   if (!s) return null;
+  let ms;
   if (/^\d+$/.test(s)) {
     const n = Number(s);
-    const ms = s.length <= 10 ? n * 1000 : n;
-    const d = new Date(ms);
-    if (!Number.isNaN(d.getTime())) return moment(d).format('YYYY-MM-DD HH:mm:ss');
-    return null;
+    const rawMs = s.length <= 10 ? n * 1000 : n;
+    const d = new Date(rawMs);
+    if (Number.isNaN(d.getTime())) return null;
+    ms = d.getTime();
+  } else {
+    const d = moment(s);
+    if (!d.isValid()) return null;
+    ms = d.valueOf();
   }
-  const d = moment(s);
-  if (!d.isValid()) return null;
-  return d.format('YYYY-MM-DD HH:mm:ss');
+  if (ms > MYSQL_TIMESTAMP_MAX_MS) ms = MYSQL_TIMESTAMP_MAX_MS;
+  if (ms < MYSQL_TIMESTAMP_MIN_MS) ms = MYSQL_TIMESTAMP_MIN_MS;
+  /** UTC wall clock: local `.format()` pushed clamped UTC past MySQL max when session TZ is +00:00. */
+  return moment.utc(ms).format('YYYY-MM-DD HH:mm:ss');
+}
+
+/**
+ * Latest existing RC recurring row for this user+SKU (used to tag admin activation as renewal).
+ * @param {{ query: (sql: string, params?: unknown[]) => Promise<unknown> }} conn
+ */
+async function loadLatestPriorRcRecurringForPlan(conn, userId, providerPlanId) {
+  const rows = await conn.query(
+    `
+    SELECT subscription_id, additional_data
+    FROM subscriptions
+    WHERE user_id = ?
+      AND provider = 'revenuecat'
+      AND payment_type = 'recurring'
+      AND TRIM(COALESCE(provider_plan_id, '')) = TRIM(?)
+    ORDER BY COALESCE(start_at, created_at) DESC, created_at DESC, subscription_id DESC
+    LIMIT 1
+  `,
+    [userId, providerPlanId]
+  );
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return rows[0];
+}
+
+function renewalCountFromPriorAdditionalData(raw) {
+  if (raw == null || raw === '') return 0;
+  try {
+    const ad = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!ad || ad.renewal_count == null) return 0;
+    const n = Number(ad.renewal_count);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  } catch (_e) {
+    return 0;
+  }
 }
 
 /**
@@ -341,22 +390,41 @@ exports.activateFromAdmin = async function (opts) {
   const currency = plan.currency || 'INR';
   const initialCreditsTotal = Number(plan.credits || 0) + Number(plan.bonus_credits || 0);
 
-  const additionalData = JSON.stringify({
-    admin_activation: true,
-    admin_reason: reason,
-    granted_by_admin_id: grantedByAdminId,
-    run_id: runId,
-    mimic_event: 'INITIAL_PURCHASE',
-    provider_notes: {
-      user_id: userId,
-      provider: 'revenuecat',
-      type: 'regular'
-    }
-  });
+  const syntheticCustomerListId =
+    /^rc_clist_[a-f0-9]{48}$/.test(String(providerSubscriptionId || '').trim());
 
   const conn = await MysqlQueryRunner.getConnectionFromMaster();
   try {
     await conn.beginTransaction();
+
+    const priorRow = await loadLatestPriorRcRecurringForPlan(conn, userId, productId);
+    let mimicEvent = 'INITIAL_PURCHASE';
+    /** @type {Record<string, unknown>} */
+    const renewalMeta = {};
+    if (priorRow && priorRow.subscription_id != null) {
+      const prevId = String(priorRow.subscription_id).trim();
+      if (prevId) {
+        renewalMeta.previous_subscription_id = prevId;
+        const prevRc = renewalCountFromPriorAdditionalData(priorRow.additional_data);
+        renewalMeta.renewal_count = Math.max(1, prevRc + 1);
+        mimicEvent = 'SUBSCRIPTION_RENEWED';
+      }
+    }
+
+    const additionalData = JSON.stringify({
+      admin_activation: true,
+      admin_reason: reason,
+      granted_by_admin_id: grantedByAdminId,
+      run_id: runId,
+      mimic_event: mimicEvent,
+      ...renewalMeta,
+      ...(syntheticCustomerListId ? { customer_list_csv_missing_store_tx_id: true } : {}),
+      provider_notes: {
+        user_id: userId,
+        provider: 'revenuecat',
+        type: 'regular'
+      }
+    });
 
     await conn.query(
       `

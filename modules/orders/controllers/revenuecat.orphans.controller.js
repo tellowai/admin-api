@@ -2,6 +2,7 @@
 
 const Papa = require('papaparse');
 const multer = require('multer');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const ActivationService = require('../services/revenuecat-activation.service');
@@ -17,6 +18,19 @@ exports.multerCsvUpload = multer({
 
 function pairKey(uid, pid) {
   return `${uid}::${pid}`;
+}
+
+/**
+ * Customer list CSV exports omit store / original transaction IDs. When there is no matching MySQL
+ * `subscriptions.provider_subscription_id`, we still need a stable unique value for admin activation
+ * idempotency within this user+SKU pair (not a real App Store / Play token).
+ */
+function deterministicSyntheticProviderSubscriptionId(userId, productSku) {
+  const h = crypto
+    .createHash('sha256')
+    .update(`rc_customer_list|${String(userId).trim()}|${String(productSku).trim()}`, 'utf8')
+    .digest('hex');
+  return `rc_clist_${h.slice(0, 48)}`;
 }
 
 /**
@@ -396,8 +410,18 @@ exports.compareRevenueCatCsv = async function (req, res) {
         sub && sub.provider_subscription_id != null && String(sub.provider_subscription_id).trim() !== ''
           ? String(sub.provider_subscription_id).trim()
           : '';
-      /** Customer list CSV has no tx columns; reuse MySQL subscription id when row already exists. */
-      const effectiveProviderSubId = fromCsvTx || fromDbTx || null;
+      /** CSV + DB may lack tx id (RevenueCat customer list); then use stable synthetic for admin idempotency. */
+      let effectiveProviderSubId = fromCsvTx || fromDbTx || null;
+      let providerSubscriptionIdSynthetic = false;
+      if (
+        !effectiveProviderSubId &&
+        uid &&
+        pid &&
+        !String(uid).startsWith('$RCAnonymousID')
+      ) {
+        effectiveProviderSubId = deterministicSyntheticProviderSubscriptionId(uid, pid);
+        providerSubscriptionIdSynthetic = true;
+      }
 
       // Validation order: (1) user identity & existence → (2) product id → (3) idempotency + plan mapping → sync state
       if (!uid) {
@@ -409,9 +433,6 @@ exports.compareRevenueCatCsv = async function (req, res) {
       } else if (!pid) {
         reason =
           'Missing product id / SKU (set product_identifier or all_purchased_products_ids)';
-      } else if (!effectiveProviderSubId) {
-        reason =
-          'Missing original / store transaction id. Customer list exports omit this field — use RevenueCat scheduled transaction export (e.g. original_store_transaction_id), or fix delimiter if the file is semicolon-separated.';
       } else {
         const plan =
           resolved.plan || (pid ? planByProduct.get(String(pid).trim()) || null : null);
@@ -457,6 +478,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
         app_user_id: uid,
         product_id: pid,
         provider_subscription_id: effectiveProviderSubId,
+        provider_subscription_id_synthetic: providerSubscriptionIdSynthetic,
         rc_expires_date: p.expires_date,
         rc_purchase_date: p.purchase_date,
         db_purchase_date: sub ? sub.start_at : null,
