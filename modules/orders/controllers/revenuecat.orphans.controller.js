@@ -43,14 +43,35 @@ function detectCsvDelimiter(text) {
   return ',';
 }
 
-/** Expand `sku` or Play-style `entitlement:product_id` into candidate SKUs. */
-function expandProductIdTokens(raw) {
+/**
+ * Play / RC product ids: keep the full token and each `:` segment (DB often stores the
+ * composite `base:offer` while CSV columns also expose the parts separately).
+ */
+function collectProductSkuTokens(raw) {
   const x = raw != null ? String(raw).trim() : '';
   if (!x) return [];
+  const out = [x];
   if (x.includes(':')) {
-    return [...new Set(x.split(':').map((p) => p.trim()).filter(Boolean))];
+    for (const part of x.split(':')) {
+      const p = part.trim();
+      if (p && !out.includes(p)) out.push(p);
+    }
   }
-  return [x];
+  return out;
+}
+
+/** @deprecated alias — same as {@link collectProductSkuTokens} */
+function expandProductIdTokens(raw) {
+  return collectProductSkuTokens(raw);
+}
+
+function productSkuTokensEquivalent(a, b) {
+  const aa = collectProductSkuTokens(a);
+  const bb = collectProductSkuTokens(b);
+  for (const x of aa) {
+    if (bb.includes(x)) return true;
+  }
+  return false;
 }
 
 /** Split RevenueCat CSV fields like `all_purchased_products_ids` ("a,b,c" or JSON array). */
@@ -115,6 +136,7 @@ function parseComparableRow(norm) {
     norm.current_product_identifier ||
     norm.latest_product ||
     norm.latest_entitlement ||
+    norm.latest_entitlements ||
     norm.offer_identifier ||
     null;
 
@@ -269,6 +291,7 @@ function subscriptionMatchesResolvedPlan(sub, targetPpId, skuCandidates, planByP
 
   const cands = [...new Set((skuCandidates || []).map(normalizePlanSku).filter(Boolean))];
   if (cands.includes(pid)) return true;
+  if (cands.some((c) => productSkuTokensEquivalent(c, pid))) return true;
 
   if (targetPpId != null && /^\d+$/.test(pid) && String(targetPpId) === pid) return true;
 
@@ -290,7 +313,14 @@ function subscriptionMatchesResolvedPlan(sub, targetPpId, skuCandidates, planByP
  */
 function findSubscriptionsForCompareRow(uid, skuCandidates, targetPpId, planByProduct, subsByUser) {
   const subs = subsByUser.get(String(uid)) || [];
-  return subs.filter((s) => subscriptionMatchesResolvedPlan(s, targetPpId, skuCandidates, planByProduct));
+  return subs.filter((s) => {
+    if (subscriptionMatchesResolvedPlan(s, targetPpId, skuCandidates, planByProduct)) return true;
+    if (targetPpId == null) return false;
+    const pid = normalizePlanSku(s.provider_plan_id);
+    if (!pid) return false;
+    const meta = planByProduct.get(pid) || null;
+    return meta && String(meta.subscription_plan_id) === String(targetPpId);
+  });
 }
 
 async function loadLatestRevenueCatOrderHints(userIds) {
@@ -392,6 +422,15 @@ exports.compareRevenueCatCsv = async function (req, res) {
     for (const p of comparable) {
       for (const id of rowProductCandidates(p)) {
         allSkuForPlans.push(id);
+      }
+    }
+    for (const subs of subsByUser.values()) {
+      for (const s of subs) {
+        if (s.provider_plan_id != null) {
+          for (const tok of collectProductSkuTokens(s.provider_plan_id)) {
+            allSkuForPlans.push(tok);
+          }
+        }
       }
     }
     const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(allSkuForPlans);
