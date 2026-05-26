@@ -169,11 +169,28 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
   });
 }
 
-function toCalendarDate(d) {
-  if (!d) return '';
-  if (d instanceof Date) return moment(d).format('YYYY-MM-DD');
-  const s = String(d);
-  return s.includes('T') ? s.split('T')[0] : s;
+/**
+ * Calendar YYYY-MM-DD for analytics ranges. Uses client `tz` when Joi coerces ISO strings to `Date`,
+ * so the picked day stays correct regardless of Node’s default timezone.
+ */
+function toCalendarDate(d, clientTz) {
+  if (d == null || d === '') return '';
+
+  const tz =
+    clientTz &&
+    String(clientTz).trim() &&
+    TimezoneService.isValidTimezone(String(clientTz).trim())
+      ? normalizeMysqlTimezone(String(clientTz).trim())
+      : normalizeMysqlTimezone(TimezoneService.getDefaultTimezone());
+
+  if (d instanceof Date) {
+    return moment.tz(d, tz).format('YYYY-MM-DD');
+  }
+
+  const s = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (s.includes('T')) return s.split('T')[0];
+  return (s.split(' ')[0] || s).slice(0, 10);
 }
 
 /** IANA aliases; MySQL time_zone tables often expect Asia/Kolkata. */
@@ -195,8 +212,8 @@ exports.getOrdersStatusDaily = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -225,8 +242,8 @@ exports.getOrdersStatusSummary = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -256,8 +273,8 @@ exports.getOrdersVolumeSummary = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -305,8 +322,8 @@ exports.getSubscriptionPurchasesDaily = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
 
     const data = await SubscriptionsAnalyticsModel.getSubscriptionEventsDaily({
       startCal,
@@ -331,8 +348,8 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const clientPlatform = q.client_platform != null ? String(q.client_platform).trim().toLowerCase() : '';
     let paymentPlanId = null;
     const rawPp = q.payment_plan_id;
@@ -416,8 +433,8 @@ exports.getPurchasingCustomersTable = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 10));
     const offset = (page - 1) * limit;
