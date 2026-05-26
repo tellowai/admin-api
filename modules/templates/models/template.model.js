@@ -1297,6 +1297,65 @@ exports.copyTemplateInTransaction = async function (connection, sourceTemplateId
     }
   }
 
+  // Remap audio_workflow_timeline.tac_id references in additional_data.
+  // The template row was bulk-copied (INSERT...SELECT) before clipTacIdMap existed, so
+  // timeline blocks still point at the source template's tac_ids. Walk the timeline,
+  // rewrite tac_ids through the map, and drop blocks whose source clip is missing.
+  if (clipTacIdMap.size > 0) {
+    let additionalData = sourceTemplate.additional_data;
+    if (typeof additionalData === 'string') {
+      try {
+        additionalData = JSON.parse(additionalData);
+      } catch (_) {
+        additionalData = null;
+      }
+    }
+    const timeline =
+      additionalData && typeof additionalData === 'object' && !Array.isArray(additionalData)
+        ? additionalData.audio_workflow_timeline
+        : null;
+    if (timeline && Array.isArray(timeline.layers)) {
+      let mutated = false;
+      const remappedLayers = [];
+      for (const layer of timeline.layers) {
+        const blocksIn = Array.isArray(layer?.blocks) ? layer.blocks : [];
+        const blocksOut = [];
+        for (const b of blocksIn) {
+          const oldTac = b && b.tac_id != null ? String(b.tac_id).trim() : '';
+          if (!oldTac) {
+            // Block has no tac binding (shouldn't be persisted, but keep as-is).
+            blocksOut.push(b);
+            continue;
+          }
+          const newTac = clipTacIdMap.get(oldTac);
+          if (!newTac) {
+            // Source clip was deleted/missing — drop the block instead of leaking a dangling id.
+            mutated = true;
+            continue;
+          }
+          if (newTac !== oldTac) mutated = true;
+          blocksOut.push({ ...b, tac_id: newTac });
+        }
+        if (blocksOut.length > 0) {
+          remappedLayers.push({ ...layer, blocks: blocksOut });
+        } else if (blocksIn.length > 0) {
+          mutated = true;
+        }
+      }
+      if (mutated) {
+        const nextAdditionalData = {
+          ...additionalData,
+          audio_workflow_timeline:
+            remappedLayers.length > 0 ? { ...timeline, layers: remappedLayers } : null
+        };
+        await connection.query(
+          'UPDATE templates SET additional_data = ?, updated_at = ? WHERE template_id = ?',
+          [JSON.stringify(nextAdditionalData), now, newTemplateId]
+        );
+      }
+    }
+  }
+
   const tags = await connection.query(
     'SELECT ttd_id, facet_id FROM template_tags WHERE template_id = ? AND deleted_at IS NULL',
     [sourceTemplateId]
