@@ -16,10 +16,6 @@ exports.multerCsvUpload = multer({
   fileFilter: (_req, _file, cb) => cb(null, true)
 }).single('file');
 
-function pairKey(uid, pid) {
-  return `${uid}::${pid}`;
-}
-
 /**
  * Customer list CSV exports omit store / original transaction IDs. When there is no matching MySQL
  * `subscriptions.provider_subscription_id`, we still need a stable unique value for admin activation
@@ -229,13 +225,13 @@ async function loadUsersExistence(userIds) {
   return m;
 }
 
-async function loadSubscriptionsForPairs(pairs) {
-  /** pairs: [{user_id, provider_plan_id}] */
-  if (!pairs.length) return new Map();
-  const key = (uid, pid) => `${uid}::${pid}`;
+/**
+ * All recurring subs per user (any store provider) — matches api subscription.model fetchActiveSubscriptions.
+ * @param {string[]} userIds
+ * @returns {Promise<Map<string, object[]>>}
+ */
+async function loadRecurringSubscriptionsByUser(userIds) {
   const out = new Map();
-
-  const userIds = [...new Set(pairs.map((p) => p.user_id))];
   if (!userIds.length) return out;
 
   const ph = userIds.map(() => '?').join(',');
@@ -245,20 +241,56 @@ async function loadSubscriptionsForPairs(pairs) {
            start_at,
            current_period_end, renews_at, end_at, created_at, payment_type, provider
     FROM subscriptions
-    WHERE provider = 'revenuecat'
-      AND payment_type = 'recurring'
+    WHERE payment_type = 'recurring'
       AND user_id IN (${ph})
-    ORDER BY created_at DESC
+    ORDER BY COALESCE(start_at, created_at) DESC, created_at DESC, subscription_id DESC
   `,
     userIds
   );
 
-  /** @type {Map<string, object>} first (newest) sub per user+plan */
   for (const s of Array.isArray(subs) ? subs : []) {
-    const k = key(s.user_id, s.provider_plan_id);
-    if (!out.has(k)) out.set(k, s);
+    const uid = String(s.user_id);
+    if (!out.has(uid)) out.set(uid, []);
+    out.get(uid).push(s);
   }
   return out;
+}
+
+function normalizePlanSku(raw) {
+  return raw != null ? String(raw).trim() : '';
+}
+
+/**
+ * DB row matches CSV product / resolved payment_plans.pp_id (SKU string or numeric pp_id).
+ */
+function subscriptionMatchesResolvedPlan(sub, targetPpId, skuCandidates, planByProduct) {
+  const pid = normalizePlanSku(sub.provider_plan_id);
+  if (!pid) return false;
+
+  const cands = [...new Set((skuCandidates || []).map(normalizePlanSku).filter(Boolean))];
+  if (cands.includes(pid)) return true;
+
+  if (targetPpId != null && /^\d+$/.test(pid) && String(targetPpId) === pid) return true;
+
+  const dbPlanMeta = planByProduct.get(pid) || null;
+  if (targetPpId != null && dbPlanMeta && String(dbPlanMeta.subscription_plan_id) === String(targetPpId)) {
+    return true;
+  }
+
+  for (const sku of cands) {
+    const csvPlan = planByProduct.get(sku) || null;
+    if (!csvPlan || !dbPlanMeta) continue;
+    if (String(csvPlan.subscription_plan_id) === String(dbPlanMeta.subscription_plan_id)) return true;
+  }
+  return false;
+}
+
+/**
+ * Newest-first recurring rows for this user that map to the CSV plan (any IAP provider).
+ */
+function findSubscriptionsForCompareRow(uid, skuCandidates, targetPpId, planByProduct, subsByUser) {
+  const subs = subsByUser.get(String(uid)) || [];
+  return subs.filter((s) => subscriptionMatchesResolvedPlan(s, targetPpId, skuCandidates, planByProduct));
 }
 
 async function loadLatestRevenueCatOrderHints(userIds) {
@@ -293,12 +325,10 @@ function rowProductCandidates(p) {
  * Choose which SKU reconciles this row: prefer a recurring plan mapping, then an existing DB sub
  * for user+SKU, then any mapped plan.
  */
-function pickResolvedProductForCompare(p, uid, subByPair, planByProduct) {
+/** Resolve CSV SKU + internal plan row (no DB sub — matching is plan-aware below). */
+function pickResolvedProductForCompare(p, planByProduct) {
   const cands = rowProductCandidates(p);
-  if (!cands.length) return { product_id: null, plan: null, sub: null };
-
-  const subFor = (sku) =>
-    uid && sku ? subByPair.get(pairKey(uid, String(sku).trim())) || null : null;
+  if (!cands.length) return { product_id: null, plan: null };
 
   for (const id of cands) {
     const sku = String(id).trim();
@@ -306,17 +336,7 @@ function pickResolvedProductForCompare(p, uid, subByPair, planByProduct) {
     const plan = planByProduct.get(sku) || null;
     const bi = plan ? String(plan.billing_interval || '').toLowerCase() : '';
     if (plan && bi !== 'onetime') {
-      return { product_id: sku, plan, sub: subFor(sku) };
-    }
-  }
-
-  for (const id of cands) {
-    const sku = String(id).trim();
-    if (!sku) continue;
-    const sub = subFor(sku);
-    if (sub) {
-      const plan = planByProduct.get(sku) || null;
-      return { product_id: sku, plan, sub };
+      return { product_id: sku, plan };
     }
   }
 
@@ -325,14 +345,12 @@ function pickResolvedProductForCompare(p, uid, subByPair, planByProduct) {
     if (!sku) continue;
     const plan = planByProduct.get(sku) || null;
     if (plan) {
-      return { product_id: sku, plan, sub: subFor(sku) };
+      return { product_id: sku, plan };
     }
   }
 
   const first = cands.map((c) => String(c).trim()).find(Boolean);
-  return first
-    ? { product_id: first, plan: null, sub: subFor(first) }
-    : { product_id: null, plan: null, sub: null };
+  return first ? { product_id: first, plan: planByProduct.get(first) || null } : { product_id: null, plan: null };
 }
 
 exports.compareRevenueCatCsv = async function (req, res) {
@@ -368,14 +386,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
     const userIds = [...new Set(comparable.map((p) => p.app_user_id).filter(Boolean))];
     const userExists = await loadUsersExistence(userIds);
 
-    const pairs = [];
-    for (const p of comparable) {
-      if (!p.app_user_id) continue;
-      for (const planId of rowProductCandidates(p)) {
-        pairs.push({ user_id: p.app_user_id, provider_plan_id: planId });
-      }
-    }
-    const subByPair = await loadSubscriptionsForPairs(pairs);
+    const subsByUser = await loadRecurringSubscriptionsByUser(userIds);
     const orderHint = await loadLatestRevenueCatOrderHints(userIds);
     const allSkuForPlans = [];
     for (const p of comparable) {
@@ -401,12 +412,22 @@ exports.compareRevenueCatCsv = async function (req, res) {
     for (const p of comparable) {
       total += 1;
       const uid = p.app_user_id;
-      const resolved = pickResolvedProductForCompare(p, uid, subByPair, planByProduct);
+      const skuCandidates = rowProductCandidates(p);
+      const resolved = pickResolvedProductForCompare(p, planByProduct);
       const pid = resolved.product_id;
 
       let action_required = 'cannot_activate';
       let reason = '';
-      let sub = resolved.sub || (uid && pid ? subByPair.get(pairKey(uid, pid)) || null : null);
+      const planRow =
+        resolved.plan || (pid ? planByProduct.get(String(pid).trim()) || null : null);
+      const targetPpId =
+        planRow && planRow.subscription_plan_id != null ? planRow.subscription_plan_id : null;
+      const matchingSubs =
+        uid && pid
+          ? findSubscriptionsForCompareRow(uid, skuCandidates, targetPpId, planByProduct, subsByUser)
+          : [];
+      const entitledSub = matchingSubs.find((s) => ActivationService.recurringRowIsEntitled(s)) || null;
+      let sub = entitledSub || matchingSubs[0] || null;
 
       const fromCsvTx =
         p.provider_subscription_id != null && String(p.provider_subscription_id).trim() !== ''
@@ -440,25 +461,23 @@ exports.compareRevenueCatCsv = async function (req, res) {
         reason =
           'Missing product id / SKU (set product_identifier or all_purchased_products_ids)';
       } else {
-        const plan =
-          resolved.plan || (pid ? planByProduct.get(String(pid).trim()) || null : null);
-        if (!plan) {
-          const skuList = rowProductCandidates(p).filter(Boolean).join(', ') || String(pid);
+        if (!planRow) {
+          const skuList = skuCandidates.filter(Boolean).join(', ') || String(pid);
           reason = `No internal payment plan mapped for SKU(s): ${skuList}`;
-        } else if (String(plan.billing_interval || '').toLowerCase() === 'onetime') {
+        } else if (String(planRow.billing_interval || '').toLowerCase() === 'onetime') {
           reason = 'Plan maps to onetime billing — not a subscription tier';
         } else {
           /**
-           * Active-customers CSV = every row is RC-active. Compare only to entitled DB recurring
-           * sub for this user + SKU (alive status + period end in future).
+           * Active-customers CSV = every row is RC-active. In sync when any recurring DB sub for
+           * this user maps to the same plan and is entitled (any provider — Apple/Google/RC).
            */
-          const dbEntitled = ActivationService.recurringRowIsEntitled(sub);
-          if (dbEntitled) {
+          if (entitledSub) {
             action_required = 'none';
             in_sync += 1;
+            sub = entitledSub;
           } else {
             action_required = 'activate';
-            if (!sub) missing += 1;
+            if (!matchingSubs.length) missing += 1;
             else stale += 1;
           }
         }
@@ -468,12 +487,9 @@ exports.compareRevenueCatCsv = async function (req, res) {
         cannot_activate += 1;
       }
 
-      /** Resolved plan / DB provider_plan_id for display (SKU may come from all_purchased_products_ids). */
-      const planRow =
-        resolved.plan ||
-        (pid && planByProduct.get(String(pid).trim())
-          ? planByProduct.get(String(pid).trim())
-          : null) ||
+      /** Resolved plan name for display (SKU may come from all_purchased_products_ids). */
+      const planRowForDisplay =
+        planRow ||
         (sub && sub.provider_plan_id != null && planByProduct.get(String(sub.provider_plan_id).trim())
           ? planByProduct.get(String(sub.provider_plan_id).trim())
           : null);
@@ -486,8 +502,8 @@ exports.compareRevenueCatCsv = async function (req, res) {
         rc_expires_date: p.expires_date,
         rc_purchase_date: p.purchase_date,
         db_purchase_date: sub ? sub.start_at : null,
-        subscription_plan_name: planRow
-          ? planRow.subscription_name
+        subscription_plan_name: planRowForDisplay
+          ? planRowForDisplay.subscription_name
           : sub && sub.provider_plan_id
             ? String(sub.provider_plan_id)
             : null,
@@ -525,6 +541,9 @@ exports.activateRevenueCatRow = async function (req, res) {
     const provider_subscription_id =
       body.provider_subscription_id != null ? String(body.provider_subscription_id).trim() : '';
     const expires_date = body.expires_date;
+    const purchase_date = body.purchase_date;
+    const existing_subscription_id =
+      body.existing_subscription_id != null ? String(body.existing_subscription_id).trim() : '';
     const include_credits = !!body.include_credits;
     const reason = body.reason;
 
@@ -539,6 +558,8 @@ exports.activateRevenueCatRow = async function (req, res) {
       product_id,
       provider_subscription_id,
       expires_date,
+      purchase_date,
+      existing_subscription_id: existing_subscription_id || undefined,
       include_credits,
       reason,
       granted_by_admin_id: String(req.user.userId),
