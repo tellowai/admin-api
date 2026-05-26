@@ -374,18 +374,14 @@ function resolvePaymentPlanMetaForDbSub(providerPlanRaw, planByProduct) {
 }
 
 /**
- * Users who received subscription_credit_history rows mapped to recurring subs; normalized to pp_id keys.
+ * Per-user subscription_credit_history tiers (internal `subscription_plan_id` / pp_id) derived from SCH + recurring subscription rows.
  * Unresolved SKU tokens accumulated into `missingSkuAccumulator` so caller can widen `planByProduct` (bulk resolve).
- * @returns {{
- *   planPpIdsByUser: Map<string, Set<string>>,
- *   usersWithAnySch: Set<string>
- * }}
+ * @returns {{ planPpIdsByUser: Map<string, Set<string>> }}
  */
 async function loadCreditsIssuedByUserPlan(userIds, planByProduct, missingSkuAccumulator) {
   const planPpIdsByUser = new Map();
-  const usersWithAnySch = new Set();
   const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
-  if (!ids.length) return { planPpIdsByUser, usersWithAnySch };
+  if (!ids.length) return { planPpIdsByUser };
 
   const ph = ids.map(() => '?').join(',');
   const rows = await MysqlQueryRunner.runQueryInSlave(
@@ -404,7 +400,6 @@ async function loadCreditsIssuedByUserPlan(userIds, planByProduct, missingSkuAcc
   for (const r of Array.isArray(rows) ? rows : []) {
     const uid = r.user_id != null ? String(r.user_id) : '';
     if (!uid) continue;
-    usersWithAnySch.add(uid);
     const pid = normalizePlanSku(r.provider_plan_id);
     if (!pid && r.provider_plan_id != null && extraSku) extraSku.add(String(r.provider_plan_id).trim());
 
@@ -419,24 +414,20 @@ async function loadCreditsIssuedByUserPlan(userIds, planByProduct, missingSkuAcc
     if (!planPpIdsByUser.has(uid)) planPpIdsByUser.set(uid, new Set());
     planPpIdsByUser.get(uid).add(effectivePp);
   }
-  return { planPpIdsByUser, usersWithAnySch };
+  return { planPpIdsByUser };
 }
 
 /**
- * Credits already allocated for CSV row: same payment plan (by pp_id); if no DB sub rows for plan yet,
- * any prior subscription_credit_history for the user ⇒ treat as credited (avoid double-grant).
+ * True when subscription_credit_history already exists for this CSV row's resolved tier (`subscription_plan_id` / pp_id).
+ * Else recommend granting credits with activation.
  *
- * @param {string|null|undefined} targetPpId internal pp_id
- * @param {boolean} activateMissingSubs
+ * @param {string|null|undefined} targetPpId internal pp_id from resolved payment plan row
+ * @param {Set<string>|null|undefined} creditPlanSet pp_ids that have SCH rows for this user
  * @returns {boolean}
  */
-function creditsAlreadyIssuedForCompareRow(targetPpId, creditPlanSet, userHasAnySch, activateMissingSubs) {
-  if (targetPpId != null) {
-    if (creditPlanSet && creditPlanSet.has(String(targetPpId))) return true;
-    if (activateMissingSubs && userHasAnySch) return true;
-    return false;
-  }
-  return !!userHasAnySch;
+function creditsAlreadyIssuedForCompareRow(targetPpId, creditPlanSet) {
+  if (targetPpId == null) return false;
+  return !!(creditPlanSet && creditPlanSet.has(String(targetPpId)));
 }
 
 async function loadLatestRevenueCatOrderHints(userIds) {
@@ -674,16 +665,8 @@ exports.compareRevenueCatCsv = async function (req, res) {
         cannot_activate += 1;
       }
 
-      const activateMissingSubs =
-        action_required === 'activate' && matchingSubs.length === 0 && targetPpId != null;
       const creditsPlanSet = uid ? creditsPack.planPpIdsByUser.get(String(uid)) || null : null;
-      const userAnySch = uid ? creditsPack.usersWithAnySch.has(String(uid)) : false;
-      const credits_already_issued = creditsAlreadyIssuedForCompareRow(
-        targetPpId,
-        creditsPlanSet,
-        userAnySch,
-        activateMissingSubs
-      );
+      const credits_already_issued = creditsAlreadyIssuedForCompareRow(targetPpId, creditsPlanSet);
 
       const snapshotPlanMeta =
         snapshotSub != null
