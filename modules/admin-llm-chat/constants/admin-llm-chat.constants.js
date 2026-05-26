@@ -64,6 +64,16 @@ module.exports = {
   DIGEST_CRON: process.env.ADMIN_LLM_CHAT_DIGEST_CRON || '0 8 * * *',
   DIGEST_TZ: process.env.ADMIN_LLM_CHAT_DIGEST_TZ || 'Asia/Kolkata',
   DIGEST_FALLBACK_MODEL: process.env.ADMIN_LLM_CHAT_DIGEST_FALLBACK_MODEL || 'gpt-4o',
+  DIGEST_SYSTEM_USER_ID: 'system-digest',
+  /** Section headings for daily digest output (order matters). */
+  DIGEST_OUTPUT_SECTIONS: 'TL;DR (3 bullets), Numbers, Insights, Anomalies, Suggested actions',
+  DIGEST_SUMMARY_NUDGE:
+    'Based on the tool results above, write the daily digest now. Do not call more tools. '
+    + 'Use these sections in order: **TL;DR** (3 bullets), **Numbers**, **Insights**, **Anomalies**, **Suggested actions**. '
+    + 'Business language only — no table names, schemas, or tool narration. '
+    + 'Insights: patterns, drivers, and what changed vs prior periods. Anomalies: surprises and underperformance. '
+    + 'Suggested actions only if off-track or clear levers; omit if on par/growing. '
+    + 'If blocked, say what is missing in data, not how many queries you ran.',
 
   HMAC_SECRET: process.env.ADMIN_LLM_CHAT_DIGEST_HMAC_SECRET || config.internalAuth?.digestHmacSecret || '',
   HMAC_MAX_SKEW_SEC: envInt('ADMIN_LLM_CHAT_HMAC_MAX_SKEW', 60),

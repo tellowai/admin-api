@@ -31,7 +31,7 @@ exports.runDigest = async (req, res) => {
     return res.status(HTTP.CONFLICT).json({ code: 'DIGEST_ALREADY_SENT' });
   }
 
-  const systemUserId = 'system-digest';
+  const systemUserId = CONSTANTS.DIGEST_SYSTEM_USER_ID;
   const convId = uuidv4();
   const fallbackId = CONSTANTS.DIGEST_FALLBACK_MODEL;
   const model =
@@ -52,7 +52,7 @@ exports.runDigest = async (req, res) => {
       system_prompt_version: CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION,
     });
 
-    const digestPrompt = `Produce the daily marketing intelligence digest for ${dateKey}. Compare yesterday vs trailing 7 days and 28 days for Meta Ads, Google Ads, and internal analytics. Output: TL;DR (3 bullets), Numbers, Anomalies, Suggested actions.`;
+    const digestPrompt = `Produce the daily marketing intelligence digest for ${dateKey}. Compare yesterday vs trailing 7 days and 28 days for Meta Ads, Google Ads, and internal analytics. Output: ${CONSTANTS.DIGEST_OUTPUT_SECTIONS}.`;
 
     const tokenParts = [];
     let doneContent = '';
