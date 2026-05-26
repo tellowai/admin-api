@@ -273,6 +273,45 @@ function parseExpiryToMysqlDatetime(expiresRaw) {
   return moment.utc(ms).format('YYYY-MM-DD HH:mm:ss');
 }
 
+/** Same clamp rules as {@link parseExpiryToMysqlDatetime}. */
+function parsePurchaseDateToMysqlDatetime(purchaseRaw) {
+  return parseExpiryToMysqlDatetime(purchaseRaw);
+}
+
+/**
+ * Prefer RevenueCat CSV purchase time so admin backfill does not sort as "bought today".
+ * @param {object} opts activate payload
+ * @param {string} periodEndSql
+ * @param {string} billingInterval
+ * @param {string|null} existingStartAtSql when refreshing a stale row in place
+ */
+function resolveSubscriptionStartAtSql(opts, periodEndSql, billingInterval, existingStartAtSql) {
+  const fromCsv = parsePurchaseDateToMysqlDatetime(opts && opts.purchase_date);
+  if (fromCsv) return fromCsv;
+  if (existingStartAtSql) return existingStartAtSql;
+
+  const endM = moment.utc(periodEndSql, 'YYYY-MM-DD HH:mm:ss');
+  if (!endM.isValid()) {
+    return moment.utc().format('YYYY-MM-DD HH:mm:ss');
+  }
+  const bi = billingInterval != null ? String(billingInterval).toLowerCase() : '';
+  if (bi === 'yearly') return endM.clone().subtract(1, 'year').format('YYYY-MM-DD HH:mm:ss');
+  if (bi === 'monthly') return endM.clone().subtract(1, 'month').format('YYYY-MM-DD HH:mm:ss');
+  return endM.clone().subtract(30, 'days').format('YYYY-MM-DD HH:mm:ss');
+}
+
+function mergeAdditionalDataForAdminPatch(existingRaw, patch) {
+  let base = {};
+  if (existingRaw != null && existingRaw !== '') {
+    try {
+      base = typeof existingRaw === 'string' ? JSON.parse(existingRaw) : { ...existingRaw };
+    } catch (_e) {
+      base = {};
+    }
+  }
+  return JSON.stringify({ ...base, ...patch });
+}
+
 /**
  * Latest existing RC recurring row for this user+SKU (used to tag admin activation as renewal).
  * @param {{ query: (sql: string, params?: unknown[]) => Promise<unknown> }} conn
@@ -360,10 +399,17 @@ exports.activateFromAdmin = async function (opts) {
   }
 
   const nowSql = moment().format('YYYY-MM-DD HH:mm:ss');
+  const existingSubscriptionId =
+    opts && opts.existing_subscription_id != null && String(opts.existing_subscription_id).trim() !== ''
+      ? String(opts.existing_subscription_id).trim()
+      : null;
+
+  let refreshSubscriptionId = existingSubscriptionId;
 
   const existingRows = await MysqlQueryRunner.runQueryInSlave(
     `
-    SELECT subscription_id, user_id, provider_subscription_id
+    SELECT subscription_id, user_id, provider_subscription_id, status,
+           current_period_end, renews_at, end_at, payment_type
     FROM subscriptions
     WHERE provider_subscription_id = ?
     LIMIT 1
@@ -379,14 +425,17 @@ exports.activateFromAdmin = async function (opts) {
         409
       );
     }
-    return {
-      subscription_id: row.subscription_id,
-      creditsGranted: 0,
-      idempotent: true
-    };
+    if (recurringRowIsEntitled(row)) {
+      return {
+        subscription_id: row.subscription_id,
+        creditsGranted: 0,
+        idempotent: true
+      };
+    }
+    refreshSubscriptionId = String(row.subscription_id);
   }
 
-  const subscriptionId = uuidv7();
+  let subscriptionId = uuidv7();
   const currency = plan.currency || 'INR';
   const initialCreditsTotal = Number(plan.credits || 0) + Number(plan.bonus_credits || 0);
 
@@ -397,74 +446,151 @@ exports.activateFromAdmin = async function (opts) {
   try {
     await conn.beginTransaction();
 
-    const priorRow = await loadLatestPriorRcRecurringForPlan(conn, userId, productId);
-    let mimicEvent = 'INITIAL_PURCHASE';
-    /** @type {Record<string, unknown>} */
-    const renewalMeta = {};
-    if (priorRow && priorRow.subscription_id != null) {
-      const prevId = String(priorRow.subscription_id).trim();
-      if (prevId) {
-        renewalMeta.previous_subscription_id = prevId;
-        const prevRc = renewalCountFromPriorAdditionalData(priorRow.additional_data);
-        renewalMeta.renewal_count = Math.max(1, prevRc + 1);
-        mimicEvent = 'SUBSCRIPTION_RENEWED';
+    let startAtSql = resolveSubscriptionStartAtSql(opts, periodEndSql, billingInterval, null);
+    let refreshedInPlace = false;
+
+    if (refreshSubscriptionId) {
+      const staleRows = await conn.query(
+        `
+        SELECT subscription_id, user_id, start_at, additional_data, provider_subscription_id
+        FROM subscriptions
+        WHERE subscription_id = ?
+        LIMIT 1
+      `,
+        [refreshSubscriptionId]
+      );
+      const staleRow =
+        Array.isArray(staleRows) && staleRows.length > 0 ? staleRows[0] : null;
+      if (!staleRow || String(staleRow.user_id) !== String(userId)) {
+        throw httpError('RC_ACTIVATE_STALE_SUB_NOT_FOUND', 'Existing subscription row not found for user', 404);
       }
+      subscriptionId = String(staleRow.subscription_id);
+      const existingStart =
+        staleRow.start_at != null
+          ? moment.utc(staleRow.start_at).format('YYYY-MM-DD HH:mm:ss')
+          : null;
+      startAtSql = resolveSubscriptionStartAtSql(opts, periodEndSql, billingInterval, existingStart);
+
+      const patchAdditional = mergeAdditionalDataForAdminPatch(staleRow.additional_data, {
+        admin_activation: true,
+        admin_reason: reason,
+        granted_by_admin_id: grantedByAdminId,
+        run_id: runId,
+        mimic_event: 'ADMIN_REFRESH',
+        ...(syntheticCustomerListId ? { customer_list_csv_missing_store_tx_id: true } : {}),
+        provider_notes: {
+          user_id: userId,
+          provider: 'revenuecat',
+          type: 'regular'
+        }
+      });
+
+      const effectiveTxId =
+        providerSubscriptionId &&
+        !String(providerSubscriptionId).startsWith('rc_clist_') &&
+        staleRow.provider_subscription_id !== providerSubscriptionId
+          ? providerSubscriptionId
+          : staleRow.provider_subscription_id || providerSubscriptionId;
+
+      await conn.query(
+        `
+        UPDATE subscriptions SET
+          status = 'active',
+          provider_subscription_id = ?,
+          current_period_start = ?,
+          current_period_end = ?,
+          renews_at = ?,
+          start_at = COALESCE(start_at, ?),
+          additional_data = ?,
+          updated_at = NOW()
+        WHERE subscription_id = ? AND user_id = ?
+      `,
+        [
+          effectiveTxId,
+          startAtSql,
+          periodEndSql,
+          periodEndSql,
+          startAtSql,
+          patchAdditional,
+          subscriptionId,
+          userId
+        ]
+      );
+      refreshedInPlace = true;
     }
 
-    const additionalData = JSON.stringify({
-      admin_activation: true,
-      admin_reason: reason,
-      granted_by_admin_id: grantedByAdminId,
-      run_id: runId,
-      mimic_event: mimicEvent,
-      ...renewalMeta,
-      ...(syntheticCustomerListId ? { customer_list_csv_missing_store_tx_id: true } : {}),
-      provider_notes: {
-        user_id: userId,
-        provider: 'revenuecat',
-        type: 'regular'
+    if (!refreshedInPlace) {
+      const priorRow = await loadLatestPriorRcRecurringForPlan(conn, userId, productId);
+      let mimicEvent = 'INITIAL_PURCHASE';
+      /** @type {Record<string, unknown>} */
+      const renewalMeta = {};
+      if (priorRow && priorRow.subscription_id != null) {
+        const prevId = String(priorRow.subscription_id).trim();
+        if (prevId) {
+          renewalMeta.previous_subscription_id = prevId;
+          const prevRc = renewalCountFromPriorAdditionalData(priorRow.additional_data);
+          renewalMeta.renewal_count = Math.max(1, prevRc + 1);
+          mimicEvent = 'SUBSCRIPTION_RENEWED';
+        }
       }
-    });
 
-    await conn.query(
-      `
-      INSERT INTO subscriptions (
-        subscription_id,
-        user_id,
-        provider,
-        payment_type,
-        currency,
-        provider_subscription_id,
-        provider_plan_id,
-        status,
-        total_count,
-        start_at,
-        end_at,
-        current_period_start,
-        current_period_end,
-        renews_at,
-        additional_data,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NOW(), NOW())
-    `,
-      [
-        subscriptionId,
-        userId,
-        'revenuecat',
-        'recurring',
-        currency,
-        providerSubscriptionId,
-        productId,
-        'active',
-        999,
-        nowSql,
-        nowSql,
-        periodEndSql,
-        periodEndSql,
-        additionalData
-      ]
-    );
+      startAtSql = resolveSubscriptionStartAtSql(opts, periodEndSql, billingInterval, null);
+
+      const additionalData = JSON.stringify({
+        admin_activation: true,
+        admin_reason: reason,
+        granted_by_admin_id: grantedByAdminId,
+        run_id: runId,
+        mimic_event: mimicEvent,
+        ...renewalMeta,
+        ...(syntheticCustomerListId ? { customer_list_csv_missing_store_tx_id: true } : {}),
+        provider_notes: {
+          user_id: userId,
+          provider: 'revenuecat',
+          type: 'regular'
+        }
+      });
+
+      await conn.query(
+        `
+        INSERT INTO subscriptions (
+          subscription_id,
+          user_id,
+          provider,
+          payment_type,
+          currency,
+          provider_subscription_id,
+          provider_plan_id,
+          status,
+          total_count,
+          start_at,
+          end_at,
+          current_period_start,
+          current_period_end,
+          renews_at,
+          additional_data,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NOW(), NOW())
+      `,
+        [
+          subscriptionId,
+          userId,
+          'revenuecat',
+          'recurring',
+          currency,
+          providerSubscriptionId,
+          productId,
+          'active',
+          999,
+          startAtSql,
+          startAtSql,
+          periodEndSql,
+          periodEndSql,
+          additionalData
+        ]
+      );
+    }
 
     const creditExtras = {
       reason: 'admin_revenuecat_activation',
@@ -492,8 +618,8 @@ exports.activateFromAdmin = async function (opts) {
           subscriptionId,
           initialCreditsTotal,
           JSON.stringify(creditExtras),
-          nowSql,
-          nowSql
+          startAtSql,
+          startAtSql
         ]
       );
 
@@ -583,6 +709,7 @@ exports.activateFromAdmin = async function (opts) {
       subscription_id: subscriptionId,
       creditsGranted,
       idempotent: false,
+      refreshed_in_place: refreshedInPlace,
       plan: {
         subscription_plan_id: plan.subscription_plan_id,
         subscription_name: plan.subscription_name,
