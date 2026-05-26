@@ -207,6 +207,59 @@ class TimezoneService {
     return s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
   }
 
+  /**
+   * Calendar YYYY-MM-DD for admin range pickers. Prefer the date portion of ISO strings (before Joi → Date),
+   * so `2026-05-26T23:59:59.999` stays May 26 in every timezone.
+   *
+   * @param {string|Date} input
+   * @param {string} [tzRaw] IANA — used only when `input` is a `Date` (fallback)
+   * @returns {string}
+   */
+  static toCalendarYmdInTz(input, tzRaw) {
+    if (input == null || input === '') return '';
+    if (typeof input === 'string') {
+      const s = input.trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      if (s.includes('T')) return s.split('T')[0];
+      return (s.split(' ')[0] || s).slice(0, 10);
+    }
+    if (input instanceof Date && !Number.isNaN(input.getTime())) {
+      const z = moment.tz.zone(this.normalizeTimezoneAlias(tzRaw)) != null
+        ? this.normalizeTimezoneAlias(tzRaw)
+        : 'UTC';
+      return moment(input).tz(z).format('YYYY-MM-DD');
+    }
+    return '';
+  }
+
+  /**
+   * One row per inclusive calendar day in [startYmd, endYmd] with UTC bounds for overlap queries.
+   *
+   * @param {string} startYmd
+   * @param {string} endYmd
+   * @param {string} tzRaw
+   * @returns {{ date: string, dayStartUtc: string, dayEndUtc: string }[]}
+   */
+  static calendarDaysWithUtcBounds(startYmd, endYmd, tzRaw) {
+    const z = moment.tz.zone(this.normalizeTimezoneAlias(tzRaw)) != null
+      ? this.normalizeTimezoneAlias(tzRaw)
+      : 'UTC';
+    const out = [];
+    for (
+      let cursor = moment.tz(startYmd, z).startOf('day');
+      !cursor.isAfter(moment.tz(endYmd, z).startOf('day'));
+      cursor = cursor.clone().add(1, 'day')
+    ) {
+      const date = cursor.format('YYYY-MM-DD');
+      out.push({
+        date,
+        dayStartUtc: moment.tz(`${date} 00:00:00.000`, z).utc().format('YYYY-MM-DD HH:mm:ss.SSS'),
+        dayEndUtc: moment.tz(`${date} 23:59:59.999`, z).utc().format('YYYY-MM-DD HH:mm:ss.SSS')
+      });
+    }
+    return out;
+  }
+
   /** IANA normalisation (e.g. Asia/Calcutta → Asia/Kolkata; matches orders SQL expectations). */
   static normalizeTimezoneAlias(tz) {
     const ALIASES = { 'Asia/Calcutta': 'Asia/Kolkata' };

@@ -169,28 +169,8 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
   });
 }
 
-/**
- * Calendar YYYY-MM-DD for analytics ranges. Uses client `tz` when Joi coerces ISO strings to `Date`,
- * so the picked day stays correct regardless of Node’s default timezone.
- */
 function toCalendarDate(d, clientTz) {
-  if (d == null || d === '') return '';
-
-  const tz =
-    clientTz &&
-    String(clientTz).trim() &&
-    TimezoneService.isValidTimezone(String(clientTz).trim())
-      ? normalizeMysqlTimezone(String(clientTz).trim())
-      : normalizeMysqlTimezone(TimezoneService.getDefaultTimezone());
-
-  if (d instanceof Date) {
-    return moment.tz(d, tz).format('YYYY-MM-DD');
-  }
-
-  const s = String(d).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  if (s.includes('T')) return s.split('T')[0];
-  return (s.split(' ')[0] || s).slice(0, 10);
+  return TimezoneService.toCalendarYmdInTz(d, clientTz);
 }
 
 /** IANA aliases; MySQL time_zone tables often expect Asia/Kolkata. */
