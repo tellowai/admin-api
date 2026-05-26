@@ -240,43 +240,41 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * For each calendar day in the supplied list, count **users** whose latest
-   * recurring subscription (as of that instant) was entitled — same rules as
-   * {@link countRecurringEntitledAt} but computes all snapshots in one query.
-   * Same-day plan upgrades only: `notes.type = 'upgrade'` and `notes.active_subscription_id` points to
-   * a row whose start shares the **same UTC calendar date** as this row's start — excluded from the candidate set.
+   * For each calendar day, count **users** whose latest recurring subscription **overlapped that day**
+   * in the client timezone (start ≤ day end, period end &gt; day start or open-ended), with the same
+   * status rules as {@link countRecurringEntitledAt}.
    *
-   * @param {{ date: string, asOfUtc: string }[]} days
-   *   `date` is the calendar day in the client tz (YYYY-MM-DD), `asOfUtc` is
-   *   that day's last-second timestamp converted to UTC (`YYYY-MM-DD HH:mm:ss[.SSS]`).
+   * @param {{ date: string, dayStartUtc: string, dayEndUtc: string }[]} days
    * @returns {Promise<{ date: string, count: number }[]>}
-   *   Same length and order as input `days`. Empty array if `days` is empty.
    */
   static async countRecurringEntitledDaily(days) {
     if (!Array.isArray(days) || days.length === 0) return [];
 
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
-    const dayUnion = days.map(() => 'SELECT ? AS day_utc').join(' UNION ALL ');
+    const dayUnion = days
+      .map(() => 'SELECT ? AS day_key, ? AS day_start_utc, ? AS day_end_utc')
+      .join(' UNION ALL ');
 
     const query = `
       WITH days AS (
         ${dayUnion}
       ),
       ranked AS (
-        SELECT d.day_utc,
+        SELECT d.day_key,
+          d.day_start_utc,
           s.*,
           ROW_NUMBER() OVER (
-            PARTITION BY d.day_utc, s.user_id
+            PARTITION BY d.day_key, s.user_id
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM days d
         INNER JOIN subscriptions s
           ON s.payment_type = 'recurring'
-          AND COALESCE(s.start_at, s.created_at) <= d.day_utc
+          AND COALESCE(s.start_at, s.created_at) <= d.day_end_utc
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
       ),
       entitled_latest AS (
-        SELECT r.day_utc, r.subscription_id
+        SELECT r.day_key, r.subscription_id
         FROM ranked r
         WHERE r.rn = 1
           AND (
@@ -284,32 +282,32 @@ class SubscriptionsAnalyticsModel {
               r.status IN (${aliveCsv})
               AND (
                 COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
+                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
               )
             )
             OR (
               r.status = 'cancelled'
               AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
+              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
             )
           )
       )
-      SELECT d.day_utc, COUNT(e.subscription_id) AS cnt
+      SELECT d.day_key, COUNT(e.subscription_id) AS cnt
       FROM days d
-      LEFT JOIN entitled_latest e ON e.day_utc = d.day_utc
-      GROUP BY d.day_utc
+      LEFT JOIN entitled_latest e ON e.day_key = d.day_key
+      GROUP BY d.day_key
     `;
 
-    const params = days.map((d) => d.asOfUtc);
+    const params = days.flatMap((d) => [d.date, d.dayStartUtc, d.dayEndUtc]);
     const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
 
-    const byAsOfUtc = new Map();
+    const byDayKey = new Map();
     for (const r of rows || []) {
-      byAsOfUtc.set(String(r.day_utc), Number(r.cnt) || 0);
+      byDayKey.set(String(r.day_key), Number(r.cnt) || 0);
     }
     return days.map((d) => ({
       date: d.date,
-      count: byAsOfUtc.get(d.asOfUtc) || 0
+      count: byDayKey.get(d.date) || 0
     }));
   }
 
