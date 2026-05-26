@@ -165,6 +165,87 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
+   * Per-user entitled snapshot at `asOfUtcDatetime` — same rules as {@link countRecurringEntitledAt}.
+   * Returns only users whose latest recurring row (by `start_at`) is entitled at that instant.
+   *
+   * @param {string[]} userIds
+   * @param {string} asOfUtcDatetime `YYYY-MM-DD HH:mm:ss[.SSS]` UTC
+   * @returns {Promise<Map<string, object>>} user_id → subscription row
+   */
+  static async loadEntitledSnapshotSubsByUserIds(userIds, asOfUtcDatetime) {
+    const out = new Map();
+    const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+    if (!ids.length) return out;
+
+    const ph = ids.map(() => '?').join(',');
+    const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
+    const query = `
+      WITH ranked AS (
+        SELECT s.subscription_id,
+               s.user_id,
+               s.provider_plan_id,
+               s.status,
+               s.provider_subscription_id,
+               s.start_at,
+               s.current_period_end,
+               s.renews_at,
+               s.end_at,
+               s.created_at,
+               s.payment_type,
+               s.provider,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.user_id
+            ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
+          ) AS rn
+        FROM subscriptions s
+        WHERE s.payment_type = 'recurring'
+          AND s.user_id IN (${ph})
+          ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
+          AND COALESCE(s.start_at, s.created_at) <= ?
+      )
+      SELECT subscription_id,
+             user_id,
+             provider_plan_id,
+             status,
+             provider_subscription_id,
+             start_at,
+             current_period_end,
+             renews_at,
+             end_at,
+             created_at,
+             payment_type,
+             provider
+      FROM ranked r
+      WHERE r.rn = 1
+        AND (
+          (
+            r.status IN (${aliveCsv})
+            AND (
+              COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
+              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+            )
+          )
+          OR (
+            r.status = 'cancelled'
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+          )
+        )
+    `;
+
+    const rows = await MysqlQueryRunner.runQueryInSlave(query, [
+      ...ids,
+      asOfUtcDatetime,
+      asOfUtcDatetime,
+      asOfUtcDatetime
+    ]);
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (r.user_id != null) out.set(String(r.user_id), r);
+    }
+    return out;
+  }
+
+  /**
    * For each calendar day in the supplied list, count **users** whose latest
    * recurring subscription (as of that instant) was entitled — same rules as
    * {@link countRecurringEntitledAt} but computes all snapshots in one query.
