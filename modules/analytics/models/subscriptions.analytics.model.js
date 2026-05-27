@@ -169,12 +169,16 @@ class SubscriptionsAnalyticsModel {
    * {@link countRecurringEntitledAt}.
    *
    * @param {string[]} userIds
+   * @param {{ useMaster?: boolean }} [options] read primary after admin writes (avoid replica lag)
    * @returns {Promise<Map<string, object>>} user_id → subscription row
    */
-  static async loadEntitledSnapshotSubsByUserIds(userIds) {
+  static async loadEntitledSnapshotSubsByUserIds(userIds, options = {}) {
     const out = new Map();
     const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
     if (!ids.length) return out;
+
+    const runQuery =
+      options.useMaster === true ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
 
     const ph = ids.map(() => '?').join(',');
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
@@ -232,7 +236,7 @@ class SubscriptionsAnalyticsModel {
         )
     `;
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(query, [...ids]);
+    const rows = await runQuery(query, [...ids]);
     for (const r of Array.isArray(rows) ? rows : []) {
       if (r.user_id != null) out.set(String(r.user_id), r);
     }
