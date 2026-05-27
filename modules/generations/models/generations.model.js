@@ -16,21 +16,21 @@ function formatDateForMySQL(date) {
 }
 
 /**
- * Fetch generations with date filtering and pagination
- * @param {Date|string} startDate 
- * @param {Date|string} endDate 
- * @param {number} page 
- * @param {number} limit 
- * @param {object} filters { template_id, job_status, user_id }
+ * Fetch generations with optional date filtering and pagination.
+ * @param {Date|string|null} startDate
+ * @param {Date|string|null} endDate
+ * @param {number} page
+ * @param {number} limit
+ * @param {object} filters { template_id, job_status, user_id, allTime }
  * @returns {Promise<Array>}
  */
 exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20, filters = {}) {
   const offset = (page - 1) * limit;
+  const allTime = !!filters.allTime;
 
-  const startFormatted = formatDateForMySQL(startDate);
-  let endFormatted = formatDateForMySQL(endDate);
-
-  if (!endFormatted) {
+  const startFormatted = allTime ? null : formatDateForMySQL(startDate);
+  let endFormatted = allTime ? null : formatDateForMySQL(endDate);
+  if (!allTime && !endFormatted) {
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
 
@@ -41,7 +41,11 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
       endDate,
       limit,
       offset,
-      { template_id: filters.template_id || null, user_id: filters.user_id || null }
+      {
+        template_id: filters.template_id || null,
+        user_id: filters.user_id || null,
+        allTime
+      }
     );
     const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
     if (!orderedIds.length) return [];
@@ -49,8 +53,8 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
       filters.job_status === 'in_progress' ? undefined : filters.job_status;
     let rows = await exports.mergeGenerationRowsForIds(orderedIds, {
       job_status: mergeJobStatus,
-      eventStartFormatted: startFormatted,
-      eventEndFormatted: endFormatted
+      eventStartFormatted: allTime ? undefined : startFormatted,
+      eventEndFormatted: allTime ? undefined : endFormatted
     });
     if (filters.job_status === 'in_progress') {
       rows = rows.filter((r) => r.job_status === 'processing' || r.job_status === 'queued');
@@ -60,10 +64,11 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
 
   /** Terminal-only: Success / Failed filters keep pure ClickHouse behavior. */
   if (filters.job_status === 'completed' || filters.job_status === 'failed') {
-    let conditions = [
-      `created_at >= '${startFormatted}'`,
-      `created_at <= '${endFormatted}'`
-    ];
+    const conditions = [];
+    if (!allTime) {
+      conditions.push(`created_at >= '${startFormatted}'`);
+      conditions.push(`created_at <= '${endFormatted}'`);
+    }
     if (filters.job_status === 'completed') {
       conditions.push(`event_type = 'COMPLETED'`);
     } else {
@@ -88,7 +93,7 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
 
   /** In-progress only: MySQL queue rows in date range. */
   if (filters.job_status === 'in_progress') {
-    return exports.listMysqlInProgressGenerationsByDateRange(startDate, endDate, page, limit);
+    return exports.listMysqlInProgressGenerationsByDateRange(startDate, endDate, page, limit, { allTime });
   }
 
   /** All statuses: merge terminal events + in-progress rows by activity time (newest first). */
@@ -96,7 +101,8 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     startFormatted,
     endFormatted,
     page,
-    limit
+    limit,
+    { allTime }
   );
 };
 
@@ -107,13 +113,14 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
  * @param {number} page1-based
  * @param {number} limit
  */
-exports.fetchChTerminalEventsPage = async function (startFormatted, endFormatted, page, limit) {
+exports.fetchChTerminalEventsPage = async function (startFormatted, endFormatted, page, limit, options = {}) {
   const offset = (page - 1) * limit;
-  const conditions = [
-    `created_at >= '${startFormatted}'`,
-    `created_at <= '${endFormatted}'`,
-    `event_type IN ('COMPLETED', 'FAILED')`
-  ];
+  const conditions = [];
+  if (!options.allTime) {
+    conditions.push(`created_at >= '${startFormatted}'`);
+    conditions.push(`created_at <= '${endFormatted}'`);
+  }
+  conditions.push(`event_type IN ('COMPLETED', 'FAILED')`);
   const query = `
     SELECT 
       resource_generation_id AS media_generation_id,
@@ -134,15 +141,20 @@ exports.fetchChTerminalEventsPage = async function (startFormatted, endFormatted
 /**
  * In-flight generations from MySQL (submitted / in_progress) in activity date range.
  */
-exports.listMysqlInProgressGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20) {
+exports.listMysqlInProgressGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20, options = {}) {
   const offset = (page - 1) * limit;
-  const startDb = formatDateForMySQL(startDate);
-  let endDb = formatDateForMySQL(endDate);
-  if (!endDb) {
+  const allTime = !!options.allTime;
+  const startDb = allTime ? null : formatDateForMySQL(startDate);
+  let endDb = allTime ? null : formatDateForMySQL(endDate);
+  if (!allTime && !endDb) {
     endDb = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
   const lim = parseInt(limit, 10);
   const off = parseInt(offset, 10);
+  const dateClause = allTime
+    ? ''
+    : 'AND COALESCE(submitted_at, created_at) >= ? AND COALESCE(submitted_at, created_at) <= ?';
+  const params = allTime ? [] : [startDb, endDb];
   const query = `
     SELECT 
       media_generation_id,
@@ -154,12 +166,11 @@ exports.listMysqlInProgressGenerationsByDateRange = async function (startDate, e
       COALESCE(submitted_at, created_at) AS activity_at
     FROM media_generations
     WHERE job_status IN ('submitted', 'in_progress')
-      AND COALESCE(submitted_at, created_at) >= ?
-      AND COALESCE(submitted_at, created_at) <= ?
+      ${dateClause}
     ORDER BY COALESCE(submitted_at, created_at) DESC, media_generation_id ASC
     LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
   `;
-  const rows = await mysqlQueryRunner.runQueryInSlave(query, [startDb, endDb]);
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, params);
   return rows.map((mg) => ({
     media_generation_id: mg.media_generation_id,
     job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
@@ -180,17 +191,20 @@ function rowActivityTimeMs(row) {
 /**
  * Merge first (offset+limit) terminal + in-progress rows from each source, sort DESC, return one page.
  */
-exports.getMergedTerminalAndInProgressPage = async function (startFormatted, endFormatted, page, limit) {
+exports.getMergedTerminalAndInProgressPage = async function (startFormatted, endFormatted, page, limit, options = {}) {
   const offset = (page - 1) * limit;
   const fetchCount = offset + limit;
   /** Need up to fetchCount from each source so merged slice is correct; cap for safety on admin-only API. */
   const safeFetch = Math.min(Math.max(fetchCount, limit), 5000);
+  const allTime = !!options.allTime;
 
   const [terminalRows, inProgressMysql] = await Promise.all([
-    exports.fetchChTerminalEventsPage(startFormatted, endFormatted, 1, safeFetch),
+    exports.fetchChTerminalEventsPage(startFormatted, endFormatted, 1, safeFetch, { allTime }),
     (async () => {
-      const startDb = startFormatted;
-      const endDb = endFormatted;
+      const dateClause = allTime
+        ? ''
+        : 'AND COALESCE(submitted_at, created_at) >= ? AND COALESCE(submitted_at, created_at) <= ?';
+      const params = allTime ? [] : [startFormatted, endFormatted];
       const q = `
         SELECT 
           media_generation_id,
@@ -202,12 +216,11 @@ exports.getMergedTerminalAndInProgressPage = async function (startFormatted, end
           COALESCE(submitted_at, created_at) AS activity_at
         FROM media_generations
         WHERE job_status IN ('submitted', 'in_progress')
-          AND COALESCE(submitted_at, created_at) >= ?
-          AND COALESCE(submitted_at, created_at) <= ?
+          ${dateClause}
         ORDER BY COALESCE(submitted_at, created_at) DESC, media_generation_id ASC
         LIMIT ${safeFetch} OFFSET 0
       `;
-      const rows = await mysqlQueryRunner.runQueryInSlave(q, [startDb, endDb]);
+      const rows = await mysqlQueryRunner.runQueryInSlave(q, params);
       return rows.map((mg) => ({
         media_generation_id: mg.media_generation_id,
         job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
@@ -326,16 +339,18 @@ exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
   const userId = filters.user_id || null;
   if (!templateId && !userId) return [];
 
-  const startFormatted = formatDateForMySQL(startDate);
-  let endFormatted = formatDateForMySQL(endDate);
-  if (!endFormatted) {
+  const allTime = !!filters.allTime;
+  const startFormatted = allTime ? null : formatDateForMySQL(startDate);
+  let endFormatted = allTime ? null : formatDateForMySQL(endDate);
+  if (!allTime && !endFormatted) {
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
 
-  const conditions = [
-    `created_at >= '${startFormatted}'`,
-    `created_at <= '${endFormatted}'`
-  ];
+  const conditions = [];
+  if (!allTime) {
+    conditions.push(`created_at >= '${startFormatted}'`);
+    conditions.push(`created_at <= '${endFormatted}'`);
+  }
   if (templateId) conditions.push(`template_id = ${chStringLiteral(templateId)}`);
   if (userId) conditions.push(`user_id = ${chStringLiteral(userId)}`);
 
