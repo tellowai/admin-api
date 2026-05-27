@@ -77,27 +77,28 @@ exports.batchGenerationStatus = async function (req, res) {
 
 exports.listGenerations = async function (req, res) {
   try {
-    const { start_date, end_date, tz } = req.query;
+    const { start_date, end_date, tz, all_time } = req.query;
     const timezone = tz || TimezoneService.getDefaultTimezone();
+    const allTime = all_time === 'true' || all_time === '1';
 
-    let startDate, endDate;
+    let startDate = null;
+    let endDate = null;
 
-    // Default to today if no dates provided
-    if (!start_date || !end_date) {
-      startDate = moment().startOf('day').toDate();
-      endDate = moment().endOf('day').toDate();
-    } else {
-      // Interpret start_date/end_date in client timezone and convert to UTC for query (same as analytics)
-      const utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
-      startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
-      endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
-    }
+    if (!allTime) {
+      if (!start_date || !end_date) {
+        startDate = moment().startOf('day').toDate();
+        endDate = moment().endOf('day').toDate();
+      } else {
+        const utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
+        startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
+        endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
+      }
 
-    // Fallback security on startDate being after endDate
-    if (moment(startDate).isAfter(moment(endDate))) {
-      return res.status(400).send({
-        message: 'Start date cannot be after end date.'
-      });
+      if (moment(startDate).isAfter(moment(endDate))) {
+        return res.status(400).send({
+          message: 'Start date cannot be after end date.'
+        });
+      }
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -107,6 +108,11 @@ exports.listGenerations = async function (req, res) {
     if (photo_booth_id && !BOOTH_UUID_RE.test(photo_booth_id)) {
       return res.status(400).send({
         message: 'Invalid photo_booth_id'
+      });
+    }
+    if (allTime && photo_booth_id) {
+      return res.status(400).send({
+        message: 'all_time is not supported with photo_booth_id'
       });
     }
 
@@ -130,7 +136,8 @@ exports.listGenerations = async function (req, res) {
       generations = await generationsModel.getGenerationsByDateRange(startDate, endDate, page, PER_PAGE, {
         template_id,
         job_status,
-        user_id: user_id || undefined
+        user_id: user_id || undefined,
+        allTime
       });
     }
 
