@@ -1827,9 +1827,12 @@ class AnalyticsController {
 
   /**
    * GET /analytics/subscriptions/active-daily — daily snapshot count of **users**
-   * whose latest recurring row (as of end-of-day) was entitled, at the END of
-   * each calendar day in the picked range (in the client timezone). One row per
+   * whose latest recurring row overlapped each calendar day in the picked range
+   * (in the client timezone; entitled at any point that day, not only at 23:59:59). One row per
    * day, 0-filled for empty days.
+   *
+   * This already includes subscribers who **started before** the range but were still entitled on days
+   * inside the picker (conceptually aligned with the User subscriptions overlap filter; different metric — users vs rows/events).
    *
    * Same-day plan upgrades only (`notes.type = 'upgrade'` with `notes.active_subscription_id`
    * whose start shares the **same UTC calendar date** as this row) are excluded from the candidate set —
@@ -1845,25 +1848,12 @@ class AnalyticsController {
       }
       const tz = tzRaw;
 
-      // Joi gives us `Date` objects; pull the calendar Y-M-D in the client tz.
-      const startCal = moment.tz(queryParams.start_date, tz).format('YYYY-MM-DD');
-      const endCal = moment.tz(queryParams.end_date, tz).format('YYYY-MM-DD');
+      const startCal = TimezoneService.toCalendarYmdInTz(queryParams.start_date, tz);
+      const endCal = TimezoneService.toCalendarYmdInTz(queryParams.end_date, tz);
 
-      // Build one entry per calendar day in [startCal, endCal] with that day's
-      // last-instant in the client tz, converted to UTC for the SQL `as-of`.
-      const days = [];
-      for (
-        let cursor = moment.tz(startCal, tz).startOf('day');
-        !cursor.isAfter(moment.tz(endCal, tz).startOf('day'));
-        cursor = cursor.clone().add(1, 'day')
-      ) {
-        const dateYmd = cursor.format('YYYY-MM-DD');
-        const asOfUtc = moment
-          .tz(`${dateYmd} 23:59:59.999`, tz)
-          .utc()
-          .format('YYYY-MM-DD HH:mm:ss.SSS');
-        days.push({ date: dateYmd, asOfUtc });
-      }
+      // Entitled on a calendar day if the subscription window overlaps that whole day in `tz`
+      // (not only at 23:59:59.999 — so e.g. period end May 26 23:27 still counts on May 26).
+      const days = TimezoneService.calendarDaysWithUtcBounds(startCal, endCal, tz);
 
       const daily = await SubscriptionsAnalyticsModel.countRecurringEntitledDaily(days);
 

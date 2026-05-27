@@ -165,43 +165,120 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * For each calendar day in the supplied list, count **users** whose latest
-   * recurring subscription (as of that instant) was entitled — same rules as
-   * {@link countRecurringEntitledAt} but computes all snapshots in one query.
-   * Same-day plan upgrades only: `notes.type = 'upgrade'` and `notes.active_subscription_id` points to
-   * a row whose start shares the **same UTC calendar date** as this row's start — excluded from the candidate set.
+   * Per-user entitled snapshot at **UTC now** (MySQL UTC_TIMESTAMP()) — same rules as
+   * {@link countRecurringEntitledAt}.
    *
-   * @param {{ date: string, asOfUtc: string }[]} days
-   *   `date` is the calendar day in the client tz (YYYY-MM-DD), `asOfUtc` is
-   *   that day's last-second timestamp converted to UTC (`YYYY-MM-DD HH:mm:ss[.SSS]`).
+   * @param {string[]} userIds
+   * @param {{ useMaster?: boolean }} [options] read primary after admin writes (avoid replica lag)
+   * @returns {Promise<Map<string, object>>} user_id → subscription row
+   */
+  static async loadEntitledSnapshotSubsByUserIds(userIds, options = {}) {
+    const out = new Map();
+    const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
+    if (!ids.length) return out;
+
+    const runQuery =
+      options.useMaster === true ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+
+    const ph = ids.map(() => '?').join(',');
+    const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
+    const query = `
+      WITH ranked AS (
+        SELECT s.subscription_id,
+               s.user_id,
+               s.provider_plan_id,
+               s.status,
+               s.provider_subscription_id,
+               s.start_at,
+               s.current_period_end,
+               s.renews_at,
+               s.end_at,
+               s.created_at,
+               s.payment_type,
+               s.provider,
+          ROW_NUMBER() OVER (
+            PARTITION BY s.user_id
+            ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
+          ) AS rn
+        FROM subscriptions s
+        WHERE s.payment_type = 'recurring'
+          AND s.user_id IN (${ph})
+          ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
+          AND COALESCE(s.start_at, s.created_at) <= UTC_TIMESTAMP()
+      )
+      SELECT subscription_id,
+             user_id,
+             provider_plan_id,
+             status,
+             provider_subscription_id,
+             start_at,
+             current_period_end,
+             renews_at,
+             end_at,
+             created_at,
+             payment_type,
+             provider
+      FROM ranked r
+      WHERE r.rn = 1
+        AND (
+          (
+            r.status IN (${aliveCsv})
+            AND (
+              COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
+              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
+            )
+          )
+          OR (
+            r.status = 'cancelled'
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
+            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
+          )
+        )
+    `;
+
+    const rows = await runQuery(query, [...ids]);
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (r.user_id != null) out.set(String(r.user_id), r);
+    }
+    return out;
+  }
+
+  /**
+   * For each calendar day, count **users** whose latest recurring subscription **overlapped that day**
+   * in the client timezone (start ≤ day end, period end &gt; day start or open-ended), with the same
+   * status rules as {@link countRecurringEntitledAt}.
+   *
+   * @param {{ date: string, dayStartUtc: string, dayEndUtc: string }[]} days
    * @returns {Promise<{ date: string, count: number }[]>}
-   *   Same length and order as input `days`. Empty array if `days` is empty.
    */
   static async countRecurringEntitledDaily(days) {
     if (!Array.isArray(days) || days.length === 0) return [];
 
     const aliveCsv = ALIVE_STATUSES.map((s) => `'${s}'`).join(', ');
-    const dayUnion = days.map(() => 'SELECT ? AS day_utc').join(' UNION ALL ');
+    const dayUnion = days
+      .map(() => 'SELECT ? AS day_key, ? AS day_start_utc, ? AS day_end_utc')
+      .join(' UNION ALL ');
 
     const query = `
       WITH days AS (
         ${dayUnion}
       ),
       ranked AS (
-        SELECT d.day_utc,
+        SELECT d.day_key,
+          d.day_start_utc,
           s.*,
           ROW_NUMBER() OVER (
-            PARTITION BY d.day_utc, s.user_id
+            PARTITION BY d.day_key, s.user_id
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM days d
         INNER JOIN subscriptions s
           ON s.payment_type = 'recurring'
-          AND COALESCE(s.start_at, s.created_at) <= d.day_utc
+          AND COALESCE(s.start_at, s.created_at) <= d.day_end_utc
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
       ),
       entitled_latest AS (
-        SELECT r.day_utc, r.subscription_id
+        SELECT r.day_key, r.subscription_id
         FROM ranked r
         WHERE r.rn = 1
           AND (
@@ -209,37 +286,38 @@ class SubscriptionsAnalyticsModel {
               r.status IN (${aliveCsv})
               AND (
                 COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
+                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
               )
             )
             OR (
               r.status = 'cancelled'
               AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_utc
+              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
             )
           )
       )
-      SELECT d.day_utc, COUNT(e.subscription_id) AS cnt
+      SELECT d.day_key, COUNT(e.subscription_id) AS cnt
       FROM days d
-      LEFT JOIN entitled_latest e ON e.day_utc = d.day_utc
-      GROUP BY d.day_utc
+      LEFT JOIN entitled_latest e ON e.day_key = d.day_key
+      GROUP BY d.day_key
     `;
 
-    const params = days.map((d) => d.asOfUtc);
+    const params = days.flatMap((d) => [d.date, d.dayStartUtc, d.dayEndUtc]);
     const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
 
-    const byAsOfUtc = new Map();
+    const byDayKey = new Map();
     for (const r of rows || []) {
-      byAsOfUtc.set(String(r.day_utc), Number(r.cnt) || 0);
+      byDayKey.set(String(r.day_key), Number(r.cnt) || 0);
     }
     return days.map((d) => ({
       date: d.date,
-      count: byAsOfUtc.get(d.asOfUtc) || 0
+      count: byDayKey.get(d.date) || 0
     }));
   }
 
   /**
    * UTC bounds for calendar days in a client tz (same semantics as orders analytics).
+   * Inclusive whole days: local `YYYY-MM-DD 00:00:00.000` through `YYYY-MM-DD 23:59:59.999`.
    * @param {string} startCal YYYY-MM-DD
    * @param {string} endCal YYYY-MM-DD
    * @param {string} tz IANA
@@ -252,7 +330,11 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Daily breakdown of recurring subscription events (initial purchases + renewals) in [startCal, endCal].
+   * Daily breakdown of recurring subscription events (initial purchases + renewals) for rows whose
+   * **entitlement window overlaps** [startCal, endCal] in `tz` (same overlap rule as {@link listUserSubscriptionsForAdminRange}).
+   *
+   * Each row is still **bucketed by its purchase/start calendar day** in `tz` (duplicate rows omitted from the picker’s
+   * range naturally drop once buckets are clipped to `[startCal, endCal]`).
    *
    * Renewals are detected via `additional_data.previous_subscription_id` or
    * `additional_data.renewal_count > 0` (matches how `subscription.service.js` writes renewal rows).
@@ -273,7 +355,7 @@ class SubscriptionsAnalyticsModel {
     const { startCal, endCal, tz } = opts;
     const { rangeStartUtc, rangeEndUtc } = SubscriptionsAnalyticsModel.utcRangeForCalendarDays(startCal, endCal, tz);
 
-    // Pull each recurring subscription row whose start falls in the window.
+    // Pull recurring rows overlapping whole-day UTC bounds — same predicates as {@link listUserSubscriptionsForAdminRange}.
     // Bucketing into local-tz calendar days happens in Node so we don't depend on MySQL named-tz tables.
     const query = `
       SELECT
@@ -296,11 +378,14 @@ class SubscriptionsAnalyticsModel {
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
       WHERE s.payment_type = 'recurring'
-        AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
+        AND (
+          COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
+          OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
+        )
     `;
 
-    const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeStartUtc, rangeEndUtc]);
+    const rows = await MysqlQueryRunner.runQueryInSlave(query, [rangeEndUtc, rangeStartUtc]);
 
     const prevIds = new Set();
     for (const r of rows || []) {
@@ -370,6 +455,7 @@ class SubscriptionsAnalyticsModel {
     }
 
     const daily = Array.from(buckets.entries())
+      .filter(([date]) => date >= startCal && date <= endCal)
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, v]) => ({
         date,
@@ -455,9 +541,11 @@ class SubscriptionsAnalyticsModel {
   }
 
   /**
-   * Admin Purchases tab: subscriptions whose purchase/start instant falls in the UTC window
-   * derived from [startCal, endCal] in `tz`, with optional filters and pagination.
-   * One row per `subscriptions` row in range (renewals appear as separate rows).
+   * Admin Purchases tab: subscriptions that **overlap** the calendar range [startCal, endCal] in `tz`.
+   * Bounds are whole days: first day 00:00:00 through last day 23:59:59.999 (see {@link utcRangeForCalendarDays}).
+   * A row is included when purchase/start is on or before the range end and paid-through (period end) is
+   * on or after the range start, or period end is missing (treated as open-ended for overlap).
+   * One row per matching `subscriptions` row (renewals appear as separate rows).
    *
    * @param {Object} opts
    * @param {string} opts.startCal YYYY-MM-DD
@@ -523,7 +611,7 @@ class SubscriptionsAnalyticsModel {
     const rawSt = subscriptionDisplayStatus != null ? String(subscriptionDisplayStatus).trim().toLowerCase() : '';
     const statusClause = rawSt ? { sql: ' AND t._display_status = ? ', params: [rawSt] } : { sql: '', params: [] };
 
-    const innerParams = [rangeStartUtc, rangeEndUtc, ...planClause.params];
+    const innerParams = [rangeEndUtc, rangeStartUtc, ...planClause.params];
 
     const baseRowsSelect = `
       SELECT
@@ -573,8 +661,11 @@ class SubscriptionsAnalyticsModel {
       FROM subscriptions s
       INNER JOIN user u ON u.user_id = s.user_id
       WHERE (u.DELETED_AT IS NULL)
-        AND COALESCE(s.start_at, s.created_at) >= ?
         AND COALESCE(s.start_at, s.created_at) <= ?
+        AND (
+          COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
+          OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
+        )
         ${planClause.sql}
     `;
 

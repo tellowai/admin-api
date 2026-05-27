@@ -4,6 +4,18 @@ const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const ordersController = require('../controllers/orders.controller');
 const ordersAnalyticsController = require('../controllers/orders.analytics.controller');
 const ordersAnalyticsValidator = require('../validators/orders.analytics.validator');
+const revenuecatOrphansController = require('../controllers/revenuecat.orphans.controller');
+
+function attachRevenueCatCsvMulter(req, res, next) {
+  revenuecatOrphansController.multerCsvUpload(req, res, (err) => {
+    if (err) {
+      const msg =
+        err.code === 'LIMIT_FILE_SIZE' ? 'CSV exceeds maximum upload size (12MB).' : String(err.message || 'Upload rejected');
+      return res.status(400).json({ message: msg });
+    }
+    next();
+  });
+}
 
 module.exports = function (app) {
   app
@@ -64,6 +76,18 @@ module.exports = function (app) {
   app
     .route('/admin/orders/orphans')
     .get(AuthMiddleware.isAdminUser, ordersController.listAdminOrphanedOrders);
+
+  app
+    .route('/admin/orders/orphans/revenuecat/compare')
+    .post(
+      AuthMiddleware.isAdminUser,
+      attachRevenueCatCsvMulter,
+      revenuecatOrphansController.compareRevenueCatCsv
+    );
+
+  app
+    .route('/admin/orders/orphans/revenuecat/activate')
+    .post(AuthMiddleware.isAdminUser, revenuecatOrphansController.activateRevenueCatRow);
 
   app
     .route('/admin/orders/:orderId/google-play/preview-from-console')
