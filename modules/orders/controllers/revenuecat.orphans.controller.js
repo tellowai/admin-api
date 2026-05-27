@@ -576,8 +576,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
 
     let total = 0;
     let in_sync = 0;
-    let missing = 0;
-    let stale = 0;
+    let needs_activate = 0;
     let cannot_activate = 0;
     const outRows = [];
 
@@ -669,13 +668,12 @@ exports.compareRevenueCatCsv = async function (req, res) {
             sub = entitledRcSub || snapshotSub;
           } else {
             action_required = 'activate';
+            needs_activate += 1;
             if (!matchingSubs.length) {
-              missing += 1;
               reason = snapshotSub
                 ? 'No DB row for this CSV plan (user active on a different subscription)'
                 : 'No matching DB subscription; user not in current active subscriptions';
             } else {
-              stale += 1;
               reason = snapshotWrongProviderForRc
                 ? `Entitled recurring row matches this plan but subscriptions.provider is not revenuecat (got '${snapshotSub.provider != null ? String(snapshotSub.provider).trim() : ''}' ) — reconcile RevenueCat-managed subscription`
                 : !snapshotSub
@@ -765,7 +763,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
     return res.status(200).json({
       data: {
         rows: outRows,
-        summary: { total, in_sync, missing, stale, cannot_activate }
+        summary: { total, in_sync, needs_activate, cannot_activate }
       }
     });
   } catch (err) {
