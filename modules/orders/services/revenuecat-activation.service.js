@@ -312,6 +312,28 @@ function mergeAdditionalDataForAdminPatch(existingRaw, patch) {
   return JSON.stringify({ ...base, ...patch });
 }
 
+/** Admin orphan activation audit — stored on `subscriptions.additional_data`, not a separate table. */
+function adminReconciliationAdditionalPatch({
+  runId,
+  userId,
+  providerSubscriptionId,
+  productId,
+  refreshedInPlace
+}) {
+  return {
+    reconciliation: {
+      source: 'admin_orphans',
+      run_id: runId,
+      user_id: userId,
+      provider_subscription_id: providerSubscriptionId,
+      product_id: productId,
+      bucket: 'ADMIN_ACTIVATED',
+      action: refreshedInPlace ? 'refreshed' : 'activated',
+      recorded_at_utc: moment.utc().format('YYYY-MM-DD HH:mm:ss.SSS')
+    }
+  };
+}
+
 /**
  * Latest existing RC recurring row for this user+SKU (used to tag admin activation as renewal).
  * @param {{ query: (sql: string, params?: unknown[]) => Promise<unknown> }} conn
@@ -409,7 +431,7 @@ exports.activateFromAdmin = async function (opts) {
   const existingRows = await MysqlQueryRunner.runQueryInSlave(
     `
     SELECT subscription_id, user_id, provider_subscription_id, status,
-           current_period_end, renews_at, end_at, payment_type
+           current_period_end, renews_at, end_at, payment_type, provider
     FROM subscriptions
     WHERE provider_subscription_id = ?
     LIMIT 1
@@ -425,11 +447,15 @@ exports.activateFromAdmin = async function (opts) {
         409
       );
     }
-    if (recurringRowIsEntitled(row)) {
+    const rowProvider =
+      row.provider != null ? String(row.provider).trim().toLowerCase() : '';
+    const rowIsRevenueCat = rowProvider === 'revenuecat';
+    if (recurringRowIsEntitled(row) && rowIsRevenueCat && !includeCredits) {
       return {
         subscription_id: row.subscription_id,
         creditsGranted: 0,
-        idempotent: true
+        idempotent: true,
+        idempotent_reason: 'already_entitled_revenuecat'
       };
     }
     refreshSubscriptionId = String(row.subscription_id);
@@ -482,7 +508,14 @@ exports.activateFromAdmin = async function (opts) {
           user_id: userId,
           provider: 'revenuecat',
           type: 'regular'
-        }
+        },
+        ...adminReconciliationAdditionalPatch({
+          runId,
+          userId,
+          providerSubscriptionId,
+          productId,
+          refreshedInPlace: true
+        })
       });
 
       const effectiveTxId =
@@ -495,6 +528,8 @@ exports.activateFromAdmin = async function (opts) {
       await conn.query(
         `
         UPDATE subscriptions SET
+          provider = 'revenuecat',
+          provider_plan_id = ?,
           status = 'active',
           provider_subscription_id = ?,
           current_period_start = ?,
@@ -506,6 +541,7 @@ exports.activateFromAdmin = async function (opts) {
         WHERE subscription_id = ? AND user_id = ?
       `,
         [
+          productId,
           effectiveTxId,
           startAtSql,
           periodEndSql,
@@ -548,7 +584,14 @@ exports.activateFromAdmin = async function (opts) {
           user_id: userId,
           provider: 'revenuecat',
           type: 'regular'
-        }
+        },
+        ...adminReconciliationAdditionalPatch({
+          runId,
+          userId,
+          providerSubscriptionId,
+          productId,
+          refreshedInPlace: false
+        })
       });
 
       await conn.query(
@@ -605,6 +648,26 @@ exports.activateFromAdmin = async function (opts) {
     let creditsGranted = 0;
 
     if (includeCredits && initialCreditsTotal > 0) {
+      const schExisting = await conn.query(
+        `SELECT 1 AS ok FROM subscription_credit_history WHERE subscription_id = ? LIMIT 1`,
+        [subscriptionId]
+      );
+      if (Array.isArray(schExisting) && schExisting.length > 0) {
+        await conn.commit();
+        return {
+          subscription_id: subscriptionId,
+          creditsGranted: 0,
+          idempotent: true,
+          idempotent_reason: 'credits_already_on_subscription',
+          refreshed_in_place: refreshedInPlace,
+          plan: {
+            subscription_plan_id: plan.subscription_plan_id,
+            subscription_name: plan.subscription_name,
+            billing_interval: plan.billing_interval
+          }
+        };
+      }
+
       const creditHistoryId = uuidv7();
       await conn.query(
         `
@@ -686,24 +749,6 @@ exports.activateFromAdmin = async function (opts) {
     }
 
     await conn.commit();
-
-    const reconId = uuidv7();
-    try {
-      await MysqlQueryRunner.runQueryInMaster(
-        `
-        INSERT INTO subscription_reconciliation_runs (
-          reconciliation_id, run_id, user_id, source,
-          provider_subscription_id, product_id, bucket, action, error_message
-        ) VALUES (?, ?, ?, 'full', ?, ?, 'ADMIN_ACTIVATED', 'activated', NULL)
-      `,
-        [reconId, runId, userId, providerSubscriptionId, productId]
-      );
-    } catch (reconErr) {
-      const msg = reconErr && reconErr.message ? String(reconErr.message) : '';
-      if (!/doesn't exist|Unknown table/i.test(msg)) {
-        console.warn('[RevenueCat admin activation] subscription_reconciliation_runs audit insert failed:', msg);
-      }
-    }
 
     return {
       subscription_id: subscriptionId,
