@@ -1271,9 +1271,9 @@ error_category,
   }
 
   /**
-   * order_created events attributed to template_id (same date window as top-templates / performance).
+   * order_created / order_completed events attributed to template_id (same date window as top-templates / performance).
    */
-  static async getOrderCreatedCountByTemplateIdsRaw(timestampConditions, templateIds) {
+  static async getOrderCountsByTemplateIdsRaw(timestampConditions, templateIds) {
     if (!templateIds || templateIds.length === 0) return [];
     const ts = (timestampConditions || []).join(' AND ');
     const safeIds = templateIds
@@ -1282,9 +1282,10 @@ error_category,
     const query = `
       SELECT
         properties['template_id'] AS template_id,
-        count() AS orders_created
+        countIf(event_name = 'order_created') AS orders_created,
+        countIf(event_name = 'order_completed') AS orders_completed
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
-      PREWHERE event_name = 'order_created'
+      PREWHERE event_name IN ('order_created', 'order_completed')
         AND object_type = 'order'
         AND ${ts}
       WHERE properties['template_id'] != ''
