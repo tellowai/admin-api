@@ -640,13 +640,22 @@ class AnalyticsService {
       return [];
     }
     const templateIds = rows.map(r => r.template_id).filter(Boolean);
-    const templates = await TemplateModel.getTemplatesByIdsForAnalytics(templateIds);
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const [templates, orderCreatedRows] = await Promise.all([
+      TemplateModel.getTemplatesByIdsForAnalytics(templateIds),
+      AnalyticsModel.getOrderCreatedCountByTemplateIdsRaw(tsRaw, templateIds)
+    ]);
+    const ordersById = {};
+    (orderCreatedRows || []).forEach((r) => {
+      if (r.template_id) ordersById[r.template_id] = Number(r.orders_created) || 0;
+    });
     const byId = {};
     (templates || []).forEach(t => { byId[t.template_id] = t; });
     return rows.map(row => {
       const t = byId[row.template_id] || {};
       return {
         template_id: row.template_id,
+        orders_created: ordersById[row.template_id] ?? 0,
         tries: row.tries,
         successes: row.successes,
         template_name: t.template_name ?? row.template_id ?? null,
