@@ -649,7 +649,6 @@ class AnalyticsService {
         template_id: row.template_id,
         tries: row.tries,
         successes: row.successes,
-        count: row.successes,
         template_name: t.template_name ?? row.template_id ?? null,
         template_code: t.template_code ?? null,
         template_gender: t.template_gender ?? null,
