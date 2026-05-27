@@ -1270,6 +1270,31 @@ error_category,
     return result.data || [];
   }
 
+  /**
+   * order_created events attributed to template_id (same date window as top-templates / performance).
+   */
+  static async getOrderCreatedCountByTemplateIdsRaw(timestampConditions, templateIds) {
+    if (!templateIds || templateIds.length === 0) return [];
+    const ts = (timestampConditions || []).join(' AND ');
+    const safeIds = templateIds
+      .map((id) => `'${String(id).replace(/'/g, "''")}'`)
+      .join(', ');
+    const query = `
+      SELECT
+        properties['template_id'] AS template_id,
+        count() AS orders_created
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE event_name = 'order_created'
+        AND object_type = 'order'
+        AND ${ts}
+      WHERE properties['template_id'] != ''
+        AND properties['template_id'] IN (${safeIds})
+      GROUP BY properties['template_id']
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   static async queryTechHealthStoreVsCountry(whereConditions, limit = 50) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 50), 100);
     const query = `
