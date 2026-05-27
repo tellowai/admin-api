@@ -659,6 +659,8 @@ exports.activateFromAdmin = async function (opts) {
         WHERE user_id = ?
           AND reference_id COLLATE utf8mb4_unicode_ci = ?
           AND status = 'completed'
+          AND transaction_type IN ('subscription_initial', 'subscription_upgrade')
+          AND reference_type IN ('subscription_credits', 'bonus_credits')
         LIMIT 1
       `,
         [userId, subscriptionId]

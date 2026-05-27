@@ -414,6 +414,8 @@ async function loadSubscriptionIdsWithCreditsLedger(userIds, useMaster = false) 
       ON ct.user_id COLLATE utf8mb4_unicode_ci = sch.user_id COLLATE utf8mb4_unicode_ci
       AND ct.reference_id COLLATE utf8mb4_unicode_ci = sch.subscription_id COLLATE utf8mb4_unicode_ci
       AND ct.status = 'completed'
+      AND ct.transaction_type IN ('subscription_initial', 'subscription_upgrade')
+      AND ct.reference_type IN ('subscription_credits', 'bonus_credits')
     WHERE sch.user_id COLLATE utf8mb4_unicode_ci IN (${ph})
     `,
     ids
@@ -688,10 +690,22 @@ exports.compareRevenueCatCsv = async function (req, res) {
         cannot_activate += 1;
       }
 
-      const dbSubIdForCredits =
-        sub && sub.subscription_id != null ? String(sub.subscription_id) : null;
+      /**
+       * Credits flag is per subscription row. Play/App store initial credits must not block
+       * "With credits" when reconciling a RevenueCat CSV row (different provider).
+       */
+      let creditSubIdForRow = null;
+      if (sub && sub.subscription_id != null) {
+        if (subscriptionRowIsRevenueCatManaged(sub)) {
+          creditSubIdForRow = String(sub.subscription_id);
+        } else if (entitledRcSub && entitledRcSub.subscription_id != null) {
+          creditSubIdForRow = String(entitledRcSub.subscription_id);
+        } else {
+          creditSubIdForRow = null;
+        }
+      }
       const credits_already_issued = creditsAlreadyIssuedForCompareRow(
-        dbSubIdForCredits,
+        creditSubIdForRow,
         subscriptionIdsWithCreditsLedger
       );
 
