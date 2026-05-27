@@ -647,7 +647,8 @@ class AnalyticsService {
       const t = byId[row.template_id] || {};
       return {
         template_id: row.template_id,
-        count: row.count,
+        tries: row.tries,
+        successes: row.successes,
         template_name: t.template_name ?? row.template_id ?? null,
         template_code: t.template_code ?? null,
         template_gender: t.template_gender ?? null,

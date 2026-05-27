@@ -499,20 +499,24 @@ class AnalyticsModel {
   }
 
   /**
-   * Top templates by generation count (sum of tries in date range).
-   * Single aggregation, no joins. Paginated via LIMIT/OFFSET for scale.
+   * Top templates by generation outcomes (tries + successes in date range).
+   * Ordered by successes, then tries. Paginated via LIMIT/OFFSET for scale.
    */
   static async getTopTemplatesByGeneration(whereConditions, limit, offset) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
     const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const tries = ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.TRIES;
+    const successes = ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES;
     const query = `
       SELECT
         template_id,
-        sum(tries) as count
+        sum(${tries}) as tries,
+        sum(${successes}) as successes
       FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY template_id
-      ORDER BY count DESC
+      HAVING successes > 0 OR tries > 0
+      ORDER BY successes DESC, tries DESC
       LIMIT ${safeLimit}
       OFFSET ${safeOffset}
     `;
