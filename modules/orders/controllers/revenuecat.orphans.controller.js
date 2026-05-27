@@ -389,13 +389,14 @@ function resolvePaymentPlanMetaForDbSub(providerPlanRaw, planByProduct) {
 }
 
 /**
- * `subscription_id` values that already have a `subscription_credit_history` row (recurring subs only).
- * Credits UI is scoped per subscription row — not "any plan tier ever credited for this user".
+ * `subscription_id` values with both SCH and at least one completed `credits_transactions` row
+ * (what the admin user profile Credits tab lists). SCH alone is not enough — avoids
+ * "Credits already issued" when the ledger is empty.
  *
  * @param {string[]} userIds
  * @returns {Promise<Set<string>>}
  */
-async function loadSubscriptionIdsWithCreditHistory(userIds, useMaster = false) {
+async function loadSubscriptionIdsWithCreditsLedger(userIds, useMaster = false) {
   const out = new Set();
   const ids = [...new Set((userIds || []).map((x) => (x != null ? String(x).trim() : '')).filter(Boolean))];
   if (!ids.length) return out;
@@ -404,11 +405,16 @@ async function loadSubscriptionIdsWithCreditHistory(userIds, useMaster = false) 
   const ph = ids.map(() => '?').join(',');
   const rows = await runQuery(
     `
-    SELECT sch.subscription_id
+    SELECT DISTINCT sch.subscription_id
     FROM subscription_credit_history sch
-    INNER JOIN subscriptions s ON s.subscription_id = sch.subscription_id
+    INNER JOIN subscriptions s
+      ON s.subscription_id COLLATE utf8mb4_unicode_ci = sch.subscription_id COLLATE utf8mb4_unicode_ci
       AND TRIM(COALESCE(s.payment_type, '')) = 'recurring'
-    WHERE sch.user_id IN (${ph})
+    INNER JOIN credits_transactions ct
+      ON ct.user_id COLLATE utf8mb4_unicode_ci = sch.user_id COLLATE utf8mb4_unicode_ci
+      AND ct.reference_id COLLATE utf8mb4_unicode_ci = sch.subscription_id COLLATE utf8mb4_unicode_ci
+      AND ct.status = 'completed'
+    WHERE sch.user_id COLLATE utf8mb4_unicode_ci IN (${ph})
     `,
     ids
   );
@@ -420,16 +426,15 @@ async function loadSubscriptionIdsWithCreditHistory(userIds, useMaster = false) 
 }
 
 /**
- * Credits already issued for this reconcile row when the matched DB subscription has SCH.
- * No DB subscription for this CSV row ⇒ no purchase/credit history for that subscription ⇒ recommend with credits.
+ * Credits already issued when the matched DB subscription has SCH + ledger rows (admin profile).
  *
  * @param {string|null|undefined} dbSubscriptionId subscriptions.subscription_id for refresh path
- * @param {Set<string>} subscriptionIdsWithCreditHistory
+ * @param {Set<string>} subscriptionIdsWithCreditsLedger
  * @returns {boolean}
  */
-function creditsAlreadyIssuedForCompareRow(dbSubscriptionId, subscriptionIdsWithCreditHistory) {
+function creditsAlreadyIssuedForCompareRow(dbSubscriptionId, subscriptionIdsWithCreditsLedger) {
   if (dbSubscriptionId == null || String(dbSubscriptionId).trim() === '') return false;
-  return subscriptionIdsWithCreditHistory.has(String(dbSubscriptionId));
+  return subscriptionIdsWithCreditsLedger.has(String(dbSubscriptionId));
 }
 
 async function loadLatestRevenueCatOrderHints(userIds) {
@@ -550,7 +555,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
     }
     const planByProduct = await ActivationService.bulkResolvePlansForRcProductIds(allSkuForPlans);
 
-    const subscriptionIdsWithCreditHistory = await loadSubscriptionIdsWithCreditHistory(
+    const subscriptionIdsWithCreditsLedger = await loadSubscriptionIdsWithCreditsLedger(
       userIds,
       freshRead
     );
@@ -687,7 +692,7 @@ exports.compareRevenueCatCsv = async function (req, res) {
         sub && sub.subscription_id != null ? String(sub.subscription_id) : null;
       const credits_already_issued = creditsAlreadyIssuedForCompareRow(
         dbSubIdForCredits,
-        subscriptionIdsWithCreditHistory
+        subscriptionIdsWithCreditsLedger
       );
 
       const snapshotPlanMeta =

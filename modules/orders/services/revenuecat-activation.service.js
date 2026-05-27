@@ -652,7 +652,19 @@ exports.activateFromAdmin = async function (opts) {
         `SELECT 1 AS ok FROM subscription_credit_history WHERE subscription_id = ? LIMIT 1`,
         [subscriptionId]
       );
-      if (Array.isArray(schExisting) && schExisting.length > 0) {
+      const hasSch = Array.isArray(schExisting) && schExisting.length > 0;
+      const ledgerExisting = await conn.query(
+        `
+        SELECT 1 AS ok FROM credits_transactions
+        WHERE user_id = ?
+          AND reference_id COLLATE utf8mb4_unicode_ci = ?
+          AND status = 'completed'
+        LIMIT 1
+      `,
+        [userId, subscriptionId]
+      );
+      const hasLedger = Array.isArray(ledgerExisting) && ledgerExisting.length > 0;
+      if (hasSch && hasLedger) {
         await conn.commit();
         return {
           subscription_id: subscriptionId,
@@ -668,23 +680,25 @@ exports.activateFromAdmin = async function (opts) {
         };
       }
 
-      const creditHistoryId = uuidv7();
-      await conn.query(
-        `
-        INSERT INTO subscription_credit_history (
-          subscription_credits_id, user_id, subscription_id, credits, additional_data, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
-        [
-          creditHistoryId,
-          userId,
-          subscriptionId,
-          initialCreditsTotal,
-          JSON.stringify(creditExtras),
-          startAtSql,
-          startAtSql
-        ]
-      );
+      if (!hasSch) {
+        const creditHistoryId = uuidv7();
+        await conn.query(
+          `
+          INSERT INTO subscription_credit_history (
+            subscription_credits_id, user_id, subscription_id, credits, additional_data, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+          [
+            creditHistoryId,
+            userId,
+            subscriptionId,
+            initialCreditsTotal,
+            JSON.stringify(creditExtras),
+            startAtSql,
+            startAtSql
+          ]
+        );
+      }
 
       const descriptionBase = `RevenueCat admin activation: ${reason}`.slice(0, 255);
 
