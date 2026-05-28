@@ -88,6 +88,24 @@ describe('clickhouse.sql.validator', () => {
     expect(r.ok).to.equal(true);
   });
 
+  it('rewrites sum/uniq over AggregateFunction state columns to uniqMerge', () => {
+    const r = validateClickHouseSql(
+      "SELECT report_date, sum(orders_count) AS subs, sum(unique_users) AS uu FROM orders_daily_stats WHERE report_date = '2026-05-19' GROUP BY report_date",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('uniqMerge(unique_users)');
+    expect(r.sql).to.include('sum(orders_count)');
+    expect(r.sql).not.to.match(/sum\(unique_users\)/i);
+  });
+
+  it('rewrites uniq() shorthand over state columns', () => {
+    const r = validateClickHouseSql(
+      "SELECT uniq(unique_users) AS u FROM orders_daily_stats WHERE report_date = '2026-05-19'",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('uniqMerge(unique_users)');
+  });
+
   it('rewrites ClickHouse zero-arg count() to count(*)', () => {
     const r = validateClickHouseSql(
       "SELECT toDate(timestamp) AS d, count() AS installs FROM analytics_events_raw WHERE toDate(timestamp) BETWEEN '2026-05-21' AND '2026-05-27' AND event_name = 'attributed_install' GROUP BY d ORDER BY d",
