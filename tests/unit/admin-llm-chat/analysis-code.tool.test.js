@@ -21,6 +21,25 @@ describe('runAnalysisCode', () => {
     assert.strictEqual(out.result.total, 13);
   });
 
+  it('honors `result = ...` assignment without return', () => {
+    const out = runAnalysisCode({
+      code: 'result = { n: inputs.x + 1 };',
+      inputs: { x: 41 },
+    });
+    assert.strictEqual(out.success, true);
+    assert.strictEqual(out.result.n, 42);
+  });
+
+  it('return takes precedence over result assignment', () => {
+    const out = runAnalysisCode({
+      code: 'result = { wrong: true }; return { right: true };',
+      inputs: {},
+    });
+    assert.strictEqual(out.success, true);
+    assert.strictEqual(out.result.right, true);
+    assert.strictEqual(out.result.wrong, undefined);
+  });
+
   it('blocks require', () => {
     const out = runAnalysisCode({ code: 'return require("fs");', inputs: {} });
     assert.strictEqual(out.success, false);

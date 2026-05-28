@@ -439,6 +439,7 @@ async function runStreamingTurn({
   let turnTokensIn = 0;
   let turnTokensOut = 0;
   let sawToolThisRound = false;
+  let budgetExhausted = false;
   const turnExtraMessages = [];
 
   const runLoop = async ({ allowTools = true, summaryNudge = false } = {}) => {
@@ -578,24 +579,53 @@ async function runStreamingTurn({
     }
 
     if (pendingToolCalls.length) {
+      budgetExhausted = true;
       const skipped = [...pendingToolCalls];
       pendingToolCalls.length = 0;
+      const skippedEnvelope = JSON.stringify({
+        success: false,
+        error: 'TOOL_BUDGET_EXHAUSTED',
+        message: `Tool call skipped: per-turn budget of ${maxTools} tool calls reached. Answer the user with what you have. The user can tap "Continue analysis" to resume in a new turn with a fresh budget.`,
+      });
+      sendEvent('tool_budget_exhausted', {
+        maxTools,
+        toolCallsUsed: toolCallCount,
+        skippedCount: skipped.length,
+      });
+      const skippedToolCalls = [];
       for (const tc of skipped) {
         traceBuilder.onToolEnd({
           id: tc.id,
           name: tc.name,
           arguments: tc.arguments,
           durationMs: 0,
-          result: { success: false, error: 'Tool call skipped (limit or policy)' },
+          result: {
+            success: false,
+            error: 'TOOL_BUDGET_EXHAUSTED',
+            message: `Per-turn tool budget of ${maxTools} reached.`,
+          },
         });
         sendEvent('tool_end', {
           toolCallId: tc.id,
           name: tc.name,
           durationMs: 0,
           status: 'failed',
-          resultPreview: { success: false, error: 'skipped' },
+          resultPreview: { success: false, error: 'TOOL_BUDGET_EXHAUSTED' },
+        });
+        skippedToolCalls.push({
+          tool_call_id: tc.id,
+          tool_name: tc.name,
+          arguments_json: tc.arguments,
+          result_json: skippedEnvelope,
         });
       }
+      // Preserve provider tool-call/tool-result pairing for the next round.
+      turnExtraMessages.push({
+        role: 'assistant',
+        content: null,
+        model_provider: modelMeta.provider,
+        tool_calls: skippedToolCalls,
+      });
       await runLoop({ allowTools: false, summaryNudge: true });
     } else {
       traceBuilder.markFinalSegment();
@@ -622,7 +652,7 @@ async function runStreamingTurn({
       MessageModel.finalize(assistantMsgId, {
         content,
         content_parts,
-        finish_reason: 'stop',
+        finish_reason: budgetExhausted ? 'tool_budget_exhausted' : 'stop',
         tokens_in: turnTokensIn,
         tokens_out: turnTokensOut,
         cost_usd: costUsd,
@@ -685,7 +715,7 @@ async function runStreamingTurn({
     if (turnContextUsage) sendEvent('context_usage', turnContextUsage);
 
     sendEvent('done', {
-      finishReason: 'stop',
+      finishReason: budgetExhausted ? 'tool_budget_exhausted' : 'stop',
       content,
       trace,
       usage: {
@@ -697,6 +727,14 @@ async function runStreamingTurn({
         contextPct,
       },
       contextUsage: turnContextUsage,
+      resumeHint: budgetExhausted
+        ? {
+          reason: 'TOOL_BUDGET_EXHAUSTED',
+          maxToolsPerTurn: maxTools,
+          toolCallsUsed: toolCallCount,
+          suggestedPrompt: 'Continue the analysis. Use the remaining tools to finish what you were doing.',
+        }
+        : null,
     });
 
     const isFirstTurn = history.filter((m) => m.role === 'assistant' && m.finish_reason === 'stop').length === 0;

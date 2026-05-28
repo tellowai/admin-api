@@ -52,9 +52,16 @@ function runAnalysisCode({ code, inputs = {} }) {
     result: undefined,
   };
 
+  // IIFE so user `return ...` works. `result = ...` (no var/let/const) inside
+  // the function also persists because we only overwrite sandbox.result when
+  // the IIFE actually returns something — preventing the historical bug where
+  // a bare `result = ...` was clobbered by the IIFE's undefined return.
   const wrapped = `"use strict";
-result = (function(inputs) {
+(function(inputs) {
+  const __ret = (function(inputs) {
 ${src}
+  })(inputs);
+  if (typeof __ret !== 'undefined') result = __ret;
 })(inputs);
 `;
 
@@ -76,7 +83,7 @@ ${src}
       result: out === undefined ? null : out,
       result_type: out === null ? 'null' : typeof out,
       hint: out === undefined
-        ? 'Set `result = ...` or use `return` inside the function body.'
+        ? 'No value produced. End your code with `return <value>` or assign `result = <value>`.'
         : undefined,
     };
   } catch (e) {
