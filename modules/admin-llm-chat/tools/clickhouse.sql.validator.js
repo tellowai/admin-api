@@ -7,12 +7,23 @@ const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const parser = new Parser();
 
 /** SYSTEM omitted — `system.*` schemas are blocked via table whitelist instead. */
-const FORBIDDEN_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|OPTIMIZE|RENAME|GRANT|REVOKE|KILL|SET|FORMAT)\b/i;
+const FORBIDDEN_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|ATTACH|DETACH|OPTIMIZE|RENAME|GRANT|REVOKE|KILL|SET|SETTINGS|FORMAT)\b/i;
 
 /** Tables referenced in FROM (first table only for single-table queries). */
 function extractTablesFromSql(sql) {
   const fromMatch = sql.match(/\bFROM\s+(?:`?(\w+)`?\.)?`?(\w+)`?/i);
   return fromMatch ? [fromMatch[2]] : [];
+}
+
+/** All tables referenced via FROM (used as parser-fallback for CH-only syntax). */
+function extractAllTablesFromSql(sql) {
+  const tables = [];
+  const re = /\bFROM\s+(?:`?(\w+)`?\.)?`?(\w+)`?/gi;
+  let m;
+  while ((m = re.exec(sql)) !== null) {
+    tables.push(m[2]);
+  }
+  return tables;
 }
 
 /** Fix common model mistakes before validation/execution. */
@@ -23,7 +34,16 @@ function preprocessClickHouseSql(sql) {
   out = rewriteShadowedAggregateAliases(out);
   out = normalizeDateColumnInSql(out, tables);
   out = rewriteSelectStar(out, tables);
+  out = rewriteClickHouseAggregateShorthands(out);
   return { sql: out, tables };
+}
+
+/**
+ * ClickHouse allows zero-arg aggregates (e.g. `count()`) that node-sql-parser's
+ * MySQL grammar rejects. Rewrite to the SQL-standard form before astify.
+ */
+function rewriteClickHouseAggregateShorthands(sql) {
+  return sql.replace(/\bcount\s*\(\s*\)/gi, 'count(*)');
 }
 
 /** Rewrite mistaken `date` predicate to the table's real date column (e.g. report_date). */
@@ -127,22 +147,27 @@ function validateClickHouseSql(sql) {
   const dateCheck = checkRequiredDatePredicate(trimmed);
   if (dateCheck) return dateCheck;
 
-  let ast;
-  try {
-    ast = parser.astify(trimmed, { database: 'MySQL' });
-  } catch (e) {
-    const onParseFail = checkRequiredDatePredicate(trimmed);
-    if (onParseFail) return onParseFail;
-    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: e.message };
-  }
-
-  const type = ast.type || ast.ast?.type;
-  if (type !== 'select' && !(ast.with && ast.type === 'select')) {
+  // Statement type guard before AST (MySQL parser can't handle all ClickHouse syntax).
+  if (!/^\s*(WITH\b|SELECT\b)/i.test(trimmed)) {
     return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Only SELECT allowed' };
   }
 
-  const tableNames = extractTables(ast);
-  if (!tableNames.length) {
+  let tableNames;
+  try {
+    const ast = parser.astify(trimmed, { database: 'MySQL' });
+    const type = ast.type || ast.ast?.type;
+    if (type !== 'select' && !(ast.with && ast.type === 'select')) {
+      return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Only SELECT allowed' };
+    }
+    tableNames = extractTables(ast);
+  } catch (_e) {
+    // ClickHouse-only constructs (lambdas, combinators like sumIf, tuples) can
+    // break the MySQL grammar. Fall back to regex table extraction — safety
+    // still rests on FORBIDDEN_KEYWORDS + WHITELIST + JOIN/UNION guards above.
+    tableNames = extractAllTablesFromSql(trimmed);
+  }
+
+  if (!tableNames || !tableNames.length) {
     return { ok: false, code: 'TABLE_NOT_ALLOWED', message: 'No table found' };
   }
   for (const t of tableNames) {

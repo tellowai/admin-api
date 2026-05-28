@@ -133,6 +133,8 @@ module.exports = {
     enabled: false,
     /** Optional absolute path to models.json — or set ADMIN_LLM_CHAT_MODELS_PATH */
     modelsPath: "",
+    /** Max tool calls per assistant turn. Override with ADMIN_LLM_CHAT_MAX_TOOL_CALLS. */
+    maxToolCallsPerTurn: 24,
   },
   llmProviders: {
     openai: { apiKey: "" },

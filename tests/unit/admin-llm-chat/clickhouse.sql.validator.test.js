@@ -88,6 +88,22 @@ describe('clickhouse.sql.validator', () => {
     expect(r.ok).to.equal(true);
   });
 
+  it('rewrites ClickHouse zero-arg count() to count(*)', () => {
+    const r = validateClickHouseSql(
+      "SELECT toDate(timestamp) AS d, count() AS installs FROM analytics_events_raw WHERE toDate(timestamp) BETWEEN '2026-05-21' AND '2026-05-27' AND event_name = 'attributed_install' GROUP BY d ORDER BY d",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('count(*)');
+    expect(r.sql).not.to.match(/\bcount\s*\(\s*\)/i);
+  });
+
+  it('falls back to regex table extraction when parser fails on CH-only syntax', () => {
+    const r = validateClickHouseSql(
+      "SELECT sumIf(spend, clicks > 0) AS s FROM meta_ads_insights_daily WHERE date = '2026-05-21'",
+    );
+    expect(r.ok).to.equal(true);
+  });
+
   it('rewrites shadowed aggregate aliases for meta ads campaign query', () => {
     const sql = "SELECT campaign_id, any(campaign_name) AS campaign_name, currency, countDistinctIf(adset_id, spend > 0 OR impressions > 0) AS active_ad_sets, countDistinctIf(ad_id, spend > 0 OR impressions > 0) AS active_ad_creatives, sum(spend) AS spend, sum(impressions) AS impressions, sum(clicks) AS clicks FROM meta_ads_insights_daily WHERE date = '2026-05-21' GROUP BY campaign_id, currency HAVING spend > 0 OR impressions > 0 ORDER BY spend DESC";
     const r = validateClickHouseSql(sql);
