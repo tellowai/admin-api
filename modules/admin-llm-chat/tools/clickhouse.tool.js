@@ -57,6 +57,17 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         retryable: true,
       };
     }
+    if (msg.includes('ILLEGAL_TYPE_OF_ARGUMENT') && /AggregateFunction\(/i.test(msg)) {
+      const colMatch = msg.match(/AggregateFunction\((\w+),/i);
+      const fn = colMatch?.[1];
+      return {
+        success: false,
+        error: 'AGGREGATE_STATE_MISMATCH',
+        message: `Column has type AggregateFunction(${fn || '?'}, ...) — call ${fn || 'uniq'}Merge(<column>) instead of sum()/count()/uniq().`,
+        hint: 'Call get_table_schema first and use aggregate_state_columns to pick the right *Merge function (e.g. uniqMerge(unique_users)).',
+        retryable: true,
+      };
+    }
     if (msg.includes('ILLEGAL_AGGREGATION')) {
       return {
         success: false,
@@ -127,6 +138,8 @@ function getTableSchema({ table }) {
   }
   const meta = WHITELIST[table];
   const forbidden = meta.required_date_column === 'report_date' ? ['date'] : [];
+  const stateCols = meta.aggregate_state_columns || {};
+  const stateColNames = Object.keys(stateCols);
   return {
     success: true,
     schema_version: SCHEMA_VERSION,
@@ -138,6 +151,10 @@ function getTableSchema({ table }) {
     description: meta.description,
     forbidden_filter_columns: forbidden,
     currency_column: meta.currency_column || null,
+    aggregate_state_columns: stateColNames.length ? stateCols : null,
+    aggregate_state_hint: stateColNames.length
+      ? `Columns ${stateColNames.join(', ')} are AggregateFunction states. Use ${Object.entries(stateCols).map(([c, fn]) => `${fn}(${c})`).join(', ')} — NOT sum()/count()/uniq().`
+      : null,
     hint: meta.required_date_column === 'report_date'
       ? 'Daily stats use report_date — never use `date` in WHERE on this table.'
       : 'Use the date column shown in required_date_column for WHERE filters.',

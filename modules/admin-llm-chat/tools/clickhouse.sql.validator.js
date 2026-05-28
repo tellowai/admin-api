@@ -35,7 +35,34 @@ function preprocessClickHouseSql(sql) {
   out = normalizeDateColumnInSql(out, tables);
   out = rewriteSelectStar(out, tables);
   out = rewriteClickHouseAggregateShorthands(out);
+  out = rewriteAggregateStateColumns(out, tables);
   return { sql: out, tables };
+}
+
+/**
+ * Columns typed `AggregateFunction(uniq, ...)` (etc.) cannot be passed to plain
+ * sum/count/avg/uniq — ClickHouse returns ILLEGAL_TYPE_OF_ARGUMENT. Rewrite to
+ * the matching *Merge function so the model doesn't have to know per-column
+ * storage types.
+ */
+function rewriteAggregateStateColumns(sql, tables = []) {
+  const merges = new Map();
+  for (const table of tables) {
+    const meta = WHITELIST[table];
+    if (!meta?.aggregate_state_columns) continue;
+    Object.entries(meta.aggregate_state_columns).forEach(([col, mergeFn]) => {
+      merges.set(col.toLowerCase(), mergeFn);
+    });
+  }
+  if (!merges.size) return sql;
+  const wrongFns = '(?:sum|count|avg|min|max|uniq|uniqExact|any|anyLast)';
+  return sql.replace(
+    new RegExp(`\\b${wrongFns}\\s*\\(\\s*([a-zA-Z_][\\w]*)\\s*\\)`, 'gi'),
+    (match, col) => {
+      const mergeFn = merges.get(col.toLowerCase());
+      return mergeFn ? `${mergeFn}(${col})` : match;
+    },
+  );
 }
 
 /**
