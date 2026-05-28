@@ -155,7 +155,8 @@ module.exports = function(app) {
   );
 
   // Daily snapshot of currently-entitled recurring subscriptions (one count per
-  // calendar day in the picked range, taken at end-of-day in the client tz).
+  // calendar day in the picked range). `tz` is the client's IANA timezone; each
+  // day's count is taken at local 23:59:59.999 (inclusive calendar-day semantics).
   app.route(
     versionConfig.routePrefix + '/analytics/subscriptions/active-daily'
   ).get(

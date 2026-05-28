@@ -205,7 +205,7 @@ const ordersFunnelClickhouseSchema = Joi.object().keys({
   end_date: Joi.date().iso().min(Joi.ref('start_date')).required(),
   tz: Joi.string().optional().allow(''),
   product_type: Joi.string()
-    .valid('alacarte', 'subscription', 'onetime', 'addon', '')
+    .valid('alacarte', 'subscription', 'subscription_renewal', 'onetime', 'addon', '')
     .optional()
     .allow(''),
   payment_gateway: Joi.string().max(64).optional().allow(''),

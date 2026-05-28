@@ -39,7 +39,13 @@ const bulkUnarchiveTemplateTagsSchema = Joi.object().keys({
   tag_ids: Joi.array().items(Joi.string().required()).min(1).max(50).required()
 });
 
+const reorderTemplateTagsSchema = Joi.object().keys({
+  facet_id: Joi.number().integer().positive().required(),
+  tag_ids: Joi.array().items(Joi.string().required()).min(1).max(200).required()
+});
+
 exports.createTemplateTagSchema = createTemplateTagSchema;
 exports.updateTemplateTagSchema = updateTemplateTagSchema;
 exports.bulkArchiveTemplateTagsSchema = bulkArchiveTemplateTagsSchema;
 exports.bulkUnarchiveTemplateTagsSchema = bulkUnarchiveTemplateTagsSchema;
+exports.reorderTemplateTagsSchema = reorderTemplateTagsSchema;

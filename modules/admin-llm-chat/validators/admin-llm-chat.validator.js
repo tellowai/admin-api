@@ -21,6 +21,7 @@ function makeValidator(joiSchema) {
 exports.validateCreateConversation = makeValidator(schema.createConversationSchema);
 exports.validatePatchConversation = makeValidator(schema.patchConversationSchema);
 exports.validateStreamMessage = makeValidator(schema.streamMessageSchema);
+exports.validatePresignAttachment = makeValidator(schema.presignAttachmentSchema);
 exports.validateRegisterAttachment = makeValidator(schema.registerAttachmentSchema);
 exports.validateBusinessContext = makeValidator(schema.businessContextSchema);
 exports.validateDigest = makeValidator(schema.digestSchema);

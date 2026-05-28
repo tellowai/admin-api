@@ -17,7 +17,7 @@ const OrdersModel = require('../../orders/models/orders.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
-const { purchaseCategoryFromPlan } = require('../../orders/utils/purchaseCategory.util');
+const { purchaseCategoryFromOrder } = require('../../orders/utils/purchaseCategory.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 
 
@@ -480,7 +480,7 @@ exports.getUserOrders = async function (req, res) {
         plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
         plan_heading: plan ? (plan.plan_heading || plan.plan_name || null) : null,
         billing_interval: billingInterval ?? null,
-        purchase_category: purchaseCategoryFromPlan(planType, billingInterval),
+        purchase_category: purchaseCategoryFromOrder(order, plan ? { plan_type: plan.plan_type, billing_interval: plan.billing_interval } : null),
         template_id: tid,
         template_name: tid ? (templateNameById[tid] ?? null) : null,
         pack_id: pid,
@@ -679,6 +679,61 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
     console.error('lookupConsumerUserForSupport error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
       message: 'Lookup failed'
+    });
+  }
+};
+
+/**
+ * Search end-users for "create support ticket" — returns up to N matches (table pick in UI).
+ * GET /admin/consumer-users/search-for-ticket?q=&type=mobile|name&limit=
+ */
+exports.searchConsumersForSupportTicket = async function (req, res) {
+  try {
+    const type = String(req.query.type || 'mobile').toLowerCase();
+    const rawQ = String(req.query.q || '').trim();
+    const allowed = new Set(['mobile', 'name']);
+    if (!allowed.has(type)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'type must be mobile or name'
+      });
+    }
+
+    if (!rawQ) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Query (q) is required' });
+    }
+
+    if (type === 'mobile') {
+      const mobileDigits = rawQ.replace(/\D/g, '');
+      if (!mobileDigits) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Enter a mobile number with at least one digit'
+        });
+      }
+    } else if (rawQ.length < 2) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'Enter at least 2 characters'
+      });
+    }
+
+    const limitRaw = parseInt(String(req.query.limit || '25'), 10);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 25;
+
+    const rows = await ManageAdminUserDbo.searchEndUsersForSupportTicket(type, rawQ, limit);
+    const matches = (rows || []).map((row) => ({
+      ...row,
+      mobile_number: row.mobile
+    }));
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        matches,
+        count: matches.length
+      }
+    });
+  } catch (err) {
+    console.error('searchConsumersForSupportTicket error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Search failed'
     });
   }
 };

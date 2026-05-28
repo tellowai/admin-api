@@ -9,7 +9,7 @@ const ordersAnalyticsQuerySchema = Joi.object({
   start_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
   end_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
   tz: Joi.string().optional().allow(''),
-  product_type: Joi.string().valid('', 'alacarte', 'subscription', 'onetime', 'addon').optional().allow(''),
+  product_type: Joi.string().valid('', 'alacarte', 'subscription', 'subscription_renewal', 'onetime', 'addon').optional().allow(''),
   payment_gateway: Joi.string()
     .valid(
       '',
@@ -73,8 +73,11 @@ const purchasingCustomersRangeFields = [
   'credit_balance'
 ];
 
-/** Paginated customers with at least one purchase (lifetime). */
+/** Paginated customers with at least one purchase in the date range. */
 const purchasingCustomersTableQuerySchema = Joi.object({
+  start_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
+  end_date: Joi.alternatives().try(Joi.date(), Joi.string()).required(),
+  tz: Joi.string().optional().allow(''),
   search: Joi.string().trim().max(128).optional().allow(''),
   page: Joi.number().integer().min(1).optional().default(1),
   limit: Joi.number().integer().min(1).max(100).optional().default(10),

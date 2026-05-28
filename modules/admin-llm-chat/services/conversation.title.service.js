@@ -1,6 +1,7 @@
 'use strict';
 
 const modelsRegistry = require('./models.registry.service');
+const { completeShortText } = require('./llm-auxiliary.client');
 const ConversationModel = require('../models/conversation.model');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const { redactString } = require('./pii.redactor');
@@ -49,28 +50,12 @@ async function generateTitle(conversation, firstUser, firstAssistantText, userId
   const prompt = `Give a 3 to 6 word title summarizing this chat. No quotes, no punctuation, Title Case only.\nUser: ${userSnippet}\nAssistant: ${assistantSnippet}`;
 
   try {
-    if (summarizer.provider === 'anthropic') {
-      const AnthropicWrapper = require('../../ai-services/providers/anthropic/anthropic.wrapper.cjs');
-      const client = await AnthropicWrapper.create({});
-      const resp = await client.messages.create({
-        model: summarizer.id,
-        max_tokens: 30,
-        messages: [{ role: 'user', content: prompt }],
-      });
-      const text = resp.content?.filter((b) => b.type === 'text').map((b) => b.text).join('') || '';
-      const title = sanitizeTitle(text);
-      circuitBreaker.recordSuccess(CB_NAME);
-      return title || fallbackTitle(firstUser);
-    }
-    const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
-    const provider = await LLMProviderFactory.createProvider('openai');
-    if (!provider.client) await provider.initialize();
-    const resp = await provider.client.chat.completions.create({
-      model: summarizer.provider === 'openai' ? summarizer.id : 'gpt-4o-mini',
-      max_tokens: 30,
-      messages: [{ role: 'user', content: prompt }],
+    const { text } = await completeShortText({
+      summarizer,
+      userContent: prompt,
+      maxTokens: 30,
     });
-    const title = sanitizeTitle(resp.choices?.[0]?.message?.content);
+    const title = sanitizeTitle(text);
     circuitBreaker.recordSuccess(CB_NAME);
     return title || fallbackTitle(firstUser);
   } catch (err) {

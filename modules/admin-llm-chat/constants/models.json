@@ -1,11 +1,11 @@
 {
   "defaultModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-6"
+    "provider": "openai",
+    "modelId": "gpt-5.5"
   },
   "summarizer": {
-    "provider": "anthropic",
-    "modelId": "claude-3-5-haiku-20241022"
+    "provider": "openai",
+    "modelId": "gpt-4o-mini"
   },
   "providerDefaults": {
     "anthropic": {
@@ -53,22 +53,15 @@
       "outputCostPer1M": 30
     },
     {
-      "id": "claude-sonnet-4-20250514",
+      "id": "claude-haiku-4-5",
       "provider": "anthropic",
-      "displayName": "Claude Sonnet 4",
+      "displayName": "Claude Haiku 4.5",
       "contextWindow": 200000,
-      "maxOutputTokens": 8192
-    },
-    {
-      "id": "claude-3-5-haiku-20241022",
-      "provider": "anthropic",
-      "displayName": "Claude Haiku 3.5",
-      "contextWindow": 200000,
-      "maxOutputTokens": 8192,
-      "inputCostPer1M": 0.8,
-      "outputCostPer1M": 4,
-      "cacheReadPer1M": 0.08,
-      "cacheWritePer1M": 1
+      "maxOutputTokens": 64000,
+      "inputCostPer1M": 1,
+      "outputCostPer1M": 5,
+      "cacheReadPer1M": 0.1,
+      "cacheWritePer1M": 1.25
     },
     {
       "id": "gpt-4o",

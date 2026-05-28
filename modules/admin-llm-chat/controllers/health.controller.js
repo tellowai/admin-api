@@ -5,6 +5,7 @@ const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const streamRegistry = require('../services/stream.registry');
 const modelsRegistry = require('../services/models.registry.service');
 const circuitBreaker = require('../services/circuit-breaker.util');
+const schemaCache = require('../services/schema.cache.service');
 
 exports.health = async (req, res) => {
   let redisStatus = 'degraded';
@@ -40,8 +41,10 @@ exports.health = async (req, res) => {
       },
       tools: {
         query_clickhouse: CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED ? 'ok' : 'disabled',
+        run_analysis_code: CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED ? 'ok' : 'disabled',
       },
       clickhouseReadonly: clickhouseStatus,
+      clickhouseSchemaVersion: schemaCache.SCHEMA_VERSION,
       redis: redisStatus,
       kafka: global.kafkaProducer ? 'ok' : 'degraded',
     },

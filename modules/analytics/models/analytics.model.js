@@ -499,20 +499,24 @@ class AnalyticsModel {
   }
 
   /**
-   * Top templates by generation count (sum of tries in date range).
-   * Single aggregation, no joins. Paginated via LIMIT/OFFSET for scale.
+   * Top templates by generation outcomes (tries + successes in date range).
+   * Ordered by successes, then tries. Paginated via LIMIT/OFFSET for scale.
    */
   static async getTopTemplatesByGeneration(whereConditions, limit, offset) {
     const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
     const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const tries = ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.TRIES;
+    const successes = ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES;
     const query = `
       SELECT
         template_id,
-        sum(tries) as count
+        sum(${tries}) as tries,
+        sum(${successes}) as successes
       FROM ${ANALYTICS_CONSTANTS.TABLES.TEMPLATE_DAILY_STATS}
       WHERE ${whereConditions.join(' AND ')}
       GROUP BY template_id
-      ORDER BY count DESC
+      HAVING successes > 0 OR tries > 0
+      ORDER BY successes DESC, tries DESC
       LIMIT ${safeLimit}
       OFFSET ${safeOffset}
     `;
@@ -1261,6 +1265,32 @@ error_category,
       WHERE properties['template_id'] != ''
         AND properties['template_id'] IN (${safeIds})
       GROUP BY properties['template_id'], currency
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * order_created / order_completed events attributed to template_id (same date window as top-templates / performance).
+   */
+  static async getOrderCountsByTemplateIdsRaw(timestampConditions, templateIds) {
+    if (!templateIds || templateIds.length === 0) return [];
+    const ts = (timestampConditions || []).join(' AND ');
+    const safeIds = templateIds
+      .map((id) => `'${String(id).replace(/'/g, "''")}'`)
+      .join(', ');
+    const query = `
+      SELECT
+        properties['template_id'] AS template_id,
+        countIf(event_name = 'order_created') AS orders_created,
+        countIf(event_name = 'order_completed') AS orders_completed
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      PREWHERE event_name IN ('order_created', 'order_completed')
+        AND object_type = 'order'
+        AND ${ts}
+      WHERE properties['template_id'] != ''
+        AND properties['template_id'] IN (${safeIds})
+      GROUP BY properties['template_id']
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];

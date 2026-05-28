@@ -9,6 +9,7 @@ const { redactValue, truncatePreview } = require('./pii.redactor');
 
 const PROMPTS_DIR = path.join(__dirname, '../constants/system.prompts');
 const BUSINESS_CONTEXT_PATH = path.join(__dirname, '../constants/business_context.json');
+const { formatRelationshipsGuide } = require('../constants/table.relationships');
 
 const VERBATIM_TAIL = 6;
 
@@ -42,12 +43,14 @@ async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM
     : '';
   const businessContext = `Business context:\n${JSON.stringify(biz, null, 2)}`;
   const tables = `Available ClickHouse tables:\n${tableCatalog}`;
+  const crossTable = formatRelationshipsGuide();
   return {
     base,
     businessContext,
     tableCatalog: tables,
+    crossTable,
     memories: memoryBlock,
-    full: `${base}\n\n${businessContext}\n\n${tables}${memoryBlock}`,
+    full: `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${memoryBlock}`,
   };
 }
 
@@ -71,6 +74,30 @@ function getTraceFromMessage(m) {
   return null;
 }
 
+function toProviderToolCall(tc, activeProvider) {
+  const argsRaw = typeof tc.arguments_json === 'string'
+    ? tc.arguments_json
+    : JSON.stringify(tc.arguments_json || {});
+  const argsStr = typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
+  if (activeProvider === 'openai') {
+    return {
+      id: tc.tool_call_id,
+      type: 'function',
+      function: {
+        name: tc.tool_name,
+        arguments: argsStr,
+      },
+    };
+  }
+  return {
+    id: tc.tool_call_id,
+    name: tc.tool_name,
+    arguments: typeof tc.arguments_json === 'string'
+      ? JSON.parse(tc.arguments_json)
+      : (tc.arguments_json || {}),
+  };
+}
+
 function flattenToolCallsForProvider(toolCalls, activeProvider, msgProvider) {
   if (!toolCalls?.length) return [];
   if (msgProvider === activeProvider) {
@@ -79,11 +106,7 @@ function flattenToolCallsForProvider(toolCalls, activeProvider, msgProvider) {
       rows.push({
         role: 'assistant',
         content: null,
-        tool_calls: [{
-          id: tc.tool_call_id,
-          name: tc.tool_name,
-          arguments: typeof tc.arguments_json === 'string' ? JSON.parse(tc.arguments_json) : tc.arguments_json,
-        }],
+        tool_calls: [toProviderToolCall(tc, activeProvider)],
       });
       const result = typeof tc.result_json === 'string' ? tc.result_json : JSON.stringify(tc.result_json || {});
       rows.push({
@@ -150,10 +173,13 @@ function messageToApiRows(m, activeProvider, supportsVision) {
   }
 
   if (m.role === 'tool') {
+    const content = typeof m.content === 'string'
+      ? m.content
+      : JSON.stringify(m.content || m.content_stub || {});
     return [{
       role: 'tool',
       tool_call_id: m.tool_call_id,
-      content: m.content_stub || m.content,
+      content,
     }];
   }
 
@@ -165,8 +191,87 @@ function messageToApiRows(m, activeProvider, supportsVision) {
   return [{
     role: m.role,
     content: normalizeContent(m, supportsVision),
-    tool_calls: m.tool_calls,
   }];
+}
+
+/**
+ * Drop standalone tool rows when the same tool_call_id was already emitted via
+ * assistant tool_calls expansion (avoids duplicate Anthropic tool_result blocks).
+ */
+function repairDuplicateToolResults(apiRows) {
+  const out = [];
+  let assistantToolIds = null;
+  const toolEmitted = new Set();
+
+  for (const row of apiRows) {
+    if (row.role === 'assistant' && row.tool_calls?.length) {
+      assistantToolIds = new Set(row.tool_calls.map((tc) => tc.id || tc.tool_call_id));
+      toolEmitted.clear();
+      out.push(row);
+      continue;
+    }
+    if (row.role === 'tool') {
+      const id = row.tool_call_id;
+      if (assistantToolIds?.has(id)) {
+        if (toolEmitted.has(id)) continue;
+        toolEmitted.add(id);
+      } else {
+        assistantToolIds = null;
+        toolEmitted.clear();
+      }
+    } else {
+      assistantToolIds = null;
+      toolEmitted.clear();
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** OpenAI requires each tool message to follow an assistant message with matching tool_calls. */
+function repairOpenaiToolMessageSequence(apiRows) {
+  const out = [];
+  for (const row of apiRows) {
+    if (row.role === 'tool') {
+      const prev = out[out.length - 1];
+      const prevIds = prev?.tool_calls?.map((tc) => tc.id || tc.tool_call_id) || [];
+      const matches = prev?.role === 'assistant'
+        && prev.tool_calls?.length
+        && prevIds.includes(row.tool_call_id);
+      if (!matches) {
+        const body = typeof row.content === 'string' ? row.content : JSON.stringify(row.content || {});
+        out.push({ role: 'assistant', content: `[Tool result]: ${truncatePreview(body, 2048)}` });
+        continue;
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+function sanitizeMessageRow(row, activeProvider) {
+  const out = { ...row };
+  if (!out.tool_calls?.length) {
+    delete out.tool_calls;
+  } else if (activeProvider === 'openai') {
+    out.tool_calls = out.tool_calls.map((tc) => {
+      if (tc.type === 'function' && tc.function?.name) return tc;
+      const args = tc.arguments ?? tc.function?.arguments ?? {};
+      return {
+        id: tc.id || tc.tool_call_id,
+        type: 'function',
+        function: {
+          name: tc.name || tc.function?.name,
+          arguments: typeof args === 'string' ? args : JSON.stringify(args),
+        },
+      };
+    });
+    if (out.role === 'assistant' && !out.content) out.content = null;
+  }
+  if (out.role === 'assistant' && !out.tool_calls?.length && (out.content == null || out.content === '')) {
+    out.content = out.content || '';
+  }
+  return out;
 }
 
 function buildMessagesForProvider(history, systemText, options = {}) {
@@ -208,7 +313,12 @@ function buildMessagesForProvider(history, systemText, options = {}) {
     }
   });
 
-  return apiRows;
+  let sanitized = apiRows.map((row) => sanitizeMessageRow(row, activeProvider));
+  sanitized = repairDuplicateToolResults(sanitized);
+  if (activeProvider === 'openai') {
+    sanitized = repairOpenaiToolMessageSequence(sanitized);
+  }
+  return sanitized;
 }
 
 module.exports = {

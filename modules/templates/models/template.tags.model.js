@@ -2,6 +2,95 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 
+/**
+ * Template IDs assigned to a tag definition (non-deleted template_tags rows only).
+ */
+exports.getTemplateIdsForTtdId = async function(ttdId) {
+  if (ttdId == null || String(ttdId).trim() === '') {
+    return [];
+  }
+
+  const query = `
+    SELECT DISTINCT template_id
+    FROM template_tags
+    WHERE ttd_id = ?
+      AND deleted_at IS NULL
+  `;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [String(ttdId).trim()]);
+  return rows.map((row) => row.template_id);
+};
+
+/**
+ * Non-archived template IDs from a list (simple templates lookup).
+ */
+exports.filterActiveTemplateIds = async function(templateIds) {
+  if (!templateIds || !templateIds.length) {
+    return [];
+  }
+
+  const placeholders = templateIds.map(() => '?').join(',');
+  const query = `
+    SELECT template_id
+    FROM templates
+    WHERE template_id IN (${placeholders})
+      AND archived_at IS NULL
+  `;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, templateIds);
+  return rows.map((row) => row.template_id);
+};
+
+/**
+ * Active (non-archived) templates that have any of the given tag definitions.
+ */
+exports.getActiveTemplateIdsForTtdId = async function(ttdId) {
+  const linkedIds = await exports.getTemplateIdsForTtdId(ttdId);
+  return exports.filterActiveTemplateIds(linkedIds);
+};
+
+/**
+ * Per-tag template counts (active templates only). Two simple queries + in-memory stitch.
+ * @returns {Map<string, number>} ttd_id -> count
+ */
+exports.getTemplateCountsByTtdIds = async function(ttdIds) {
+  const map = new Map();
+  if (!ttdIds || !ttdIds.length) {
+    return map;
+  }
+
+  const normalizedIds = [...new Set(ttdIds.map((id) => String(id)))];
+  normalizedIds.forEach((id) => map.set(id, 0));
+
+  const placeholders = normalizedIds.map(() => '?').join(',');
+  const tagRows = await mysqlQueryRunner.runQueryInSlave(
+    `
+    SELECT ttd_id, template_id
+    FROM template_tags
+    WHERE ttd_id IN (${placeholders})
+      AND deleted_at IS NULL
+    `,
+    normalizedIds
+  );
+
+  if (!tagRows.length) {
+    return map;
+  }
+
+  const templateIds = [...new Set(tagRows.map((row) => row.template_id))];
+  const activeIds = new Set(
+    (await exports.filterActiveTemplateIds(templateIds)).map((id) => String(id))
+  );
+
+  tagRows.forEach((row) => {
+    if (!activeIds.has(String(row.template_id))) return;
+    const key = String(row.ttd_id);
+    map.set(key, (map.get(key) || 0) + 1);
+  });
+
+  return map;
+};
+
 exports.getTemplateTags = async function(templateId) {
   const query = `
     SELECT

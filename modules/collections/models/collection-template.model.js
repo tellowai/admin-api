@@ -156,24 +156,163 @@ exports.getCollectionTemplates = async function(collectionId, pagination) {
   );
 };
 
-exports.getTemplatesByIds = async function(templateIds) {
-  const query = `
-    SELECT 
+const COLLECTION_TEMPLATE_SELECT_FIELDS = `
       template_id,
       template_name,
       template_code,
+      template_output_type,
       description,
       prompt,
       faces_needed,
       cf_r2_key,
       cf_r2_url,
+      cf_r2_bucket,
+      thumb_frame_asset_key,
+      thumb_frame_bucket,
       credits,
       additional_data,
       created_at
+`;
+
+exports.getTemplatesByIds = async function(templateIds) {
+  const query = `
+    SELECT 
+      ${COLLECTION_TEMPLATE_SELECT_FIELDS}
     FROM templates
     WHERE template_id IN (?)
     AND archived_at IS NULL
   `;
 
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
-}; 
+};
+
+exports.countCollectionTemplates = async function(collectionId) {
+  const query = `
+    SELECT COUNT(*) AS total
+    FROM collection_templates
+    WHERE collection_id = ?
+    AND archived_at IS NULL
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, [collectionId]);
+  return Number(row?.total) || 0;
+};
+
+exports.getFacetsByFacetKeys = async function(facetKeys) {
+  if (!facetKeys || facetKeys.length === 0) {
+    return [];
+  }
+
+  const placeholders = facetKeys.map(() => '?').join(',');
+  const query = `
+    SELECT facet_id, facet_key
+    FROM template_tag_facets
+    WHERE facet_key IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, facetKeys);
+};
+
+exports.getTagDefinitionsByFacetIds = async function(facetIds) {
+  if (!facetIds || facetIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = facetIds.map(() => '?').join(',');
+  const query = `
+    SELECT ttd_id, facet_id, tag_code
+    FROM template_tag_definitions
+    WHERE facet_id IN (${placeholders})
+    AND archived_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, facetIds);
+};
+
+exports.getTemplateTagsByTtdIds = async function(ttdIds) {
+  if (!ttdIds || ttdIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = ttdIds.map(() => '?').join(',');
+  const query = `
+    SELECT template_id, ttd_id
+    FROM template_tags
+    WHERE ttd_id IN (${placeholders})
+    AND deleted_at IS NULL
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(query, ttdIds);
+};
+
+function buildAttributeFilterClause(attributeFilters, templateIds) {
+  const whereConditions = [];
+  const queryParams = [];
+
+  if (templateIds && templateIds.length > 0) {
+    const placeholders = templateIds.map(() => '?').join(',');
+    whereConditions.push(`template_id IN (${placeholders})`);
+    queryParams.push(...templateIds);
+  }
+
+  Object.keys(attributeFilters || {}).forEach((attrName) => {
+    const filter = attributeFilters[attrName];
+    if (filter.op === '=') {
+      whereConditions.push(`${attrName} = ?`);
+      queryParams.push(filter.value);
+    } else if (filter.op === 'IN') {
+      const placeholders = filter.values.map(() => '?').join(',');
+      whereConditions.push(`${attrName} IN (${placeholders})`);
+      queryParams.push(...filter.values);
+    }
+  });
+
+  if (whereConditions.length === 0) {
+    return null;
+  }
+
+  return {
+    whereClause: whereConditions.join(' AND '),
+    queryParams
+  };
+}
+
+exports.countTemplatesByAttributeFilters = async function(templateIds, attributeFilters) {
+  const filterContext = buildAttributeFilterClause(attributeFilters, templateIds);
+  if (!filterContext) {
+    return 0;
+  }
+
+  const query = `
+    SELECT COUNT(*) AS total
+    FROM templates
+    WHERE ${filterContext.whereClause}
+    AND archived_at IS NULL
+  `;
+
+  const [row] = await mysqlQueryRunner.runQueryInSlave(query, filterContext.queryParams);
+  return Number(row?.total) || 0;
+};
+
+exports.getTemplatesByAttributeFilters = async function(templateIds, attributeFilters, pagination) {
+  const filterContext = buildAttributeFilterClause(attributeFilters, templateIds);
+  if (!filterContext) {
+    return [];
+  }
+
+  const query = `
+    SELECT 
+      ${COLLECTION_TEMPLATE_SELECT_FIELDS}
+    FROM templates
+    WHERE ${filterContext.whereClause}
+    AND archived_at IS NULL
+    ORDER BY updated_at DESC, template_id DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  return await mysqlQueryRunner.runQueryInSlave(
+    query,
+    [...filterContext.queryParams, pagination.limit, pagination.offset]
+  );
+};

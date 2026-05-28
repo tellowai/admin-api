@@ -1,8 +1,8 @@
 {
-  "name": "Photobop app API",
+  "name": "Tellow AI app API",
   "version": "1.0.0",
-  "description": "apidoc for Photobop app api",
-  "title": "Photobop app API documentation",
+  "description": "apidoc for Tellow AI app api",
+  "title": "Tellow AI app API documentation",
   "url" : "https://dev-api.photobop.co",
   "sampleUrl" : "https://dev-api.photobop.co"
 }

@@ -2,6 +2,10 @@
 
 const BaseLLMProvider = require('../base.llm.provider');
 const OpenAIWrapper = require('./openai.wrapper.cjs');
+const {
+  buildOpenaiTokenLimitParams,
+  buildOpenaiTemperatureParam,
+} = require('../../utils/openai.token-limit');
 const { handleOpenAIErrors } = require('../../../core/controllers/openai.errorhandler');
 const { getActiveModelData } = require('../../controllers/active.model.selection.js');
 const nlp = require('compromise');
@@ -44,7 +48,7 @@ class OpenAIProvider extends BaseLLMProvider {
         model: activeModel.name,
         messages,
         response_format: responseFormat ? zodResponseFormat() : undefined,
-        max_tokens: activeModel.maxTokens
+        ...buildOpenaiTokenLimitParams(activeModel.name, activeModel.maxTokens),
       });
 
       const metrics = this._calculateMetrics(response, startTime, messages, activeModel);
@@ -87,7 +91,7 @@ class OpenAIProvider extends BaseLLMProvider {
         model: activeModel.name,
         messages: content,
         response_format: responseFormat ? zodResponseFormat() : undefined,
-        max_tokens: activeModel.maxTokens
+        ...buildOpenaiTokenLimitParams(activeModel.name, activeModel.maxTokens),
       });
 
       const metrics = this._calculateMetrics(response, startTime, messages, activeModel, true);
@@ -417,8 +421,8 @@ console.log({
         messages,
         tools: tools && tools.length ? tools : undefined,
         tool_choice: tools && tools.length ? 'auto' : undefined,
-        max_tokens: maxTokens || 4096,
-        temperature: temperature ?? 0.2,
+        ...buildOpenaiTokenLimitParams(model, maxTokens),
+        ...buildOpenaiTemperatureParam(model, temperature),
         stream: true,
         stream_options: { include_usage: true },
       }, { signal });

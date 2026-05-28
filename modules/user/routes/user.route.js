@@ -111,4 +111,12 @@ module.exports = function (app) {
     AuthMiddleware.isAdminUser,
     AdminUserCtrl.lookupConsumerUserForSupport
   );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-users/search-for-ticket"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.searchConsumersForSupportTicket
+  );
 };

@@ -44,6 +44,20 @@ function mapKnownProviderMessage(message) {
       retryable: true,
     };
   }
+  if (/not_found_error|model:\s*claude|model not found|404/i.test(m)) {
+    return {
+      code: 'MODEL_NOT_AVAILABLE',
+      message: 'That model id is not available from the provider anymore. Switch to Claude Sonnet 4.6 (or another model) in the composer.',
+      retryable: false,
+    };
+  }
+  if (/terminated|econnreset|socket hang up/i.test(m)) {
+    return {
+      code: 'STREAM_DISCONNECTED',
+      message: 'The model stream disconnected (often during long tool runs). Retry your message; partial steps may be saved above.',
+      retryable: true,
+    };
+  }
   return null;
 }
 

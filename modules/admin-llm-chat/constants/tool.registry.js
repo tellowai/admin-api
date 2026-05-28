@@ -1,9 +1,11 @@
 'use strict';
 
+const CONSTANTS = require('./admin-llm-chat.constants');
+
 const TOOL_DEFINITIONS = [
   {
     name: 'list_clickhouse_tables',
-    description: 'List whitelisted ClickHouse tables available for analytics queries.',
+    description: 'Discover all whitelisted analytics tables with short descriptions. Use first to choose which tables fit the user question — do not rely only on fixed cross-table recipes.',
     parameters: {
       type: 'object',
       properties: {},
@@ -12,7 +14,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_table_schema',
-    description: 'Get column names and types for a whitelisted table.',
+    description: 'REQUIRED before query_clickhouse. Returns columns, date filter column, and optional related_tables hints (suggestions only — explore any whitelisted table that might help).',
     parameters: {
       type: 'object',
       properties: {
@@ -24,7 +26,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'query_clickhouse',
-    description: 'Run a safe SELECT on one whitelisted table. Must include date filter. No JOINs.',
+    description: 'Run SELECT on one whitelisted table. Call get_table_schema first; use required_date_column in WHERE (report_date for daily stats). No JOINs — for cross-table questions run multiple queries and merge with analysis or run_analysis_code.',
     parameters: {
       type: 'object',
       properties: {
@@ -43,6 +45,23 @@ const TOOL_DEFINITIONS = [
       properties: {
         tz: { type: 'string', description: 'IANA timezone, default Asia/Kolkata' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'run_analysis_code',
+    description: 'Run sandboxed JavaScript on JSON inputs (e.g. rows from prior query_clickhouse calls). Use proactively to merge multi-table results, ratios, rankings, pivots. Set `result = ...` or return a JSON-serializable value. No require/network/files.',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'JavaScript function body; use inputs.* and assign result' },
+        inputs: {
+          type: 'object',
+          description: 'Named datasets, e.g. { orders: [...], templates: [...] }',
+          additionalProperties: true,
+        },
+      },
+      required: ['code'],
       additionalProperties: false,
     },
   },
@@ -80,8 +99,18 @@ function toAnthropicTools(definitions) {
   }));
 }
 
+function getEnabledToolDefinitions() {
+  return TOOL_DEFINITIONS.filter((d) => {
+    if (d.name === 'run_analysis_code' && !CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED) return false;
+    if (['query_clickhouse', 'get_table_schema', 'list_clickhouse_tables'].includes(d.name)
+      && !CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED) return false;
+    return true;
+  });
+}
+
 module.exports = {
   TOOL_DEFINITIONS,
+  getEnabledToolDefinitions,
   toOpenAITools,
   toAnthropicTools,
 };

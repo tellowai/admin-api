@@ -640,14 +640,30 @@ class AnalyticsService {
       return [];
     }
     const templateIds = rows.map(r => r.template_id).filter(Boolean);
-    const templates = await TemplateModel.getTemplatesByIdsForAnalytics(templateIds);
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const [templates, orderCountRows] = await Promise.all([
+      TemplateModel.getTemplatesByIdsForAnalytics(templateIds),
+      AnalyticsModel.getOrderCountsByTemplateIdsRaw(tsRaw, templateIds)
+    ]);
+    const ordersById = {};
+    (orderCountRows || []).forEach((r) => {
+      if (r.template_id) {
+        ordersById[r.template_id] = {
+          orders_created: Number(r.orders_created) || 0,
+          orders_completed: Number(r.orders_completed) || 0
+        };
+      }
+    });
     const byId = {};
     (templates || []).forEach(t => { byId[t.template_id] = t; });
     return rows.map(row => {
       const t = byId[row.template_id] || {};
       return {
         template_id: row.template_id,
-        count: row.count,
+        orders_created: ordersById[row.template_id]?.orders_created ?? 0,
+        orders_completed: ordersById[row.template_id]?.orders_completed ?? 0,
+        tries: row.tries,
+        successes: row.successes,
         template_name: t.template_name ?? row.template_id ?? null,
         template_code: t.template_code ?? null,
         template_gender: t.template_gender ?? null,

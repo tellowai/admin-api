@@ -9,6 +9,8 @@
   "NO_TEMPLATE_TAGS_UNARCHIVED": "No template tag definitions were unarchived",
   "TAG_CODE_EXISTS": "Tag code already exists",
   "INVALID_FACET_ID": "Invalid facet ID provided",
+  "INVALID_TAG_ORDER": "One or more tags do not belong to this facet",
+  "TEMPLATE_TAGS_REORDERED": "Tag order updated successfully",
   "SEARCH_QUERY_REQUIRED": "Search query is required",
   "TEMPLATE_TAG_LIST_FAILED": "Failed to list template tag definitions"
 }

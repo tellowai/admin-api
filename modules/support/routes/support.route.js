@@ -7,7 +7,8 @@ module.exports = function (app) {
   const prefix = versionConfig.routePrefix + "/admin/tickets";
 
   app.route(prefix)
-    .get(AuthMiddleware.isAdminUser, SupportCtrl.listTickets);
+    .get(AuthMiddleware.isAdminUser, SupportCtrl.listTickets)
+    .post(AuthMiddleware.isAdminUser, SupportCtrl.createTicket);
 
   app.route(prefix + "/count")
     .get(AuthMiddleware.isAdminUser, SupportCtrl.getTicketsCount);

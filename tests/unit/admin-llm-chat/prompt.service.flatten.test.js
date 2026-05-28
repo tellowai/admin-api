@@ -14,12 +14,89 @@ describe('prompt.service flattenToolCallsForProvider', () => {
   }];
 
   it('keeps native assistant+tool rows for same provider', () => {
-    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'openai', 'openai');
+    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'anthropic', 'anthropic');
     expect(rows).to.have.length(2);
     expect(rows[0].role).to.equal('assistant');
     expect(rows[0].tool_calls[0].name).to.equal('query_clickhouse');
     expect(rows[1].role).to.equal('tool');
     expect(rows[1].tool_call_id).to.equal('tc-1');
+  });
+
+  it('formats openai native tool_calls with function wrapper', () => {
+    const rows = promptService.flattenToolCallsForProvider(toolCalls, 'openai', 'openai');
+    expect(rows[0].tool_calls[0].type).to.equal('function');
+    expect(rows[0].tool_calls[0].function.name).to.equal('query_clickhouse');
+  });
+
+  it('omits empty tool_calls on plain assistant messages', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [{ role: 'user', content: 'hi', sequence_no: 1, tool_calls: [] },
+        { role: 'assistant', content: 'hello', sequence_no: 2, tool_calls: [] }],
+      'System',
+      { activeProvider: 'openai', supportsVision: true },
+    );
+    const assistant = messages.find((m) => m.role === 'assistant' && m.content === 'hello');
+    expect(assistant).to.exist;
+    expect(assistant.tool_calls).to.be.undefined;
+  });
+
+  it('keeps tool message after assistant tool_calls in buildMessagesForProvider', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [
+        { role: 'user', content: 'schema?', sequence_no: 1 },
+        {
+          role: 'assistant',
+          content: null,
+          model_provider: 'openai',
+          tool_calls: [{
+            tool_call_id: 'call_abc',
+            tool_name: 'get_table_schema',
+            arguments_json: { table: 'google_ads_insights_daily' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call_abc',
+          content: '{"success":true}',
+        },
+      ],
+      'System',
+      { activeProvider: 'openai', supportsVision: true },
+    );
+    const toolIdx = messages.findIndex((m) => m.role === 'tool');
+    expect(toolIdx).to.be.greaterThan(0);
+    expect(messages[toolIdx - 1].role).to.equal('assistant');
+    expect(messages[toolIdx - 1].tool_calls).to.have.length(1);
+    expect(messages[toolIdx - 1].tool_calls[0].function.name).to.equal('get_table_schema');
+  });
+
+  it('drops duplicate standalone tool rows after assistant tool_calls expansion', () => {
+    const messages = promptService.buildMessagesForProvider(
+      [
+        { role: 'user', content: 'schema?', sequence_no: 1 },
+        {
+          role: 'assistant',
+          content: null,
+          model_provider: 'anthropic',
+          tool_calls: [{
+            tool_call_id: 'toolu_abc',
+            tool_name: 'get_table_schema',
+            arguments_json: { table: 'orders_daily_stats' },
+            result_json: '{"success":true}',
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'toolu_abc',
+          content: '{"success":true}',
+        },
+      ],
+      'System',
+      { activeProvider: 'anthropic', supportsVision: true },
+    );
+    const toolRows = messages.filter((m) => m.role === 'tool');
+    expect(toolRows).to.have.length(1);
+    expect(toolRows[0].tool_call_id).to.equal('toolu_abc');
   });
 
   it('flattens cross-provider tool calls into assistant text block', () => {
@@ -65,14 +142,16 @@ describe('context.summary.service thresholds', () => {
     expect(pct).to.equal(0.5);
   });
 
-  it('shouldSummarize at AUTO threshold', () => {
-    expect(contextSummaryService.shouldSummarize(
+  it('computeUsedPct crosses AUTO threshold for legacy fallback', () => {
+    const high = contextSummaryService.computeUsedPct(
       { total_tokens_in: 85000, total_tokens_out: 0 },
       model,
-    )).to.equal(true);
-    expect(contextSummaryService.shouldSummarize(
+    );
+    const low = contextSummaryService.computeUsedPct(
       { total_tokens_in: 50000, total_tokens_out: 0 },
       model,
-    )).to.equal(false);
+    );
+    expect(high).to.be.at.least(0.85);
+    expect(low).to.be.below(0.85);
   });
 });

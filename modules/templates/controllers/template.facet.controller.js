@@ -2,6 +2,7 @@
 
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const TemplateFacetModel = require('../models/template.facet.model');
+const TemplateTagsModel = require('../models/template.tags.model');
 const TemplateTagErrorHandler = require('../middlewares/template.tag.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
@@ -18,6 +19,17 @@ const logger = require('../../../config/lib/logger');
 exports.listTemplateFacetsWithTags = async function(req, res) {
   try {
     const facetsWithTags = await TemplateFacetModel.listAllTemplateFacetsWithTags();
+
+    const ttdIds = facetsWithTags.flatMap((facet) =>
+      (facet.tags || []).map((tag) => tag.ttd_id)
+    );
+    const templateCountByTtdId = await TemplateTagsModel.getTemplateCountsByTtdIds(ttdIds);
+
+    facetsWithTags.forEach((facet) => {
+      (facet.tags || []).forEach((tag) => {
+        tag.template_count = templateCountByTtdId.get(String(tag.ttd_id)) ?? 0;
+      });
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: facetsWithTags

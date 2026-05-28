@@ -2,7 +2,6 @@
 
 const HTTP = require('../../core/controllers/httpcodes.server.controller').CODES;
 const ConversationModel = require('../models/conversation.model');
-const AttachmentModel = require('../models/attachment.model');
 const sseService = require('../services/sse.service');
 const orchestrator = require('../services/admin-llm-chat.orchestrator.service');
 const streamRegistry = require('../services/stream.registry');
@@ -76,6 +75,13 @@ exports.streamMessage = async (req, res) => {
     }
   }
 
+  if (body.attachment_ids?.length > CONSTANTS.MAX_ATTACHMENTS_PER_MESSAGE) {
+    return res.status(HTTP.BAD_REQUEST).json({
+      code: 'TOO_MANY_ATTACHMENTS',
+      message: `Maximum ${CONSTANTS.MAX_ATTACHMENTS_PER_MESSAGE} attachments per message`,
+    });
+  }
+
   sseService.initSse(res);
   const sendEvent = (event, data) => sseService.sendEvent(res, event, data);
   const abortController = new AbortController();
@@ -85,10 +91,6 @@ exports.streamMessage = async (req, res) => {
     abortController.abort();
     streamRegistry.unregister(userId, conversationId);
   });
-
-  if (body.attachment_ids?.length) {
-    await AttachmentModel.linkToMessage(body.attachment_ids, null);
-  }
 
   try {
     await orchestrator.runStreamingTurn({

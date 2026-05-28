@@ -7,6 +7,19 @@ const { createId } = require('@paralleldrive/cuid2');
  * Credits model for admin-api (support refunds only).
  * Uses same DB tables as main API (user_credits, credits_transactions).
  */
+
+/** @param {object} row */
+function adminActivationMetaForTransaction(row) {
+  const desc = row && row.description != null ? String(row.description) : '';
+  if (/revenuecat admin activation/i.test(desc)) {
+    return { kind: 'revenuecat', label: 'Admin activated' };
+  }
+  if (/^admin grant:/i.test(desc)) {
+    return { kind: 'grant', label: 'Admin activated' };
+  }
+  return null;
+}
+
 async function createTransaction(connection, userId, transactionType, amount, referenceType, referenceId, description, status = 'completed') {
   const transactionId = createId();
   const insertQuery = `
@@ -94,8 +107,13 @@ async function getUserCreditsTransactions(userId, page, limit, options = {}) {
   const balance = balanceResult[0] ? Number(balanceResult[0].balance) || 0 : 0;
   const reserved_balance = balanceResult[0] ? Number(balanceResult[0].reserved_balance) || 0 : 0;
 
+  const enriched = (Array.isArray(transactions) ? transactions : []).map((row) => {
+    const admin_activation = adminActivationMetaForTransaction(row);
+    return admin_activation ? { ...row, admin_activation } : row;
+  });
+
   return {
-    transactions,
+    transactions: enriched,
     balance,
     reserved_balance
   };

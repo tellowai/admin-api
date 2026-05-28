@@ -31,6 +31,13 @@ async function startServer() {
     process.exit(1);
   }
 
+  try {
+    const schemaCache = require('./modules/admin-llm-chat/services/schema.cache.service');
+    await schemaCache.refreshSchemaSnapshot();
+  } catch (err) {
+    console.warn(chalk.yellow('[admin-llm-chat] schema cache refresh skipped:'), err.message);
+  }
+
   // Initialize Express
   const app = express.init();
 

@@ -38,11 +38,36 @@ exports.linkToMessage = (attachmentIds, messageId) => {
   return mysqlModel.runQueryInMaster(q, [messageId, ...attachmentIds]);
 };
 
+exports.listImagesByMessageIds = (conversationId, messageIds) => {
+  if (!messageIds?.length) return Promise.resolve([]);
+  const placeholders = messageIds.map(() => '?').join(',');
+  const q = `SELECT attachment_id, message_id, mime_type, storage_key, original_name
+    FROM admin_llm_chat_attachments
+    WHERE conversation_id = ? AND message_id IN (${placeholders})
+    AND mime_type LIKE 'image/%'`;
+  return mysqlModel.runQueryInSlave(q, [conversationId, ...messageIds]);
+};
+
 exports.listByConversation = (conversationId) => {
   const q = `SELECT attachment_id, conversation_id, message_id, mime_type, size_bytes,
     storage_key, original_name, parse_status, created_at
     FROM admin_llm_chat_attachments WHERE conversation_id = ? ORDER BY created_at ASC`;
   return mysqlModel.runQueryInSlave(q, [conversationId]);
+};
+
+exports.listStorageKeysByConversation = (conversationId) => {
+  const q = `SELECT storage_key FROM admin_llm_chat_attachments
+    WHERE conversation_id = ? AND storage_key IS NOT NULL`;
+  return mysqlModel.runQueryInSlave(q, [conversationId])
+    .then((rows) => (rows || []).map((r) => r.storage_key).filter(Boolean));
+};
+
+exports.listOrphanStorageKeysOlderThan = (graceHours) => {
+  const q = `SELECT storage_key FROM admin_llm_chat_attachments
+    WHERE message_id IS NULL AND storage_key IS NOT NULL
+    AND created_at < DATE_SUB(NOW(), INTERVAL ? HOUR)`;
+  return mysqlModel.runQueryInSlave(q, [graceHours])
+    .then((rows) => (rows || []).map((r) => r.storage_key).filter(Boolean));
 };
 
 exports.listByIdsForUser = (attachmentIds, userId) => {

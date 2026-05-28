@@ -157,7 +157,10 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
       payment_platform: formatPlatformLabel(r.linked_client_platform),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
-      subscription_status: displaySubscriptionStatus(r),
+      subscription_status:
+        r._display_status != null && String(r._display_status).trim() !== ''
+          ? String(r._display_status)
+          : displaySubscriptionStatus(r),
       plan_credits: credits,
       plan_bonus_credits: bonus_credits,
       credit_balance: wallet ? wallet.balance : 0,
@@ -166,11 +169,8 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
   });
 }
 
-function toCalendarDate(d) {
-  if (!d) return '';
-  if (d instanceof Date) return moment(d).format('YYYY-MM-DD');
-  const s = String(d);
-  return s.includes('T') ? s.split('T')[0] : s;
+function toCalendarDate(d, clientTz) {
+  return TimezoneService.toCalendarYmdInTz(d, clientTz);
 }
 
 /** IANA aliases; MySQL time_zone tables often expect Asia/Kolkata. */
@@ -192,8 +192,8 @@ exports.getOrdersStatusDaily = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -222,8 +222,8 @@ exports.getOrdersStatusSummary = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -253,8 +253,8 @@ exports.getOrdersVolumeSummary = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const productType = q.product_type != null && String(q.product_type).trim() !== '' ? String(q.product_type).trim() : '';
     const paymentGateway =
       q.payment_gateway != null && String(q.payment_gateway).trim() !== '' ? String(q.payment_gateway).trim() : '';
@@ -272,7 +272,8 @@ exports.getOrdersVolumeSummary = async function (req, res) {
       endCal,
       tz,
       ppIds,
-      paymentGateway: paymentGateway || undefined
+      paymentGateway: paymentGateway || undefined,
+      productTypeLedger: productType || ''
     });
 
     return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });
@@ -301,8 +302,8 @@ exports.getSubscriptionPurchasesDaily = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
 
     const data = await SubscriptionsAnalyticsModel.getSubscriptionEventsDaily({
       startCal,
@@ -327,8 +328,8 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
     }
 
-    const startCal = toCalendarDate(q.start_date);
-    const endCal = toCalendarDate(q.end_date);
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const clientPlatform = q.client_platform != null ? String(q.client_platform).trim().toLowerCase() : '';
     let paymentPlanId = null;
     const rawPp = q.payment_plan_id;
@@ -402,10 +403,18 @@ function buildPurchasingCustomerUserDetails(row) {
   return Object.keys(details).length ? details : null;
 }
 
-/** GET /admin/orders/analytics/purchasing-customers — lifetime purchasers (paginated). */
+/** GET /admin/orders/analytics/purchasing-customers — purchasers in date range (paginated). */
 exports.getPurchasingCustomersTable = async function (req, res) {
   try {
     const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
     const page = Math.max(1, Number(q.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(q.limit) || 10));
     const offset = (page - 1) * limit;
@@ -426,7 +435,10 @@ exports.getPurchasingCustomersTable = async function (req, res) {
         ? Math.floor(Number(q.range_max))
         : null;
 
-    const { rows, total } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
+    const { rows, total, summary } = await OrdersAnalyticsModel.listPurchasingCustomersForAdmin({
+      startCal,
+      endCal,
+      tz,
       search,
       limit,
       offset,
@@ -456,7 +468,13 @@ exports.getPurchasingCustomersTable = async function (req, res) {
         items,
         total,
         page,
-        limit
+        limit,
+        summary: {
+          alacarte_purchases: Number(summary?.alacarte_purchases) || 0,
+          addon_purchases: Number(summary?.addon_purchases) || 0,
+          subscription_purchases: Number(summary?.subscription_purchases) || 0,
+          total_purchases: Number(summary?.total_purchases) || 0
+        }
       }
     });
   } catch (err) {

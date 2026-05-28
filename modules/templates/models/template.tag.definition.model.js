@@ -296,6 +296,53 @@ exports.bulkUnarchiveTemplateTagDefinitions = async function(tagIds) {
   return result.affectedRows;
 };
 
+/**
+ * Persist display order for tags in a facet (stored as additional_data.sort).
+ */
+exports.reorderTagsInFacet = async function(facetId, orderedTagIds) {
+  if (!facetId || !orderedTagIds?.length) {
+    return 0;
+  }
+
+  const placeholders = orderedTagIds.map(() => '?').join(',');
+  const query = `
+    SELECT ttd_id, facet_id, additional_data
+    FROM template_tag_definitions
+    WHERE ttd_id IN (${placeholders})
+      AND facet_id = ?
+      AND archived_at IS NULL
+  `;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [...orderedTagIds, facetId]);
+  if (rows.length !== orderedTagIds.length) {
+    const err = new Error('INVALID_TAG_ORDER');
+    err.code = 'INVALID_TAG_ORDER';
+    throw err;
+  }
+
+  const rowById = new Map(rows.map((row) => [String(row.ttd_id), mapTagRow(row)]));
+  let updated = 0;
+
+  for (let i = 0; i < orderedTagIds.length; i++) {
+    const ttdId = orderedTagIds[i];
+    const tag = rowById.get(String(ttdId));
+    if (!tag) continue;
+
+    const additionalData =
+      tag.additional_data && typeof tag.additional_data === 'object'
+        ? { ...tag.additional_data }
+        : {};
+    additionalData.sort = i + 1;
+
+    const ok = await exports.updateTemplateTagDefinition(ttdId, {
+      additional_data: additionalData
+    });
+    if (ok) updated += 1;
+  }
+
+  return updated;
+};
+
 exports.searchTemplateTagDefinitions = async function(searchQuery, pagination) {
   const query = `
     SELECT 

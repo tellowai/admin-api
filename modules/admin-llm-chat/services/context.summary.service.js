@@ -5,9 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('./models.registry.service');
-const LLMProviderFactory = require('../../ai-services/factories/llm.provider.factory');
+const { completeShortText } = require('./llm-auxiliary.client');
 const ContextSummaryModel = require('../models/context.summary.model');
 const conversationData = require('./conversation-data.service');
+const contextBreakdown = require('./context.breakdown.service');
 const { redactString, truncatePreview } = require('./pii.redactor');
 const circuitBreaker = require('./circuit-breaker.util');
 const rateLimit = require('./rate-limit.service');
@@ -25,14 +26,24 @@ function loadSummaryPrompt() {
   }
 }
 
+/** Legacy: lifetime billed tokens vs model window (misleading after summarization). */
 function computeUsedPct(conversation, modelMeta) {
   const used = (conversation.total_tokens_in || 0) + (conversation.total_tokens_out || 0);
   const limit = modelMeta?.contextWindow || 128000;
   return limit > 0 ? used / limit : 0;
 }
 
-function shouldSummarize(conversation, modelMeta) {
-  return computeUsedPct(conversation, modelMeta) >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
+/** Effective context that will be sent on the next turn (respects summary + recent tail). */
+async function computeEffectiveUsedPct(conversation, modelMeta, userId, options = {}) {
+  if (!modelMeta) return null;
+  const usage = await contextBreakdown.computeForConversation(conversation, userId, options);
+  return usage?.pct ?? null;
+}
+
+async function shouldSummarize(conversation, modelMeta, userId, options = {}) {
+  const effectivePct = await computeEffectiveUsedPct(conversation, modelMeta, userId, options);
+  if (effectivePct == null) return false;
+  return effectivePct >= CONSTANTS.CONTEXT_USAGE_AUTO_PCT;
 }
 
 async function buildSummaryInput(messages, toolByMsg) {
@@ -80,7 +91,6 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
   });
 
   const input = await buildSummaryInput(toSummarize, toolByMsg);
-  const provider = await LLMProviderFactory.createProvider(summarizer.provider);
   const system = loadSummaryPrompt();
   const userContent = `Conversation transcript to summarize:\n\n${input}`;
 
@@ -89,32 +99,15 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
   let completionTokens = 0;
 
   try {
-    if (summarizer.provider === 'anthropic') {
-      const AnthropicWrapper = require('../../ai-services/providers/anthropic/anthropic.wrapper.cjs');
-      const client = await AnthropicWrapper.create({});
-      const resp = await client.messages.create({
-        model: summarizer.id,
-        max_tokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
-        system,
-        messages: [{ role: 'user', content: userContent }],
-      });
-      summaryText = resp.content?.filter((b) => b.type === 'text').map((b) => b.text).join('') || '';
-      promptTokens = resp.usage?.input_tokens || 0;
-      completionTokens = resp.usage?.output_tokens || 0;
-    } else {
-      if (!provider.client) await provider.initialize();
-      const resp = await provider.client.chat.completions.create({
-        model: summarizer.id,
-        max_tokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-      });
-      summaryText = resp.choices?.[0]?.message?.content || '';
-      promptTokens = resp.usage?.prompt_tokens || 0;
-      completionTokens = resp.usage?.completion_tokens || 0;
-    }
+    const result = await completeShortText({
+      summarizer,
+      system,
+      userContent,
+      maxTokens: CONSTANTS.SUMMARY_TARGET_TOKENS,
+    });
+    summaryText = result.text;
+    promptTokens = result.promptTokens;
+    completionTokens = result.completionTokens;
   } catch (err) {
     circuitBreaker.recordFailure(CB_NAME);
     logger.warn('admin_llm_chat summary failed', { err: err.message, conversationId: conversation.conversation_id });
@@ -142,6 +135,7 @@ async function summarize(conversation, { keepRecent = CONSTANTS.SUMMARY_KEEP_REC
 
 module.exports = {
   computeUsedPct,
+  computeEffectiveUsedPct,
   shouldSummarize,
   summarize,
 };
