@@ -110,7 +110,9 @@ class TurnTraceBuilder {
   }
 
   onToolStart({ id, name }) {
-    if (this.currentKind !== 'tool') this.startSegment('tool');
+    // Always create a new tool segment per call so parallel/sequential tool
+    // calls in the same round each get their own card in the persisted trace.
+    this.startSegment('tool');
     const seg = this.trace[this.segmentIndex];
     if (seg) {
       seg.toolCallId = id;
