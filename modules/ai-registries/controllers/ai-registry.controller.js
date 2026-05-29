@@ -128,6 +128,33 @@ function ioDefinitionsVersioningDiff(incomingList, existingList) {
 }
 
 /**
+ * True when an active model needs a version clone (parameter_schema / IO structure only).
+ * Circuit breaker and fallback config never trigger a version bump.
+ * @param {Object} existingModel
+ * @param {Object} updateData
+ * @param {Array|undefined} incomingIoDefinitions
+ * @param {number|string} amrId
+ * @returns {Promise<boolean>}
+ */
+async function hasStructuralVersioningChange(existingModel, updateData, incomingIoDefinitions, amrId) {
+  if (updateData.parameter_schema) {
+    const existingParsed = typeof existingModel.parameter_schema === 'string'
+      ? (() => { try { return JSON.parse(existingModel.parameter_schema); } catch (e) { return {}; } })()
+      : (existingModel.parameter_schema || {});
+    if (parameterSchemaVersioningDiff(updateData.parameter_schema, existingParsed)) {
+      return true;
+    }
+  }
+  if (incomingIoDefinitions) {
+    const existingIos = await aiRegistryModel.getIoDefinitionsByModelId(amrId);
+    if (ioDefinitionsVersioningDiff(incomingIoDefinitions, existingIos)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Full AI model row + provider + tags + IO definitions (same shape as GET /models/:amrId).
  */
 async function loadAiModelDetail(amrId) {
@@ -609,31 +636,19 @@ exports.update = async function (req, res) {
     delete updateData.io_definitions;
 
     // --- VERSIONING CHECK ---
+    // Circuit/fallback are operational config — never clone a new model version for those alone.
+    // Versioning applies only when parameter_schema or io_definitions are in the request and structurally changed.
     let needsVersioning = false;
+    const touchesStructuralPayload =
+      updateData.parameter_schema != null || incomingIoDefinitions != null;
 
-    // Versioning only applies if the model is already ACTIVE. 
-    // Draft models can change params/IO without bumping version.
-    if (existingModel.status === 'active') {
-
-      // 1. Check Parameter Schema change (versioning only for structural: keys, types, required, default, enum, object/oneOf)
-      // Title, description, UI widget config, validation constraints → direct update, no version bump
-      if (updateData.parameter_schema) {
-        const existingParsed = typeof existingModel.parameter_schema === 'string'
-          ? (() => { try { return JSON.parse(existingModel.parameter_schema); } catch (e) { return {}; } })()
-          : (existingModel.parameter_schema || {});
-        if (parameterSchemaVersioningDiff(updateData.parameter_schema, existingParsed)) {
-          needsVersioning = true;
-        }
-      }
-
-      // 2. Check IO Definition change (versioning only for name, direction, amst_id, is_required, is_list, default_value, add/remove)
-      // Label, description, constraints, sort_order → direct update, no version bump
-      if (!needsVersioning && incomingIoDefinitions) {
-        const existingIos = await aiRegistryModel.getIoDefinitionsByModelId(amrId);
-        if (ioDefinitionsVersioningDiff(incomingIoDefinitions, existingIos)) {
-          needsVersioning = true;
-        }
-      }
+    if (existingModel.status === 'active' && touchesStructuralPayload) {
+      needsVersioning = await hasStructuralVersioningChange(
+        existingModel,
+        updateData,
+        incomingIoDefinitions,
+        amrId
+      );
     }
 
     if (needsVersioning) {
