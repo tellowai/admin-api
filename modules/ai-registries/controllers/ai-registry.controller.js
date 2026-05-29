@@ -777,6 +777,12 @@ exports.updateStatus = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
     }
 
+    if (status === 'active' && model.status === 'deprecated') {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({
+        message: req.t('ai_model:CANNOT_ACTIVATE_DEPRECATED') || 'Deprecated models cannot be activated.'
+      });
+    }
+
     await aiRegistryModel.updateAiModel(amrId, { status });
     await publishNewAdminActivityLog({
       adminUserId: req.user.userId,
