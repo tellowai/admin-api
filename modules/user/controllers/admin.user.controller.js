@@ -617,7 +617,7 @@ exports.getConsumerUserSnapshotByUserId = async function (req, res) {
 
 /**
  * Lookup an end-user by mobile (substring) or internal order_id for support tooling.
- * GET /admin/consumer-users/lookup?q=&type=mobile|order_id
+ * GET /admin/consumer-users/lookup?q=&type=mobile|order_id|user_id
  */
 exports.lookupConsumerUserForSupport = async function (req, res) {
   try {
@@ -629,7 +629,18 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
 
     let userRow = null;
 
-    if (type === 'order_id') {
+    if (type === 'user_id') {
+      const userId = rawQ;
+      if (userId.length < 3) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Enter at least 3 characters of the user ID'
+        });
+      }
+      userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
+      if (!userRow) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+      }
+    } else if (type === 'order_id') {
       const digits = rawQ.replace(/\D/g, '') || rawQ;
       const orderId = parseInt(digits, 10);
       if (!Number.isFinite(orderId) || orderId <= 0) {
@@ -640,7 +651,7 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No order found for this ID' });
       }
       userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
-    } else {
+    } else if (type === 'mobile') {
       const mobileDigits = rawQ.replace(/\D/g, '');
       if (!mobileDigits) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
@@ -658,6 +669,10 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
         });
       }
       userRow = rows[0];
+    } else {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'type must be mobile, order_id, or user_id'
+      });
     }
 
     if (!userRow) {
