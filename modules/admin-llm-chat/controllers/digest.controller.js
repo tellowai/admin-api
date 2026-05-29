@@ -56,6 +56,9 @@ exports.runDigest = async (req, res) => {
 
     const tokenParts = [];
     let doneContent = '';
+    let lastError = null;
+    let doneFinishReason = null;
+    const toolEvents = [];
     const mockRes = {
       write: () => {},
       end: () => {},
@@ -65,7 +68,14 @@ exports.runDigest = async (req, res) => {
     };
     const sendEvent = (event, data) => {
       if (event === 'token' && data?.text) tokenParts.push(data.text);
-      if (event === 'done' && typeof data?.content === 'string') doneContent = data.content;
+      if (event === 'done') {
+        if (typeof data?.content === 'string') doneContent = data.content;
+        if (data?.finishReason) doneFinishReason = data.finishReason;
+      }
+      if (event === 'error') lastError = data;
+      if (event === 'tool_end') {
+        toolEvents.push({ name: data?.name, ok: data?.ok, error: data?.error, code: data?.code });
+      }
     };
 
     await orchestrator.runStreamingTurn({
@@ -87,8 +97,19 @@ exports.runDigest = async (req, res) => {
 
     const text = await resolveDigestText(convId, tokenParts, doneContent);
     if (!text) {
-      logger.error('[admin-llm-chat] Digest produced no assistant text', { conversationId: convId, dateKey });
-      return res.status(HTTP.SERVICE_UNAVAILABLE).json({ code: 'DIGEST_EMPTY' });
+      logger.error('[admin-llm-chat] Digest produced no assistant text', {
+        conversationId: convId,
+        dateKey,
+        finishReason: doneFinishReason,
+        lastError,
+        toolEvents,
+      });
+      return res.status(HTTP.SERVICE_UNAVAILABLE).json({
+        code: 'DIGEST_EMPTY',
+        finishReason: doneFinishReason,
+        error: lastError,
+        toolEvents,
+      });
     }
 
     await telegramService.sendMessage(text, null);
