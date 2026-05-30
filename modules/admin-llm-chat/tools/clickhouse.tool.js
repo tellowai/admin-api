@@ -1,13 +1,31 @@
 'use strict';
 
-const { readonlyClickhouse } = require('../../../config/lib/clickhouse.readonly');
+const {
+  readonlyClickhouse,
+  isClickHouseReadonlyConfigured,
+  pingClickHouseReadonly,
+  CH_NOT_CONFIGURED_MSG,
+} = require('../../../config/lib/clickhouse.readonly');
 const { validateClickHouseSql } = require('./clickhouse.sql.validator');
 const WHITELIST = require('../constants/clickhouse.whitelist');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const { SCHEMA_VERSION } = require('../services/schema.cache.service');
 const { redactRows } = require('../services/pii.redactor');
 
+function chUnavailableResult(message, retryable = true) {
+  return {
+    success: false,
+    error: 'CH_UNAVAILABLE',
+    message: message || CH_NOT_CONFIGURED_MSG,
+    retryable,
+  };
+}
+
 async function queryClickhouse({ sql, max_rows: maxRows }) {
+  if (!isClickHouseReadonlyConfigured() || !readonlyClickhouse) {
+    return chUnavailableResult(CH_NOT_CONFIGURED_MSG);
+  }
+
   const validation = validateClickHouseSql(sql);
   if (!validation.ok) {
     return {
@@ -90,15 +108,12 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         retryable: false,
       };
     }
-    if (/ECONNREFUSED|connect ETIMEDOUT|ENOTFOUND/i.test(msg)) {
-      return {
-        success: false,
-        error: 'CH_UNAVAILABLE',
-        message: 'ClickHouse is not reachable. Start ClickHouse locally or set clickhouse.adminLlmChatReadonly in config/env/local.js.',
-        retryable: true,
-      };
+    if (/ECONNREFUSED|connect ETIMEDOUT|ENOTFOUND|ECONNRESET|socket hang up/i.test(msg)) {
+      return chUnavailableResult(
+        `ClickHouse is not reachable (${msg}). Verify clickhouse.adminLlmChatReadonly / ADMIN_LLM_CHAT_CH_* on this host.`,
+      );
     }
-    return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true };
+    return chUnavailableResult(error.message);
   }
 }
 
@@ -193,6 +208,9 @@ function buildDateBoundsSql(table, { tz = 'Asia/Kolkata', lookbackDays } = {}) {
 }
 
 async function getTableDateBounds({ table, tz = 'Asia/Kolkata' }) {
+  if (!isClickHouseReadonlyConfigured() || !readonlyClickhouse) {
+    return chUnavailableResult(CH_NOT_CONFIGURED_MSG);
+  }
   if (!WHITELIST[table]) {
     return { success: false, error: 'TABLE_NOT_ALLOWED', message: `Table not allowed: ${table}` };
   }
@@ -233,7 +251,7 @@ async function getTableDateBounds({ table, tz = 'Asia/Kolkata' }) {
         retryable: false,
       };
     }
-    return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true, query_ms: Date.now() - start };
+    return { ...chUnavailableResult(error.message), query_ms: Date.now() - start };
   }
 }
 
@@ -258,4 +276,6 @@ module.exports = {
   getTableDateBounds,
   buildDateBoundsSql,
   getDateContext,
+  pingClickHouseReadonly,
+  isClickHouseReadonlyConfigured,
 };

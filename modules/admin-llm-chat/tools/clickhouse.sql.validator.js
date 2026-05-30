@@ -11,8 +11,8 @@ const FORBIDDEN_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|A
 
 /** Tables referenced in FROM (first table only for single-table queries). */
 function extractTablesFromSql(sql) {
-  const fromMatch = sql.match(/\bFROM\s+(?:`?(\w+)`?\.)?`?(\w+)`?/i);
-  return fromMatch ? [fromMatch[2]] : [];
+  const all = extractAllTablesFromSql(sql);
+  return all.length ? [all[0]] : [];
 }
 
 /** All tables referenced via FROM (used as parser-fallback for CH-only syntax). */
@@ -192,6 +192,9 @@ function validateClickHouseSelectBranch(trimmed) {
     }
     tableNames = extractTables(ast);
   } catch (_e) {
+    tableNames = [];
+  }
+  if (!tableNames?.length) {
     tableNames = extractAllTablesFromSql(trimmed);
   }
 
@@ -298,34 +301,74 @@ function checkWrongDateColumn(sql) {
 }
 
 function checkRequiredDatePredicate(sql) {
-  const fromMatch = sql.match(/\bFROM\s+(?:`?(\w+)`?\.)?`?(\w+)`?/i);
-  if (!fromMatch) return null;
-  const table = fromMatch[2];
-  const meta = WHITELIST[table];
-  if (!meta) return null;
+  const tables = extractAllTablesFromSql(sql);
+  if (!tables.length) return null;
   const lower = sql.toLowerCase();
-  const dateCol = meta.required_date_column.toLowerCase();
-  if (!lower.includes('where') || !lower.includes(dateCol)) {
+  if (!lower.includes('where')) {
+    const table = tables[0];
+    const meta = WHITELIST[table];
     return {
       ok: false,
       code: 'DATE_PREDICATE_REQUIRED',
-      message: `WHERE must filter on ${meta.required_date_column}`,
+      message: meta
+        ? `WHERE must filter on ${meta.required_date_column}`
+        : 'WHERE with a date filter is required',
       hint: 'Do not run min(date)/max(date) without a date filter. Call get_table_date_bounds for earliest/latest dates, or get_date_context and filter a bounded range (e.g. last 28 days).',
     };
+  }
+  for (const table of tables) {
+    const meta = WHITELIST[table];
+    if (!meta) continue;
+    const dateCol = meta.required_date_column.toLowerCase();
+    if (!lower.includes(dateCol)) {
+      return {
+        ok: false,
+        code: 'DATE_PREDICATE_REQUIRED',
+        message: `WHERE must filter on ${meta.required_date_column}`,
+        hint: 'Do not run min(date)/max(date) without a date filter. Call get_table_date_bounds for earliest/latest dates, or get_date_context and filter a bounded range (e.g. last 28 days).',
+      };
+    }
   }
   return null;
 }
 
+/** Collect whitelisted table names from a SELECT AST (including subqueries in FROM). */
 function extractTables(ast) {
   const tables = [];
-  const from = ast.from || ast.ast?.from;
-  if (!from) return tables;
-  const list = Array.isArray(from) ? from : [from];
-  list.forEach((f) => {
-    let name = f.table || f.db || f.as;
-    if (f.db && f.table) name = f.table;
-    if (name && typeof name === 'string') tables.push(name.replace(/`/g, ''));
-  });
+  const seen = new Set();
+
+  function walk(node) {
+    if (!node || typeof node !== 'object') return;
+    const select = node.type === 'select' ? node : node.ast;
+    if (!select || select.type !== 'select') return;
+
+    const from = select.from;
+    const list = from ? (Array.isArray(from) ? from : [from]) : [];
+    list.forEach((f) => {
+      if (f?.expr?.ast) {
+        walk(f.expr.ast);
+        return;
+      }
+      let name = f?.table;
+      if (f?.db && f?.table) name = f.table;
+      if (name && typeof name === 'string') {
+        const t = name.replace(/`/g, '');
+        if (!seen.has(t)) {
+          seen.add(t);
+          tables.push(t);
+        }
+      }
+    });
+
+    if (select.with) {
+      const ctes = Array.isArray(select.with) ? select.with : [select.with];
+      ctes.forEach((cte) => {
+        if (cte?.stmt?.ast) walk(cte.stmt.ast);
+      });
+    }
+  }
+
+  walk(ast);
   return tables;
 }
 

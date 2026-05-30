@@ -1,6 +1,10 @@
 'use strict';
 
-const { readonlyClickhouse } = require('../../../config/lib/clickhouse.readonly');
+const {
+  readonlyClickhouse,
+  isClickHouseReadonlyConfigured,
+  CH_NOT_CONFIGURED_MSG,
+} = require('../../../config/lib/clickhouse.readonly');
 const { slaveConn } = require('../../../config/lib/mysql');
 const CONSTANTS = require('../constants/sql-runner.constants');
 
@@ -101,6 +105,9 @@ function parseCountRow(row) {
 }
 
 async function fetchTotalCountClickhouse(sql, database) {
+  if (!isClickHouseReadonlyConfigured() || !readonlyClickhouse) {
+    throw new Error(CH_NOT_CONFIGURED_MSG);
+  }
   const countSql = buildCountSql(sql, 'clickhouse');
   const { data } = await readonlyClickhouse.querying(countSql, {
     dataObjects: true,
@@ -171,6 +178,9 @@ function rowsToResult(rows) {
 }
 
 async function runClickhouse(sql, database, limit, offset, kind) {
+  if (!isClickHouseReadonlyConfigured() || !readonlyClickhouse) {
+    throw new Error(CH_NOT_CONFIGURED_MSG);
+  }
   const engine = 'clickhouse';
   const executableSql = buildExecutableSql(sql, engine, kind, limit, offset);
   const start = Date.now();

@@ -43,6 +43,8 @@ function toolCallArgsReady(name, args) {
       return Boolean(String(a.table || '').trim());
     case 'remember':
       return Boolean(String(a.key || '').trim());
+    case 'render_widget':
+      return Boolean(String(args?.widget_type || '').trim() && args?.data && typeof args.data === 'object');
     default:
       return true;
   }
@@ -180,6 +182,44 @@ class TurnTraceBuilder {
       toolCallId: id,
       status: seg?.status || 'completed',
       durationMs,
+    });
+    this.currentKind = null;
+  }
+
+  onWidget(widgetSpec) {
+    if (this.currentKind === 'text' && this.textBuffer) {
+      this.trace[this.segmentIndex].text = this.textBuffer;
+      this.sendEvent('segment_end', {
+        kind: 'text',
+        index: this.segmentIndex,
+        text: this.textBuffer,
+      });
+      this.textBuffer = '';
+      this.currentKind = null;
+    }
+    this.segmentIndex += 1;
+    const seg = {
+      type: 'widget',
+      source: widgetSpec.source || 'static_widget',
+      widget: widgetSpec.widget,
+      version: widgetSpec.version,
+      data: widgetSpec.data,
+      exportable: Boolean(widgetSpec.exportable),
+      status: 'completed',
+    };
+    this.trace.push(seg);
+    this.sendEvent('widget', {
+      index: this.segmentIndex,
+      source: seg.source,
+      widget: seg.widget,
+      version: seg.version,
+      data: seg.data,
+      exportable: seg.exportable,
+    });
+    this.sendEvent('segment_end', {
+      kind: 'widget',
+      index: this.segmentIndex,
+      widget: seg.widget,
     });
     this.currentKind = null;
   }
@@ -395,10 +435,12 @@ async function runStreamingTurn({
     throw err;
   }
 
-  const [systemText, historyPayload] = await Promise.all([
-    promptService.buildSystemPrompt(userId, conversation.system_prompt_version),
+  const [systemParts, historyPayload] = await Promise.all([
+    promptService.buildSystemPromptParts(userId, conversation.system_prompt_version),
     conversationData.loadMessagesWithTools(conversation.conversation_id),
   ]);
+  const systemText = systemParts.full;
+  const anthropicSystem = promptService.buildAnthropicSystemParam(systemParts);
   const history = historyPayload.messages;
 
   const seq = await MessageModel.nextSequenceNo(conversation.conversation_id);
@@ -475,8 +517,6 @@ async function runStreamingTurn({
   });
 
   const provider = await LLMProviderFactory.createProvider(modelMeta.provider);
-  const toolDefs = getEnabledToolDefinitions();
-  const tools = modelMeta.provider === 'anthropic' ? toAnthropicTools(toolDefs) : toOpenAITools(toolDefs);
   const traceBuilder = new TurnTraceBuilder(sendEvent);
   let toolCallCount = 0;
   const maxTools = CONSTANTS.MAX_TOOL_CALLS_PER_TURN;
@@ -484,13 +524,18 @@ async function runStreamingTurn({
   let turnTokensOut = 0;
   let sawToolThisRound = false;
   let budgetExhausted = false;
+  let hadQueryRowsThisTurn = false;
   const turnExtraMessages = [];
 
   const runLoop = async ({ allowTools = true, summaryNudge = false } = {}) => {
-    const activeTools = allowTools ? tools : undefined;
+    const includeRenderWidget = !allowTools || hadQueryRowsThisTurn || summaryNudge;
+    const toolDefs = getEnabledToolDefinitions({ includeRenderWidget });
+    const activeTools = allowTools
+      ? (modelMeta.provider === 'anthropic' ? toAnthropicTools(toolDefs) : toOpenAITools(toolDefs))
+      : undefined;
     const summaryNudgeContent = userId === CONSTANTS.DIGEST_SYSTEM_USER_ID
       ? CONSTANTS.DIGEST_SUMMARY_NUDGE
-      : 'Based on the tool results above, answer the user now. Do not call more tools. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.';
+      : 'Based on the tool results above, answer the user now. Do not call more tools. If you had numeric/time-series data and did not call render_widget yet, you should have — do not paste chart JSON in text; summarize in prose only for this round. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.';
     const nudge = summaryNudge
       ? [{
         role: 'user',
@@ -535,7 +580,9 @@ async function runStreamingTurn({
       provider.streamChatCompletion({
         model: modelMeta.id,
         messages: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role !== 'system') : messages,
-        system: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') : undefined,
+        system: modelMeta.provider === 'anthropic'
+          ? anthropicSystem
+          : undefined,
         tools: activeTools,
         maxTokens: modelMeta.maxOutputTokens,
         signal: roundAbort.signal,
@@ -551,8 +598,10 @@ async function runStreamingTurn({
         onToolCallStart: ({ id, name }) => {
           sawToolThisRound = true;
           pendingToolCalls.push({ id, name, arguments: {} });
-          traceBuilder.onToolStart({ id, name });
-          sendEvent('tool_start', { toolCallId: id, name });
+          if (name !== 'render_widget') {
+            traceBuilder.onToolStart({ id, name });
+            sendEvent('tool_start', { toolCallId: id, name });
+          }
         },
         onToolCallEnd: ({ id, name, arguments: args }) => {
           const tc = pendingToolCalls.find((t) => t.id === id) || { id, name, arguments: args };
@@ -600,6 +649,11 @@ async function runStreamingTurn({
           ? cancelledToolResult(tc.name)
           : await executeTool(tc.name, tc.arguments, { userId });
         const durationMs = Date.now() - start;
+        if (['query_clickhouse', 'query_mysql'].includes(tc.name)
+          && result.success !== false
+          && (result.rows?.length > 0 || result.row_count > 0)) {
+          hadQueryRowsThisTurn = true;
+        }
         toolRowsToInsert.push({
           tool_call_id: tc.id,
           message_id: assistantMsgId,
@@ -611,22 +665,37 @@ async function runStreamingTurn({
           rows_returned: result.rows?.length,
           error_code: result.error || null,
         });
-        traceBuilder.onToolEnd({
-          id: tc.id,
-          name: tc.name,
-          arguments: tc.arguments,
-          durationMs,
-          result,
-        });
-        sendEvent('tool_end', {
-          toolCallId: tc.id,
-          name: tc.name,
-          durationMs,
-          args: redactValue(tc.arguments || {}),
-          status: result.success === false ? 'failed' : 'completed',
-          resultPreview: truncatePreview(redactValue(formatToolResultPreview(result)), 2048),
-          rowsReturned: result.rows?.length ?? null,
-        });
+        if (tc.name === 'render_widget' && result.widgetSpec) {
+          traceBuilder.onWidget(result.widgetSpec);
+          sendEvent('tool_end', {
+            toolCallId: tc.id,
+            name: tc.name,
+            durationMs,
+            status: 'completed',
+            resultPreview: { rendered: result.widgetSpec.widget },
+          });
+        } else {
+          if (tc.name === 'render_widget' && result.success === false) {
+            traceBuilder.onToolStart({ id: tc.id, name: tc.name });
+            sendEvent('tool_start', { toolCallId: tc.id, name: tc.name });
+          }
+          traceBuilder.onToolEnd({
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+            durationMs,
+            result,
+          });
+          sendEvent('tool_end', {
+            toolCallId: tc.id,
+            name: tc.name,
+            durationMs,
+            args: redactValue(tc.arguments || {}),
+            status: result.success === false ? 'failed' : 'completed',
+            resultPreview: truncatePreview(redactValue(formatToolResultPreview(result)), 2048),
+            rowsReturned: result.rows?.length ?? null,
+          });
+        }
         const toolContent = typeof result.envelope === 'string'
           ? result.envelope
           : JSON.stringify(result.envelope || {});

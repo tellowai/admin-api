@@ -9,6 +9,13 @@ module.exports = {
   CONVERSATION_GONE: { code: 'CONVERSATION_GONE', httpStatus: HTTP.GONE, userMessage: 'admin_llm_chat:CONVERSATION_GONE', retryable: false, category: 'validation' },
   UNSUPPORTED_MODEL: { code: 'UNSUPPORTED_MODEL', httpStatus: HTTP.BAD_REQUEST, userMessage: 'admin_llm_chat:UNSUPPORTED_MODEL', retryable: false, category: 'validation' },
   STREAM_IN_PROGRESS: { code: 'STREAM_IN_PROGRESS', httpStatus: HTTP.CONFLICT, userMessage: 'admin_llm_chat:STREAM_IN_PROGRESS', retryable: true, category: 'validation' },
+  TOO_MANY_CONCURRENT_STREAMS: {
+    code: 'TOO_MANY_CONCURRENT_STREAMS',
+    httpStatus: HTTP.TOO_MANY_REQUESTS,
+    userMessage: 'admin_llm_chat:TOO_MANY_CONCURRENT_STREAMS',
+    retryable: true,
+    category: 'validation',
+  },
   PAYLOAD_TOO_LARGE: { code: 'PAYLOAD_TOO_LARGE', httpStatus: HTTP.REQUEST_ENTITY_TOO_LARGE, userMessage: 'admin_llm_chat:PAYLOAD_TOO_LARGE', retryable: false, category: 'validation' },
   MODEL_NO_VISION: { code: 'MODEL_NO_VISION', httpStatus: HTTP.BAD_REQUEST, userMessage: 'admin_llm_chat:MODEL_NO_VISION', retryable: false, category: 'validation' },
   BUDGET_EXCEEDED: { code: 'BUDGET_EXCEEDED', httpStatus: HTTP.TOO_MANY_REQUESTS, userMessage: 'admin_llm_chat:BUDGET_EXCEEDED', retryable: false, category: 'budget' },

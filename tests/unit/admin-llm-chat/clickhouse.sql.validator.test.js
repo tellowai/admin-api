@@ -66,6 +66,14 @@ describe('clickhouse.sql.validator', () => {
     expect(r.hint).to.include('get_table_date_bounds');
   });
 
+  it('allows subquery wrapping a whitelisted table', () => {
+    const r = validateClickHouseSql(
+      "SELECT count() AS users_active FROM ( SELECT user_id, countDistinct(toDate(timestamp, 'Asia/Kolkata')) AS active_days FROM analytics_events_raw WHERE toDate(timestamp, 'Asia/Kolkata') >= '2026-05-16' AND toDate(timestamp, 'Asia/Kolkata') <= '2026-05-29' GROUP BY user_id HAVING active_days = 14 )",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.tables).to.include('analytics_events_raw');
+  });
+
   it('allows bounded date bounds aggregate query', () => {
     const r = validateClickHouseSql(
       "SELECT min(date) AS earliest_date, max(date) AS latest_date, count(*) AS row_count FROM meta_ads_insights_daily WHERE date >= '2024-01-01' AND date <= '2026-05-30'",
