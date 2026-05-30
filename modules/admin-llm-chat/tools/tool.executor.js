@@ -1,6 +1,7 @@
 'use strict';
 
 const clickhouseTool = require('./clickhouse.tool');
+const mysqlTool = require('./mysql.tool');
 const { runAnalysisCode } = require('./analysis-code.tool');
 const MemoryModel = require('../models/memory.model');
 
@@ -19,6 +20,12 @@ async function executeTool(name, args, { userId }) {
       return wrapped(await clickhouseTool.getTableDateBounds(args));
     case 'query_clickhouse':
       return wrapped(await clickhouseTool.queryClickhouse(args));
+    case 'list_mysql_tables':
+      return wrapped(await mysqlTool.listMysqlTables());
+    case 'get_mysql_table_schema':
+      return wrapped(await mysqlTool.getMysqlTableSchema(args));
+    case 'query_mysql':
+      return wrapped(await mysqlTool.queryMysql(args));
     case 'get_date_context':
       return wrapped(clickhouseTool.getDateContext(args));
     case 'run_analysis_code':

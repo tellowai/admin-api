@@ -1,5 +1,7 @@
 'use strict';
 
+const { PII_COLUMNS } = require('../constants/pii.columns');
+
 const PATTERNS = [
   { re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, replace: '[email redacted]' },
   { re: /\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g, replace: '[phone redacted]' },
@@ -32,10 +34,31 @@ function redactValue(value, depth = 0) {
   return value;
 }
 
+/**
+ * Redact a single DB row: drop values of known PII columns entirely, then run
+ * the regex scrub over every remaining value (catches PII embedded in free-text
+ * / JSON columns). Must be applied the moment rows are fetched, before the data
+ * is used for the LLM, UI preview, or persistence.
+ */
+function redactRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return redactValue(row);
+  const out = {};
+  Object.entries(row).forEach(([k, v]) => {
+    out[k] = PII_COLUMNS.has(String(k).toLowerCase()) ? '[REDACTED]' : redactValue(v);
+  });
+  return out;
+}
+
+function redactRows(rows) {
+  return Array.isArray(rows) ? rows.map(redactRow) : rows;
+}
+
 function truncatePreview(text, maxLen = 2048) {
   const s = typeof text === 'string' ? text : JSON.stringify(text || '');
   if (s.length <= maxLen) return s;
   return `${s.slice(0, maxLen)}… [truncated]`;
 }
 
-module.exports = { redactString, redactValue, truncatePreview };
+module.exports = {
+  redactString, redactValue, redactRow, redactRows, truncatePreview,
+};

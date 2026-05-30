@@ -3,7 +3,8 @@
 const config = require('../config');
 const ClickHouse = require('@apla/clickhouse');
 
-const chConfig = config.clickhouse?.adminLlmChatReadonly || config.clickhouse?.slave || config.clickhouse?.master;
+// ONLY the dedicated read-only user — never fall back to slave/master (write-capable).
+const chConfig = config.clickhouse?.adminLlmChatReadonly || {};
 
 const options = {
   host: chConfig.url,
