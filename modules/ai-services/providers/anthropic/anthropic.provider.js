@@ -50,11 +50,15 @@ class AnthropicProvider extends BaseLLMProvider {
     if (!this.client) await this.initialize();
 
     const anthropicMessages = this._toAnthropicMessages(messages);
+    const systemParam = Array.isArray(system)
+      ? system
+      : (system ? [{ type: 'text', text: system }] : undefined);
+
     const stream = this.client.messages.stream({
       model,
       max_tokens: maxTokens || 8192,
       temperature: temperature ?? 0.2,
-      system: system || undefined,
+      system: systemParam,
       messages: anthropicMessages,
       tools: tools && tools.length ? tools : undefined,
     });

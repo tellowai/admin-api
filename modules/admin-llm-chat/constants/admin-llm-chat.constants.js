@@ -20,6 +20,19 @@ function envBool(key, fallback) {
   return v === 'true' || v === '1';
 }
 
+/** Env overrides config.adminLlmChat when set; otherwise use local.js / env.js value. */
+function flagFromConfig(envKey, configValue, fallback) {
+  const v = process.env[envKey];
+  if (v !== undefined && v !== '') return v === 'true' || v === '1';
+  if (configValue === true || configValue === false) return configValue;
+  return fallback;
+}
+
+function widgetTypeFlag(widgetType, envKey, fallback) {
+  const cfg = config.adminLlmChat?.widgets?.[widgetType];
+  return flagFromConfig(envKey, cfg, fallback);
+}
+
 function defaultEnabled() {
   if (config.adminLlmChat?.enabled === true) return true;
   if (config.adminLlmChat?.enabled === false) return false;
@@ -33,6 +46,21 @@ module.exports = {
   TOOL_QUERY_CLICKHOUSE_ENABLED: envBool('ADMIN_LLM_CHAT_TOOL_QUERY_CLICKHOUSE_ENABLED', true),
   TOOL_QUERY_MYSQL_ENABLED: envBool('ADMIN_LLM_CHAT_TOOL_QUERY_MYSQL_ENABLED', true),
   TOOL_RUN_ANALYSIS_CODE_ENABLED: envBool('ADMIN_LLM_CHAT_TOOL_RUN_ANALYSIS_CODE_ENABLED', true),
+  TOOL_RENDER_WIDGET_ENABLED: flagFromConfig(
+    'ADMIN_LLM_CHAT_TOOL_RENDER_WIDGET_ENABLED',
+    config.adminLlmChat?.toolRenderWidgetEnabled,
+    true,
+  ),
+  /** Per-widget rollout; set in adminLlmChat.widgets in local.js or via ADMIN_LLM_CHAT_WIDGET_* env. */
+  WIDGET_TYPE_FLAGS: {
+    kpi_cards: widgetTypeFlag('kpi_cards', 'ADMIN_LLM_CHAT_WIDGET_KPI_CARDS', true),
+    data_table: widgetTypeFlag('data_table', 'ADMIN_LLM_CHAT_WIDGET_DATA_TABLE', true),
+    line_chart: widgetTypeFlag('line_chart', 'ADMIN_LLM_CHAT_WIDGET_LINE_CHART', true),
+    bar_chart: widgetTypeFlag('bar_chart', 'ADMIN_LLM_CHAT_WIDGET_BAR_CHART', true),
+    pie_chart: widgetTypeFlag('pie_chart', 'ADMIN_LLM_CHAT_WIDGET_PIE_CHART', true),
+    callout: widgetTypeFlag('callout', 'ADMIN_LLM_CHAT_WIDGET_CALLOUT', true),
+    vega_lite_chart: widgetTypeFlag('vega_lite_chart', 'ADMIN_LLM_CHAT_WIDGET_VEGA_LITE', false),
+  },
   ANALYSIS_CODE_TIMEOUT_MS: envInt('ADMIN_LLM_CHAT_ANALYSIS_CODE_TIMEOUT_MS', 3000),
 
   MAX_ATTACHMENTS_PER_MESSAGE: envInt('ADMIN_LLM_CHAT_MAX_ATTACHMENTS', 10),
@@ -48,7 +76,13 @@ module.exports = {
   MAX_TOOL_RESULT_TOKENS: envInt('ADMIN_LLM_CHAT_MAX_TOOL_RESULT_TOKENS', 4000),
   STREAM_IDLE_TIMEOUT_MS: envInt('ADMIN_LLM_CHAT_STREAM_IDLE_TIMEOUT_MS', 30000),
   STREAM_TOTAL_TIMEOUT_MS: envInt('ADMIN_LLM_CHAT_STREAM_TOTAL_TIMEOUT_MS', 180000),
-  MAX_CONCURRENT_STREAMS_PER_USER: envInt('ADMIN_LLM_CHAT_MAX_CONCURRENT_STREAMS', 3),
+  /** Max parallel AI responses (streams) per admin across all chats. */
+  MAX_CONCURRENT_STREAMS_PER_USER: envInt(
+    'ADMIN_LLM_CHAT_MAX_CONCURRENT_STREAMS',
+    Number.isFinite(config.adminLlmChat?.maxConcurrentStreamsPerUser)
+      ? config.adminLlmChat.maxConcurrentStreamsPerUser
+      : 5,
+  ),
   USER_DAILY_TOKEN_BUDGET_IN: envInt('ADMIN_LLM_CHAT_DAILY_TOKEN_BUDGET_IN', 2000000),
   USER_DAILY_TOKEN_BUDGET_OUT: envInt('ADMIN_LLM_CHAT_DAILY_TOKEN_BUDGET_OUT', 500000),
   USER_DAILY_COST_USD_CAP: envFloat('ADMIN_LLM_CHAT_DAILY_COST_CAP', 25),

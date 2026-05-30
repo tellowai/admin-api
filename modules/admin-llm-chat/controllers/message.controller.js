@@ -36,12 +36,33 @@ exports.streamMessage = async (req, res) => {
 
   if (streamRegistry.hasActive(userId, conversationId)) {
     const err = ERROR_CODES.STREAM_IN_PROGRESS;
-    return res.status(err.httpStatus).json({ code: err.code, retryable: err.retryable });
+    return res.status(err.httpStatus).json({
+      code: err.code,
+      retryable: err.retryable,
+      message: 'This chat is still finishing the previous response. Wait a few seconds, or press Stop, then send again.',
+    });
+  }
+
+  const maxParallel = CONSTANTS.MAX_CONCURRENT_STREAMS_PER_USER;
+  if (maxParallel > 0) {
+    const parallel = streamRegistry.countActiveForUser(userId);
+    if (parallel >= maxParallel) {
+      const err = ERROR_CODES.TOO_MANY_CONCURRENT_STREAMS;
+      return res.status(err.httpStatus).json({
+        code: err.code,
+        retryable: err.retryable,
+        message: `You already have ${maxParallel} chats getting a response at once. Wait for one to finish or press Stop in another chat, then try again.`,
+      });
+    }
   }
 
   if (streamRegistry.isDraining()) {
     const err = ERROR_CODES.SERVER_DRAINING;
-    return res.status(err.httpStatus).json({ code: err.code, retryable: err.retryable });
+    return res.status(err.httpStatus).json({
+      code: err.code,
+      retryable: err.retryable,
+      message: 'The server is restarting for a deploy. Wait a moment and try again.',
+    });
   }
 
   const modelMeta = resolveTurnModel(body, conv);

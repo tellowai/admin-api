@@ -1,6 +1,11 @@
 'use strict';
 
 const CONSTANTS = require('./admin-llm-chat.constants');
+const {
+  buildRenderWidgetToolDescription,
+  buildRenderWidgetParameters,
+} = require('../services/widget.catalog.service');
+const { getEnabledWidgets } = require('./widgets');
 
 const TOOL_DEFINITIONS = [
   {
@@ -125,6 +130,11 @@ const TOOL_DEFINITIONS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'render_widget',
+    description: buildRenderWidgetToolDescription(),
+    parameters: buildRenderWidgetParameters(),
+  },
 ];
 
 function toOpenAITools(definitions) {
@@ -146,8 +156,13 @@ function toAnthropicTools(definitions) {
   }));
 }
 
-function getEnabledToolDefinitions() {
+function getEnabledToolDefinitions({ includeRenderWidget = true } = {}) {
   return TOOL_DEFINITIONS.filter((d) => {
+    if (d.name === 'render_widget') {
+      return includeRenderWidget
+        && CONSTANTS.TOOL_RENDER_WIDGET_ENABLED
+        && getEnabledWidgets().length > 0;
+    }
     if (d.name === 'run_analysis_code' && !CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED) return false;
     if (['query_clickhouse', 'get_table_schema', 'get_table_date_bounds', 'list_clickhouse_tables'].includes(d.name)
       && !CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED) return false;

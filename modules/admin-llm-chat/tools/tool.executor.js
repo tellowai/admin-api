@@ -3,6 +3,7 @@
 const clickhouseTool = require('./clickhouse.tool');
 const mysqlTool = require('./mysql.tool');
 const { runAnalysisCode } = require('./analysis-code.tool');
+const { renderWidget } = require('./render-widget.tool');
 const MemoryModel = require('../models/memory.model');
 
 async function executeTool(name, args, { userId }) {
@@ -33,6 +34,8 @@ async function executeTool(name, args, { userId }) {
     case 'remember':
       await MemoryModel.upsertMemory(userId, args.key, args.value);
       return wrapped({ success: true, remembered: { key: args.key, value: args.value } });
+    case 'render_widget':
+      return wrapped(renderWidget(args));
     default:
       return wrapped({ success: false, error: 'UNKNOWN_TOOL', message: `Unknown tool: ${name}` });
   }

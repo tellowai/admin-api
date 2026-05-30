@@ -10,6 +10,7 @@ const { redactValue, truncatePreview } = require('./pii.redactor');
 const PROMPTS_DIR = path.join(__dirname, '../constants/system.prompts');
 const BUSINESS_CONTEXT_PATH = path.join(__dirname, '../constants/business_context.json');
 const { formatRelationshipsGuide } = require('../constants/table.relationships');
+const { buildWidgetPromptSection } = require('./widget.catalog.service');
 
 const VERBATIM_TAIL = 6;
 
@@ -53,14 +54,39 @@ async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM
   const businessContext = `Business context:\n${JSON.stringify(biz, null, 2)}`;
   const tables = `Available ClickHouse tables:\n${tableCatalog}`;
   const crossTable = formatRelationshipsGuide();
+  const widgetSection = buildWidgetPromptSection();
+  const widgetBlock = widgetSection ? `\n\n${widgetSection}` : '';
+  const cacheablePrefix = `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${widgetBlock}`;
   return {
     base,
     businessContext,
     tableCatalog: tables,
     crossTable,
     memories: memoryBlock,
-    full: `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${memoryBlock}`,
+    widgetSection,
+    cacheablePrefix,
+    full: `${cacheablePrefix}${memoryBlock}`,
   };
+}
+
+/**
+ * Anthropic prompt caching: static catalog/tools prefix is cacheable; per-user memories are not.
+ * @returns {string | Array<{ type: string, text: string, cache_control?: object }>}
+ */
+function buildAnthropicSystemParam(parts) {
+  const cacheable = parts?.cacheablePrefix || parts?.full || '';
+  const memories = parts?.memories || '';
+  if (!memories?.trim()) {
+    return cacheable;
+  }
+  return [
+    {
+      type: 'text',
+      text: cacheable,
+      cache_control: { type: 'ephemeral' },
+    },
+    { type: 'text', text: memories.trim() },
+  ];
 }
 
 async function buildSystemPrompt(userId, version) {
@@ -335,6 +361,7 @@ module.exports = {
   loadBusinessContext,
   buildSystemPrompt,
   buildSystemPromptParts,
+  buildAnthropicSystemParam,
   buildMessagesForProvider,
   messageToApiRows,
   flattenToolCallsForProvider,

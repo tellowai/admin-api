@@ -148,6 +148,18 @@ module.exports = {
     maxToolCallsPerTurn: 24,
     /** Brand name for the chat (system prompt, business context). Override with ADMIN_LLM_CHAT_COMPANY_NAME, e.g. "Kriya AI". Defaults to "Tellow AI". */
     companyName: "",
+    /** render_widget tool. Override with ADMIN_LLM_CHAT_TOOL_RENDER_WIDGET_ENABLED. */
+    toolRenderWidgetEnabled: true,
+    /** Per-widget flags (widget type id → boolean). Override with ADMIN_LLM_CHAT_WIDGET_<TYPE>. */
+    widgets: {
+      kpi_cards: true,
+      data_table: true,
+      line_chart: true,
+      bar_chart: true,
+      pie_chart: true,
+      callout: true,
+      vega_lite_chart: false,
+    },
   },
   llmProviders: {
     openai: { apiKey: "" },
