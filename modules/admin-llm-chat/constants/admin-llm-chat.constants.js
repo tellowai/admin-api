@@ -66,6 +66,16 @@ module.exports = {
   SSE_REPLAY_MAX_EVENTS: envInt('ADMIN_LLM_CHAT_SSE_REPLAY_MAX', 500),
   SSE_HEARTBEAT_MS: envInt('ADMIN_LLM_CHAT_SSE_HEARTBEAT_MS', 15000),
 
+  /**
+   * Brand/company name used across the chat (business context, system prompt,
+   * refusal message). Switch per deployment like the nav logo — set
+   * ADMIN_LLM_CHAT_COMPANY_NAME (or adminLlmChat.companyName in local.js),
+   * e.g. "Kriya AI" vs the default "Tellow AI".
+   */
+  COMPANY_NAME: process.env.ADMIN_LLM_CHAT_COMPANY_NAME
+    || config.adminLlmChat?.companyName
+    || 'Tellow AI',
+
   REDIS_PREFIX: 'admin_llm_chat',
   PERMISSION_CODE: 'admin_llm_chat',
   DEFAULT_SYSTEM_PROMPT_VERSION: 'v1',

@@ -55,7 +55,16 @@ const MAX_LIMIT = 200;
 /** Max rows fetched before in-app pagination for DESCRIBE / EXPLAIN. */
 const MAX_METADATA_FETCH = 1000;
 
-const FORBIDDEN_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|REPLACE|GRANT|REVOKE|RENAME|ATTACH|DETACH|OPTIMIZE|SET|CALL|LOAD|HANDLER|LOCK|UNLOCK|MERGE|EXECUTE|EXEC|KILL|OUTFILE|INFILE)\b/i;
+/**
+ * Blocks write/DDL/session statements. A few keywords collide with read-only
+ * usage and are matched more narrowly to avoid false positives:
+ *   - SET: allowed inside `CHARACTER SET` (collation casts), blocked as a statement.
+ *   - REPLACE / TRUNCATE: allowed as functions `REPLACE(...)` / `TRUNCATE(...)`,
+ *     blocked as `REPLACE INTO` / `TRUNCATE TABLE`.
+ * Statements that merely start with these (e.g. `SET @x=1`) are also rejected by
+ * getQueryKind, so this is defense-in-depth, not the only guard.
+ */
+const FORBIDDEN_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|REVOKE|RENAME|ATTACH|DETACH|OPTIMIZE|CALL|LOAD|HANDLER|LOCK|UNLOCK|MERGE|EXECUTE|EXEC|KILL|OUTFILE|INFILE)\b|(?<!CHARACTER\s)\bSET\b|\bREPLACE\b(?!\s*\()|\bTRUNCATE\b(?!\s*\()/i;
 
 module.exports = {
   ENGINES,

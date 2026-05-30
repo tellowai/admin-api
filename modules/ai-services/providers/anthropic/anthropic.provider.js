@@ -100,6 +100,20 @@ class AnthropicProvider extends BaseLLMProvider {
         }
       }
 
+      // Safety net: stream ended while a tool_use block was still open (e.g.
+      // disconnect before content_block_stop) — finalize with whatever arrived.
+      if (currentTool) {
+        let args = {};
+        try {
+          args = toolInputJson ? JSON.parse(toolInputJson) : {};
+        } catch (_e) {
+          args = {};
+        }
+        onToolCallEnd?.({ id: currentTool.id, name: currentTool.name, arguments: args, rawArguments: toolInputJson });
+        currentTool = null;
+        toolInputJson = '';
+      }
+
       const finalMessage = await stream.finalMessage();
       const usage = finalMessage.usage || {};
       onFinish?.({
