@@ -29,9 +29,34 @@ exports.replaceTemplateStages = async function (templateId, stageIds) {
   return mysqlQueryRunner.runQueryInMaster(query, params);
 };
 
+/**
+ * Assign a single stage to many templates. Batched into two set-based queries
+ * (one DELETE … IN, one multi-row INSERT) per chunk — never one query per template.
+ */
 exports.bulkAssignStage = async function (templateIds, stageId) {
   if (!templateIds?.length || !stageId) return;
-  for (const templateId of templateIds) {
-    await exports.replaceTemplateStages(templateId, [stageId]);
+
+  const uniqueIds = [...new Set(templateIds.filter(Boolean))];
+  if (!uniqueIds.length) return;
+
+  const CHUNK = 100;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const chunk = uniqueIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+
+    await mysqlQueryRunner.runQueryInMaster(
+      `DELETE FROM template_journey_stages WHERE template_id IN (${placeholders})`,
+      chunk
+    );
+
+    const values = chunk.map(() => '(?, ?)').join(', ');
+    const params = [];
+    for (const templateId of chunk) {
+      params.push(templateId, stageId);
+    }
+    await mysqlQueryRunner.runQueryInMaster(
+      `INSERT INTO template_journey_stages (template_id, stage_id) VALUES ${values}`,
+      params
+    );
   }
 };
