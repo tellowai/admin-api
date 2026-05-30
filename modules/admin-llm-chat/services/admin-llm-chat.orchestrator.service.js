@@ -28,6 +28,39 @@ function estimateCost(modelMeta, tokensIn, tokensOut) {
   return ((tokensIn / 1e6) * modelMeta.inputCostPer1M + (tokensOut / 1e6) * modelMeta.outputCostPer1M);
 }
 
+/** True when the model supplied enough arguments to run the tool (not just {}). */
+function toolCallArgsReady(name, args) {
+  const a = args && typeof args === 'object' ? args : {};
+  switch (name) {
+    case 'query_mysql':
+    case 'query_clickhouse':
+      return Boolean(String(a.sql || '').trim());
+    case 'run_analysis_code':
+      return Boolean(String(a.code || '').trim());
+    case 'get_table_schema':
+    case 'get_table_date_bounds':
+    case 'get_mysql_table_schema':
+      return Boolean(String(a.table || '').trim());
+    case 'remember':
+      return Boolean(String(a.key || '').trim());
+    default:
+      return true;
+  }
+}
+
+function cancelledToolResult(name, reason = 'STREAM_ABORTED') {
+  const result = {
+    success: false,
+    error: reason,
+    message: 'Tool call cancelled because the stream was interrupted.',
+    retryable: true,
+  };
+  return {
+    ...result,
+    envelope: `<tool_result tool="${name}">\n${JSON.stringify(result)}\n</tool_result>`,
+  };
+}
+
 /** Human-readable tool output for UI trace (not LLM envelope XML). */
 function formatToolResultPreview(result) {
   if (!result || typeof result !== 'object') return result;
@@ -485,6 +518,19 @@ async function runStreamingTurn({
       traceBuilder.markFinalSegment();
     }
 
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      throw err;
+    }
+
+    const roundAbort = new AbortController();
+    const onParentAbort = () => roundAbort.abort();
+    if (signal) {
+      signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+
+    try {
     await new Promise((resolve, reject) => {
       provider.streamChatCompletion({
         model: modelMeta.id,
@@ -492,7 +538,7 @@ async function runStreamingTurn({
         system: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') : undefined,
         tools: activeTools,
         maxTokens: modelMeta.maxOutputTokens,
-        signal,
+        signal: roundAbort.signal,
         onDelta: ({ text }) => {
           sendEvent('thinking', {});
           traceBuilder.appendText(text);
@@ -520,9 +566,20 @@ async function runStreamingTurn({
         onError: (err) => reject(err),
       });
     });
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', onParentAbort);
+      }
+    }
 
     turnTokensIn += roundTokensIn;
     turnTokensOut += roundTokensOut;
+
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      throw err;
+    }
 
     if (pendingToolCalls.length && toolCallCount < maxTools) {
       if (!sawToolThisRound) traceBuilder.markFinalSegment();
@@ -531,9 +588,17 @@ async function runStreamingTurn({
       const toolResults = [];
       const toolRowsToInsert = [];
       for (const tc of callsForRound) {
+        if (signal?.aborted) {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          throw err;
+        }
         toolCallCount += 1;
         const start = Date.now();
-        const result = await executeTool(tc.name, tc.arguments, { userId });
+        const argsReady = toolCallArgsReady(tc.name, tc.arguments);
+        const result = (!argsReady && signal?.aborted)
+          ? cancelledToolResult(tc.name)
+          : await executeTool(tc.name, tc.arguments, { userId });
         const durationMs = Date.now() - start;
         toolRowsToInsert.push({
           tool_call_id: tc.id,

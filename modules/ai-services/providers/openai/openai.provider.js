@@ -437,13 +437,16 @@ console.log({
         if (endedToolIdx.has(idx)) return;
         endedToolIdx.add(idx);
         const raw = String(tc.arguments || '').trim();
+        if (!raw) {
+          // Args never arrived (stream cut or provider ended early) — leave
+          // orchestrator pending row at {} so it can treat as cancelled on abort.
+          return;
+        }
         let args = {};
-        if (raw) {
-          try {
-            args = JSON.parse(raw);
-          } catch (_e) {
-            args = {};
-          }
+        try {
+          args = JSON.parse(raw);
+        } catch (_e) {
+          args = {};
         }
         onToolCallEnd?.({ id: tc.id, name: tc.name, arguments: args, rawArguments: raw });
       };

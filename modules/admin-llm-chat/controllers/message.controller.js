@@ -83,13 +83,23 @@ exports.streamMessage = async (req, res) => {
   }
 
   sseService.initSse(res);
-  const sendEvent = (event, data) => sseService.sendEvent(res, event, data);
   const abortController = new AbortController();
   streamRegistry.register(userId, conversationId, abortController);
 
+  // Client disconnect (refresh/navigate away) only stops SSE delivery — the turn
+  // keeps running until done. Only DELETE …/stream (Stop button) aborts via registry.
+  let clientConnected = true;
+  const sendEvent = (event, data) => {
+    if (!clientConnected) return;
+    try {
+      sseService.sendEvent(res, event, data);
+    } catch (_e) {
+      clientConnected = false;
+    }
+  };
+
   sseService.startHeartbeat(res, () => {
-    abortController.abort();
-    streamRegistry.unregister(userId, conversationId);
+    clientConnected = false;
   });
 
   try {
@@ -109,7 +119,9 @@ exports.streamMessage = async (req, res) => {
     });
   } finally {
     streamRegistry.unregister(userId, conversationId);
-    res.end();
+    try {
+      if (!res.writableEnded) res.end();
+    } catch (_e) { /* client already gone */ }
   }
 };
 
