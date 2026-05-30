@@ -807,6 +807,8 @@ exports.getTemplateById = async function (templateId) {
       ios_status,
       web_status,
       workflow_builder_version,
+      group_id,
+      variant_label,
       created_at
     FROM templates
     WHERE template_id = ?

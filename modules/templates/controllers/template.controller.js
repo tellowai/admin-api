@@ -34,6 +34,9 @@ const {
   VALID_WORKFLOW_TYPES: TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES
 } = require('../services/template.workflow.publish.validation');
 const ExploreSectionItemModel = require('../../explore-sections/models/explore-section-item.model');
+const TemplateJourneyStageModel = require('../../journey-stages/models/template.journey.stage.model');
+const TemplateVariantModel = require('../models/template.variant.model');
+const { enrichTemplateListCardsUrls } = require('../utils/template.list.card.enrich');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -515,6 +518,53 @@ function splitTemplateAiClipsForApiResponse(allClips) {
     }
   }
   return { visualClips, audioClips };
+}
+
+/**
+ * Lightweight list-card URLs for variant siblings (thumb + cf preview).
+ * @param {Object} template
+ */
+async function enrichTemplateListCardUrls(template) {
+  if (!template) return;
+  const storage = StorageFactory.getProvider();
+
+  if (template.cf_r2_key) {
+    template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+  } else {
+    template.r2_url = template.cf_r2_url;
+  }
+
+  if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+    try {
+      const isPublic =
+        template.thumb_frame_bucket === 'public' ||
+        template.thumb_frame_bucket === storage.publicBucket ||
+        template.thumb_frame_bucket === config.os2?.r2?.public?.bucket;
+
+      if (isPublic) {
+        template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+      } else {
+        template.thumb_frame_url = await storage.generatePresignedDownloadUrl(
+          template.thumb_frame_asset_key,
+          { expiresIn: 3600 }
+        );
+      }
+    } catch (error) {
+      logger.error('Error generating variant sibling thumb URL:', {
+        error: error.message,
+        template_id: template.template_id
+      });
+      template.thumb_frame_url = null;
+    }
+  }
+
+  alignImageTemplateThumbWithCfR2ForResponse(template);
+}
+
+async function enrichVariantSiblingsListCards(siblings) {
+  if (!siblings?.length) return siblings;
+  await Promise.all(siblings.map((row) => enrichTemplateListCardUrls(row)));
+  return siblings;
 }
 
 /**
@@ -1053,6 +1103,21 @@ exports.getTemplate = async function (req, res) {
     }
 
     await enrichAdminTemplateDetailForGetResponse(template);
+
+    template.journey_stage_ids = await TemplateJourneyStageModel.listStageIdsForTemplate(templateId);
+    const variantMeta = await TemplateVariantModel.getTemplateGroupMeta(templateId, { useMaster: true });
+    if (variantMeta) {
+      template.variant_label = variantMeta.variant_label ?? template.variant_label;
+    }
+    if (variantMeta?.group_id) {
+      template.group_id = variantMeta.group_id;
+      const siblingRows = await TemplateVariantModel.listTemplatesByGroupId(variantMeta.group_id, {
+        useMaster: true
+      });
+      template.variant_siblings = await enrichTemplateListCardsUrls(siblingRows);
+    } else {
+      template.variant_siblings = [];
+    }
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: template

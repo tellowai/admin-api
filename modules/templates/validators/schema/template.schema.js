@@ -273,6 +273,7 @@ const updateTemplateSchema = Joi.object().keys({
   android_status: Joi.string().valid('active', 'inactive').optional(),
   ios_status: Joi.string().valid('active', 'inactive').optional(),
   web_status: Joi.string().valid('active', 'inactive').optional(),
+  variant_label: Joi.string().max(100).allow(null, '').optional(),
   template_tag_ids: Joi.array().items(templateTagSchema).allow(null).optional(),
   image_uploads_required: Joi.number().integer().min(0).optional(),
   video_uploads_required: Joi.number().integer().min(0).optional(),
