@@ -15,9 +15,12 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
       success: false,
       error: validation.code,
       message: validation.message,
-      hint: validation.code === 'INVALID_DATE_COLUMN'
-        ? 'Call get_table_schema for this table and use required_date_column in WHERE.'
-        : undefined,
+      hint: validation.hint
+        || (validation.code === 'INVALID_DATE_COLUMN'
+          ? 'Call get_table_schema for this table and use required_date_column in WHERE.'
+          : validation.code === 'DATE_PREDICATE_REQUIRED'
+            ? 'Call get_table_date_bounds or get_date_context; never query min/max(date) without WHERE.'
+            : undefined),
     };
   }
 
@@ -168,6 +171,75 @@ function getTableSchema({ table }) {
   };
 }
 
+function buildDateBoundsSql(table, { tz = 'Asia/Kolkata', lookbackDays } = {}) {
+  const meta = WHITELIST[table];
+  if (!meta) return null;
+  const moment = require('moment-timezone');
+  const days = lookbackDays ?? CONSTANTS.CH_DATE_BOUNDS_LOOKBACK_DAYS;
+  const end = moment.tz(tz).format('YYYY-MM-DD');
+  const start = moment.tz(tz).subtract(days, 'days').format('YYYY-MM-DD');
+  const col = meta.required_date_column;
+  if (col === 'timestamp') {
+    return {
+      sql: `SELECT min(toDate(timestamp)) AS earliest_date, max(toDate(timestamp)) AS latest_date, count(*) AS row_count FROM ${table} WHERE toDate(timestamp) >= '${start}' AND toDate(timestamp) <= '${end}'`,
+      start,
+      end,
+      lookback_days: days,
+    };
+  }
+  return {
+    sql: `SELECT min(${col}) AS earliest_date, max(${col}) AS latest_date, count(*) AS row_count FROM ${table} WHERE ${col} >= '${start}' AND ${col} <= '${end}'`,
+    start,
+    end,
+    lookback_days: days,
+  };
+}
+
+async function getTableDateBounds({ table, tz = 'Asia/Kolkata' }) {
+  if (!WHITELIST[table]) {
+    return { success: false, error: 'TABLE_NOT_ALLOWED', message: `Table not allowed: ${table}` };
+  }
+  const meta = WHITELIST[table];
+  const built = buildDateBoundsSql(table, { tz });
+  const validation = validateClickHouseSql(built.sql);
+  if (!validation.ok) {
+    return {
+      success: false,
+      error: validation.code,
+      message: validation.message,
+      hint: validation.hint,
+    };
+  }
+  const start = Date.now();
+  try {
+    const { data } = await readonlyClickhouse.querying(validation.sql, { dataObjects: true });
+    const row = Array.isArray(data) && data[0] ? data[0] : {};
+    return {
+      success: true,
+      table,
+      required_date_column: meta.required_date_column,
+      earliest_date: row.earliest_date ?? null,
+      latest_date: row.latest_date ?? null,
+      row_count: row.row_count ?? 0,
+      window_start: built.start,
+      window_end: built.end,
+      lookback_days: built.lookback_days,
+      note: `Bounds are within the last ${built.lookback_days} days (${built.start}–${built.end}). Use get_date_context for relative ranges; always filter query_clickhouse by ${meta.required_date_column}.`,
+    };
+  } catch (error) {
+    const msg = String(error.message || '');
+    if (msg.includes('UNKNOWN_TABLE') || msg.includes('does not exist')) {
+      return {
+        success: false,
+        error: 'TABLE_NOT_FOUND',
+        message: `ClickHouse table ${table} does not exist.`,
+        retryable: false,
+      };
+    }
+    return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true, query_ms: Date.now() - start };
+  }
+}
+
 function getDateContext({ tz = 'Asia/Kolkata' }) {
   const moment = require('moment-timezone');
   const now = moment.tz(tz);
@@ -186,5 +258,7 @@ module.exports = {
   queryClickhouse,
   listClickhouseTables,
   getTableSchema,
+  getTableDateBounds,
+  buildDateBoundsSql,
   getDateContext,
 };

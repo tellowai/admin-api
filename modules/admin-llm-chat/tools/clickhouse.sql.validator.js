@@ -246,6 +246,7 @@ function checkRequiredDatePredicate(sql) {
       ok: false,
       code: 'DATE_PREDICATE_REQUIRED',
       message: `WHERE must filter on ${meta.required_date_column}`,
+      hint: 'Do not run min(date)/max(date) without a date filter. Call get_table_date_bounds for earliest/latest dates, or get_date_context and filter a bounded range (e.g. last 28 days).',
     };
   }
   return null;

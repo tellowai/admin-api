@@ -41,6 +41,22 @@ describe('clickhouse.sql.validator', () => {
     expect(r.code).to.equal('DATE_PREDICATE_REQUIRED');
   });
 
+  it('rejects unbounded min/max date discovery query', () => {
+    const r = validateClickHouseSql(
+      'SELECT max(date) AS latest_date, min(date) AS earliest_date, count(*) AS total_rows FROM meta_ads_insights_daily',
+    );
+    expect(r.ok).to.equal(false);
+    expect(r.code).to.equal('DATE_PREDICATE_REQUIRED');
+    expect(r.hint).to.include('get_table_date_bounds');
+  });
+
+  it('allows bounded date bounds aggregate query', () => {
+    const r = validateClickHouseSql(
+      "SELECT min(date) AS earliest_date, max(date) AS latest_date, count(*) AS row_count FROM meta_ads_insights_daily WHERE date >= '2024-01-01' AND date <= '2026-05-30'",
+    );
+    expect(r.ok).to.equal(true);
+  });
+
   it('auto-fixes date column on report_date tables', () => {
     const r = validateClickHouseSql(
       "SELECT status, orders_count FROM orders_daily_stats WHERE date = '2026-05-19'",
