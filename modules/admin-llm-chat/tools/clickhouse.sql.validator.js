@@ -146,14 +146,19 @@ function rewriteSelectStar(sql, tables = []) {
   return sql.replace(/\bSELECT\s+\*/i, `SELECT ${cols.join(', ')}`);
 }
 
-function validateClickHouseSql(sql) {
-  const { sql: preprocessed, tables: preTables } = preprocessClickHouseSql(sql);
-  const trimmed = preprocessed;
+/** Split UNION ALL branches; outer ORDER BY stays on the full query only. */
+function splitUnionAllBranches(sql) {
+  const orderMatch = sql.match(/\s+ORDER\s+BY\s+[\s\S]+$/i);
+  const core = orderMatch ? sql.slice(0, orderMatch.index).trim() : sql;
+  const orderSuffix = orderMatch ? orderMatch[0] : '';
+  const branches = core.split(/\s+UNION\s+ALL\s+/i).map((b) => b.trim()).filter(Boolean);
+  return { branches, orderSuffix };
+}
+
+/** Validate one SELECT branch (no UNION). */
+function validateClickHouseSelectBranch(trimmed) {
   if (!trimmed) {
     return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Empty query' };
-  }
-  if (trimmed.includes(';')) {
-    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Multiple statements not allowed' };
   }
   if (FORBIDDEN_KEYWORDS.test(trimmed)) {
     return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Forbidden keyword' };
@@ -162,7 +167,7 @@ function validateClickHouseSql(sql) {
     return { ok: false, code: 'JOIN_NOT_ALLOWED', message: 'JOIN not allowed' };
   }
   if (/\bUNION\b/i.test(trimmed)) {
-    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'UNION not allowed' };
+    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Nested UNION not allowed' };
   }
   if (/\bINTO\s+OUTFILE\b/i.test(trimmed)) {
     return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'INTO OUTFILE not allowed' };
@@ -174,7 +179,6 @@ function validateClickHouseSql(sql) {
   const dateCheck = checkRequiredDatePredicate(trimmed);
   if (dateCheck) return dateCheck;
 
-  // Statement type guard before AST (MySQL parser can't handle all ClickHouse syntax).
   if (!/^\s*(WITH\b|SELECT\b)/i.test(trimmed)) {
     return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Only SELECT allowed' };
   }
@@ -188,9 +192,6 @@ function validateClickHouseSql(sql) {
     }
     tableNames = extractTables(ast);
   } catch (_e) {
-    // ClickHouse-only constructs (lambdas, combinators like sumIf, tuples) can
-    // break the MySQL grammar. Fall back to regex table extraction — safety
-    // still rests on FORBIDDEN_KEYWORDS + WHITELIST + JOIN/UNION guards above.
     tableNames = extractAllTablesFromSql(trimmed);
   }
 
@@ -203,6 +204,32 @@ function validateClickHouseSql(sql) {
     }
   }
 
+  return { ok: true, tables: tableNames };
+}
+
+function validateUnionAllQuery(trimmed) {
+  if (!/\bUNION\s+ALL\b/i.test(trimmed)) return null;
+  const withoutBareUnion = trimmed.replace(/\bUNION\s+ALL\b/gi, '');
+  if (/\bUNION\b/i.test(withoutBareUnion)) {
+    return {
+      ok: false,
+      code: 'QUERY_NOT_ALLOWED',
+      message: 'Only UNION ALL is allowed (use UNION ALL for period comparisons)',
+    };
+  }
+
+  const { branches, orderSuffix } = splitUnionAllBranches(trimmed);
+  if (branches.length < 2) {
+    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Invalid UNION ALL query' };
+  }
+
+  const tableSet = new Set();
+  for (const branch of branches) {
+    const branchResult = validateClickHouseSelectBranch(branch);
+    if (!branchResult.ok) return branchResult;
+    branchResult.tables.forEach((t) => tableSet.add(t));
+  }
+
   let finalSql = trimmed;
   if (!/\bLIMIT\b/i.test(finalSql)) {
     finalSql += ` LIMIT ${CONSTANTS.CH_QUERY_LIMIT_DEFAULT}`;
@@ -213,7 +240,44 @@ function validateClickHouseSql(sql) {
     }
   }
 
-  return { ok: true, sql: finalSql, tables: tableNames };
+  return { ok: true, sql: finalSql, tables: [...tableSet] };
+}
+
+function validateClickHouseSql(sql) {
+  const { sql: preprocessed } = preprocessClickHouseSql(sql);
+  const trimmed = preprocessed;
+  if (!trimmed) {
+    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Empty query' };
+  }
+  if (trimmed.includes(';')) {
+    return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'Multiple statements not allowed' };
+  }
+
+  if (/\bUNION\s+ALL\b/i.test(trimmed)) {
+    return validateUnionAllQuery(trimmed);
+  }
+  if (/\bUNION\b/i.test(trimmed)) {
+    return {
+      ok: false,
+      code: 'QUERY_NOT_ALLOWED',
+      message: 'UNION not allowed — use UNION ALL for current vs prior period comparisons',
+    };
+  }
+
+  const branchResult = validateClickHouseSelectBranch(trimmed);
+  if (!branchResult.ok) return branchResult;
+
+  let finalSql = trimmed;
+  if (!/\bLIMIT\b/i.test(finalSql)) {
+    finalSql += ` LIMIT ${CONSTANTS.CH_QUERY_LIMIT_DEFAULT}`;
+  } else {
+    const limitMatch = finalSql.match(/\bLIMIT\s+(\d+)/i);
+    if (limitMatch && parseInt(limitMatch[1], 10) > CONSTANTS.CH_QUERY_LIMIT_MAX) {
+      return { ok: false, code: 'QUERY_NOT_ALLOWED', message: 'LIMIT too high' };
+    }
+  }
+
+  return { ok: true, sql: finalSql, tables: branchResult.tables };
 }
 
 function checkWrongDateColumn(sql) {

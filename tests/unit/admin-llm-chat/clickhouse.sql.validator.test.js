@@ -12,6 +12,22 @@ describe('clickhouse.sql.validator', () => {
     expect(r.sql).to.include('LIMIT');
   });
 
+  it('allows UNION ALL period comparison on same whitelisted table', () => {
+    const r = validateClickHouseSql(
+      "SELECT 'current' AS period, currency, sum(total_revenue) AS revenue FROM revenue_daily_stats WHERE report_date BETWEEN '2026-05-23' AND '2026-05-29' GROUP BY currency UNION ALL SELECT 'prior' AS period, currency, sum(total_revenue) AS revenue FROM revenue_daily_stats WHERE report_date BETWEEN '2026-05-16' AND '2026-05-22' GROUP BY currency",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('UNION ALL');
+    expect(r.tables).to.include('revenue_daily_stats');
+  });
+
+  it('rejects bare UNION without ALL', () => {
+    const r = validateClickHouseSql(
+      "SELECT 1 FROM revenue_daily_stats WHERE report_date >= '2026-05-01' UNION SELECT 2 FROM revenue_daily_stats WHERE report_date >= '2026-05-01'",
+    );
+    expect(r.ok).to.equal(false);
+  });
+
   it('rejects JOIN', () => {
     const r = validateClickHouseSql(
       "SELECT * FROM meta_ads_insights_daily a JOIN google_ads_insights_daily b ON a.date = b.date WHERE a.date >= '2025-01-01'",
