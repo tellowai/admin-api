@@ -9,13 +9,6 @@ const admin = AuthMiddleware.isAdminUser;
 const prefix = versionConfig.routePrefix + '/admin/sql-runner';
 
 module.exports = function (app) {
-  app.get(
-    prefix + '/databases',
-    admin,
-    Validator.validateListDatabases,
-    SqlRunnerCtrl.listDatabases,
-  );
-
   app.post(
     prefix + '/query',
     admin,
