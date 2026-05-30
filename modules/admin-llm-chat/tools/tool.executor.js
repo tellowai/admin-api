@@ -15,6 +15,8 @@ async function executeTool(name, args, { userId }) {
       return wrapped({ success: true, tables: clickhouseTool.listClickhouseTables() });
     case 'get_table_schema':
       return wrapped(clickhouseTool.getTableSchema(args));
+    case 'get_table_date_bounds':
+      return wrapped(await clickhouseTool.getTableDateBounds(args));
     case 'query_clickhouse':
       return wrapped(await clickhouseTool.queryClickhouse(args));
     case 'get_date_context':

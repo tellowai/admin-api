@@ -38,6 +38,19 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_table_date_bounds',
+    description: 'Earliest and latest dates with row count for a table within a bounded lookback window. Use instead of min(date)/max(date) queries without WHERE.',
+    parameters: {
+      type: 'object',
+      properties: {
+        table: { type: 'string', description: 'Whitelisted table name' },
+        tz: { type: 'string', description: 'IANA timezone, default Asia/Kolkata' },
+      },
+      required: ['table'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'get_date_context',
     description: 'Get today, yesterday, and lookback dates in YYYY-MM-DD for the account timezone.',
     parameters: {
@@ -102,7 +115,7 @@ function toAnthropicTools(definitions) {
 function getEnabledToolDefinitions() {
   return TOOL_DEFINITIONS.filter((d) => {
     if (d.name === 'run_analysis_code' && !CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED) return false;
-    if (['query_clickhouse', 'get_table_schema', 'list_clickhouse_tables'].includes(d.name)
+    if (['query_clickhouse', 'get_table_schema', 'get_table_date_bounds', 'list_clickhouse_tables'].includes(d.name)
       && !CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED) return false;
     return true;
   });
