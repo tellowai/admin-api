@@ -90,6 +90,14 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         retryable: false,
       };
     }
+    if (/ECONNREFUSED|connect ETIMEDOUT|ENOTFOUND/i.test(msg)) {
+      return {
+        success: false,
+        error: 'CH_UNAVAILABLE',
+        message: 'ClickHouse is not reachable. Start ClickHouse locally or set clickhouse.adminLlmChatReadonly in config/env/local.js.',
+        retryable: true,
+      };
+    }
     return { success: false, error: 'CH_UNAVAILABLE', message: error.message, retryable: true };
   }
 }
