@@ -164,63 +164,6 @@ function getDefaultDatabase(engine) {
   return engine === 'clickhouse' ? CONSTANTS.CH_DEFAULT_DB : CONSTANTS.MYSQL_DEFAULT_DB;
 }
 
-function filterDatabaseNames(engine, names) {
-  const blocked = engine === 'clickhouse'
-    ? CONSTANTS.BLOCKED_CLICKHOUSE
-    : CONSTANTS.BLOCKED_MYSQL;
-  const allowed = engine === 'clickhouse'
-    ? CONSTANTS.ALLOWED_CLICKHOUSE
-    : CONSTANTS.ALLOWED_MYSQL;
-
-  const unique = [...new Set(
-    (names || [])
-      .map((n) => String(n).trim())
-      .filter((n) => n && CONSTANTS.DATABASE_NAME_REGEX.test(n)),
-  )];
-
-  return unique
-    .filter((n) => !blocked.has(n) && allowed.has(n))
-    .sort((a, b) => a.localeCompare(b));
-}
-
-async function fetchClickhouseDatabaseNames() {
-  const { data } = await readonlyClickhouse.querying('SHOW DATABASES', { dataObjects: true });
-  const rows = Array.isArray(data) ? data : [];
-  return rows.map((row) => row.name || row.database || Object.values(row)[0]);
-}
-
-async function fetchMysqlDatabaseNames() {
-  const pool = slaveConn.promise();
-  const [rows] = await pool.query('SHOW DATABASES');
-  return rows.map((row) => row.Database);
-}
-
-async function listDatabases(engine) {
-  const defaultDb = getDefaultDatabase(engine);
-  let visible = [];
-
-  try {
-    visible = engine === 'clickhouse'
-      ? await fetchClickhouseDatabaseNames()
-      : await fetchMysqlDatabaseNames();
-  } catch (error) {
-    return {
-      success: false,
-      error: 'LIST_DATABASES_FAILED',
-      message: error.message,
-    };
-  }
-
-  const databases = filterDatabaseNames(engine, visible);
-  const fallback = isDatabaseAllowed(engine, defaultDb) ? defaultDb : databases[0] || null;
-
-  return {
-    success: true,
-    databases,
-    default: databases.includes(defaultDb) ? defaultDb : fallback,
-  };
-}
-
 function rowsToResult(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const columns = list.length > 0 ? Object.keys(list[0]) : [];
@@ -299,11 +242,19 @@ async function runMysql(sql, database, limit, offset, kind) {
 }
 
 async function runQuery({ engine, database, sql, limit, offset }) {
-  if (!isDatabaseAllowed(engine, database)) {
+  const resolvedDatabase = database || getDefaultDatabase(engine);
+  if (!resolvedDatabase) {
+    return {
+      success: false,
+      error: 'DATABASE_NOT_CONFIGURED',
+      message: `No default database configured for ${engine}.`,
+    };
+  }
+  if (!isDatabaseAllowed(engine, resolvedDatabase)) {
     return {
       success: false,
       error: 'DATABASE_NOT_ALLOWED',
-      message: `Database "${database}" is not allowed for ${engine}.`,
+      message: `Database "${resolvedDatabase}" is not allowed for ${engine}.`,
     };
   }
 
@@ -317,10 +268,10 @@ async function runQuery({ engine, database, sql, limit, offset }) {
 
   try {
     const result = engine === 'clickhouse'
-      ? await runClickhouse(validation.sql, database, safeLimit, safeOffset, validation.kind)
-      : await runMysql(validation.sql, database, safeLimit, safeOffset, validation.kind);
+      ? await runClickhouse(validation.sql, resolvedDatabase, safeLimit, safeOffset, validation.kind)
+      : await runMysql(validation.sql, resolvedDatabase, safeLimit, safeOffset, validation.kind);
 
-    return { success: true, ...result };
+    return { success: true, database: resolvedDatabase, ...result };
   } catch (error) {
     const msg = String(error.message || 'Query execution failed');
     if (/timeout/i.test(msg)) {
@@ -331,7 +282,6 @@ async function runQuery({ engine, database, sql, limit, offset }) {
 }
 
 module.exports = {
-  listDatabases,
   runQuery,
   validateReadOnlyQuery,
   validateSelectOnly,
