@@ -15,6 +15,7 @@ const {
   buildTemplateTagLabels,
   enrichFacetsCatalogForLlm
 } = require('../utils/templateTagInference.utils');
+const JourneyStageModel = require('../../journey-stages/models/journey.stage.model');
 
 const VALID_GENDERS = ['male', 'female', 'couple', 'unisex'];
 const VALID_WORKFLOW_TYPES = ['AI_ONLY', 'AI_PLUS_AE', 'AE_ONLY'];
@@ -76,7 +77,8 @@ function buildMetadataResponseFormat() {
             },
             required: ['facet_id', 'ttd_id']
           }
-        }
+        },
+        journey_stage_slug: { type: ['string', 'null'] }
       },
       required: [
         'template_name',
@@ -133,6 +135,9 @@ template_tag_ids (from database catalog in user message):
 - Use preview image + JSON for occasion, style, age band, gender presentation, language/script, etc.
 - Return [] only if nothing fits; otherwise assign the best-matching tags per facet.
 
+journey_stage_slug:
+- When niche_slug is set, pick the best journey stage slug from JOURNEY STAGES FOR NICHE (same niche_id), or null if none fit.
+
 Respond with JSON only matching the schema.`;
 }
 
@@ -142,6 +147,7 @@ function buildUserText({
   niches,
   languages,
   facetsCatalog,
+  journeyStagesCatalog,
   bodymovinSummary,
   draftTextFields,
   hasThumbImage
@@ -159,6 +165,9 @@ ${JSON.stringify(languages, null, 2)}
 
 AVAILABLE TEMPLATE TAG FACETS (pick template_tag_ids only from these facet_id + ttd_id pairs):
 ${JSON.stringify(facetsCatalog, null, 2)}
+
+JOURNEY STAGES BY NICHE (pick journey_stage_slug when niche matches; ordered by sequence_order):
+${JSON.stringify(journeyStagesCatalog, null, 2)}
 
 BODYMOVIN SUMMARY (secondary for niche/name when image present):
 ${JSON.stringify(bodymovinSummary, null, 2)}
@@ -205,13 +214,23 @@ exports.inferTemplateMetadata = async function (req, res) {
       thumbImageDataUrl.startsWith('data:image/') &&
       thumbImageDataUrl.includes('base64,');
 
-    const [nicheRows, languageRows, facetsWithTags] = await Promise.all([
+    const [nicheRows, languageRows, facetsWithTags, journeyStageRows] = await Promise.all([
       NicheModel.listNiches({ limit: 100, offset: 0 }),
       LanguageModel.listLanguages({ limit: 200, offset: 0 }),
-      TemplateFacetModel.listAllTemplateFacetsWithTags()
+      TemplateFacetModel.listAllTemplateFacetsWithTags(),
+      JourneyStageModel.listAllActive()
     ]);
 
     const facetsCatalog = enrichFacetsCatalogForLlm(facetsWithTags);
+    const journeyStagesByNiche = {};
+    for (const row of journeyStageRows || []) {
+      if (!journeyStagesByNiche[row.niche_id]) journeyStagesByNiche[row.niche_id] = [];
+      journeyStagesByNiche[row.niche_id].push({
+        slug: row.slug,
+        name: row.name,
+        sequence_order: row.sequence_order
+      });
+    }
 
     const niches = (nicheRows || []).map((n) => ({
       slug: n.slug,
@@ -237,6 +256,7 @@ exports.inferTemplateMetadata = async function (req, res) {
       niches,
       languages,
       facetsCatalog,
+      journeyStagesCatalog: journeyStagesByNiche,
       bodymovinSummary,
       draftTextFields,
       hasThumbImage
@@ -345,6 +365,14 @@ exports.inferTemplateMetadata = async function (req, res) {
       inferred.niche_id = nicheRow?.niche_id ?? null;
     } else {
       inferred.niche_id = null;
+    }
+
+    inferred.journey_stage_id = null;
+    if (inferred.journey_stage_slug && inferred.niche_id) {
+      const stageRow = (journeyStageRows || []).find(
+        (s) => s.niche_id === inferred.niche_id && s.slug === inferred.journey_stage_slug
+      );
+      inferred.journey_stage_id = stageRow?.stage_id ?? null;
     }
 
     inferred.template_tag_ids = resolveTemplateTags(inferred, facetsWithTags);
