@@ -5,8 +5,7 @@ const { validateClickHouseSql } = require('./clickhouse.sql.validator');
 const WHITELIST = require('../constants/clickhouse.whitelist');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const { SCHEMA_VERSION } = require('../services/schema.cache.service');
-
-const PII_COLUMNS = new Set(['email', 'phone', 'phone_number', 'mobile', 'address']);
+const { redactRows } = require('../services/pii.redactor');
 
 async function queryClickhouse({ sql, max_rows: maxRows }) {
   const validation = validateClickHouseSql(sql);
@@ -33,7 +32,7 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
   try {
     const { data } = await readonlyClickhouse.querying(runSql, { dataObjects: true });
     const rows = Array.isArray(data) ? data : [];
-    const redacted = rows.map((row) => redactRow(row));
+    const redacted = redactRows(rows);
     const truncated = rows.length >= (maxRows || CONSTANTS.CH_QUERY_LIMIT_DEFAULT);
     return enrichMonetaryResult({
       success: true,
@@ -115,16 +114,6 @@ function enrichMonetaryResult(result, sql, tables = []) {
     format_hint: 'Present revenue/spend as "<amount> <CURRENCY>" per row, not a bare number.',
     suggested_sql: `SELECT ${currencyCol}, sum(total_revenue) AS total_revenue FROM ${table} WHERE report_date >= '...' AND report_date <= '...' GROUP BY ${currencyCol}`,
   };
-}
-
-function redactRow(row) {
-  const out = { ...row };
-  Object.keys(out).forEach((k) => {
-    if (PII_COLUMNS.has(k.toLowerCase())) {
-      out[k] = '[REDACTED]';
-    }
-  });
-  return out;
 }
 
 function listClickhouseTables() {

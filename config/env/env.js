@@ -39,6 +39,17 @@ module.exports = {
         pass: "",
       },
       debug: true
+    },
+    /** Read-only MySQL user for the admin LLM chat. Falls back to slave creds if unset. */
+    adminLlmChatReadonly: {
+      url: "localhost",
+      port: "3306",
+      databaseName: "",
+      options: {
+        user: "",
+        pass: "",
+      },
+      debug: false
     }
   },
   mongodb: {

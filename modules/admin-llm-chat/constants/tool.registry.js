@@ -51,6 +51,40 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'list_mysql_tables',
+    description: 'List all tables in the transactional MySQL database (app data: users, orders, templates, credits, subscriptions, etc.). Use first to discover MySQL tables, then get_mysql_table_schema.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_mysql_table_schema',
+    description: 'REQUIRED before query_mysql. Returns columns (name, type, key) for a MySQL table.',
+    parameters: {
+      type: 'object',
+      properties: {
+        table: { type: 'string', description: 'MySQL table name' },
+      },
+      required: ['table'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'query_mysql',
+    description: 'Run a read-only SELECT/SHOW/DESCRIBE/EXPLAIN on the MySQL app database. Use for transactional/relational data (users, orders, templates, credits). JOINs are allowed in MySQL. Call get_mysql_table_schema first; results cap at max_rows (default 1000).',
+    parameters: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'Read-only SQL (SELECT/SHOW/DESCRIBE/EXPLAIN)' },
+        max_rows: { type: 'integer', description: 'Max rows (default 1000)' },
+      },
+      required: ['sql'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'get_date_context',
     description: 'Get today, yesterday, and lookback dates in YYYY-MM-DD for the account timezone.',
     parameters: {
@@ -117,6 +151,8 @@ function getEnabledToolDefinitions() {
     if (d.name === 'run_analysis_code' && !CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED) return false;
     if (['query_clickhouse', 'get_table_schema', 'get_table_date_bounds', 'list_clickhouse_tables'].includes(d.name)
       && !CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED) return false;
+    if (['query_mysql', 'get_mysql_table_schema', 'list_mysql_tables'].includes(d.name)
+      && !CONSTANTS.TOOL_QUERY_MYSQL_ENABLED) return false;
     return true;
   });
 }
