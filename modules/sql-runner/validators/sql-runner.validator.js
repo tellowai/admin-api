@@ -25,5 +25,4 @@ function validateQuery(schemaDef, source) {
   };
 }
 
-exports.validateListDatabases = validateQuery(schema.listDatabasesSchema, 'query');
 exports.validateRunQuery = validateQuery(schema.runQuerySchema, 'body');
