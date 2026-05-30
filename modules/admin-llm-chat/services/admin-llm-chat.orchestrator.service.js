@@ -210,6 +210,8 @@ async function runRefusalTurn({
     },
   ]);
 
+  await ConversationModel.touchUpdatedAt(conversation.conversation_id);
+
   sendEvent('meta', {
     conversationId: conversation.conversation_id,
     messageId: assistantMsgId,
@@ -372,6 +374,11 @@ async function runStreamingTurn({
   const assistantMsgId = uuidv4();
   const assistantSeq = seq + 1;
 
+  // Close any orphaned in_progress rows from a previously abandoned turn before
+  // starting this one. The controller already blocks concurrent streams, so this
+  // can only match stale rows, never a live one.
+  await MessageModel.finalizeStaleInProgress(conversation.conversation_id);
+
   await MessageModel.createMany([
     {
       message_id: userMsgId,
@@ -402,6 +409,8 @@ async function runStreamingTurn({
   if (attachmentIds?.length) {
     await AttachmentModel.linkToMessage(attachmentIds, userMsgId);
   }
+
+  await ConversationModel.touchUpdatedAt(conversation.conversation_id);
 
   const userTurnMessage = {
     role: 'user',
@@ -771,7 +780,7 @@ async function runStreamingTurn({
       await MessageModel.finalize(assistantMsgId, {
         content: partial.content || '',
         content_parts: partial.content_parts,
-        finish_reason: 'stop',
+        finish_reason: partialText.length || hasPartial ? 'aborted' : 'interrupted',
         tokens_in: turnTokensIn,
         tokens_out: turnTokensOut,
         cost_usd: estimateCost(modelMeta, turnTokensIn, turnTokensOut),
@@ -828,6 +837,10 @@ async function runStreamingTurn({
     });
     sendEvent('error', formatted);
     sendEvent('done', { finishReason: 'error', trace: partial.trace });
+  } finally {
+    // Safety net: if no handler finalized this row (unexpected throw/early exit),
+    // close it atomically. Conditional on master so a completed row is never clobbered.
+    await MessageModel.finalizeIfInProgress(assistantMsgId).catch(() => {});
   }
 }
 
