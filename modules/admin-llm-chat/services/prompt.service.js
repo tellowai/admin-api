@@ -13,16 +13,25 @@ const { formatRelationshipsGuide } = require('../constants/table.relationships')
 
 const VERBATIM_TAIL = 6;
 
+/** Default brand the prompts/context are authored with; swapped for COMPANY_NAME. */
+const DEFAULT_COMPANY_NAME = 'Tellow AI';
+
+function applyCompanyName(text) {
+  if (!text || CONSTANTS.COMPANY_NAME === DEFAULT_COMPANY_NAME) return text;
+  return text.split(DEFAULT_COMPANY_NAME).join(CONSTANTS.COMPANY_NAME);
+}
+
 function loadSystemPrompt(version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION) {
   const file = path.join(PROMPTS_DIR, `${version}.system.txt`);
-  return fs.readFileSync(file, 'utf8');
+  return applyCompanyName(fs.readFileSync(file, 'utf8'));
 }
 
 function loadBusinessContext() {
   try {
-    return JSON.parse(fs.readFileSync(BUSINESS_CONTEXT_PATH, 'utf8'));
+    const biz = JSON.parse(fs.readFileSync(BUSINESS_CONTEXT_PATH, 'utf8'));
+    return { ...biz, companyName: CONSTANTS.COMPANY_NAME };
   } catch (_e) {
-    return {};
+    return { companyName: CONSTANTS.COMPANY_NAME };
   }
 }
 

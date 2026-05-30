@@ -146,6 +146,8 @@ module.exports = {
     modelsPath: "",
     /** Max tool calls per assistant turn. Override with ADMIN_LLM_CHAT_MAX_TOOL_CALLS. */
     maxToolCallsPerTurn: 24,
+    /** Brand name for the chat (system prompt, business context). Override with ADMIN_LLM_CHAT_COMPANY_NAME, e.g. "Kriya AI". Defaults to "Tellow AI". */
+    companyName: "",
   },
   llmProviders: {
     openai: { apiKey: "" },

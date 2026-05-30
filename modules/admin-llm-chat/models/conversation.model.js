@@ -65,6 +65,11 @@ exports.updateModel = (conversationId, userId, provider, modelId) => {
   return mysqlModel.runQueryInMaster(q, [provider, modelId, conversationId, userId]);
 };
 
+exports.touchUpdatedAt = (conversationId) => {
+  const q = `UPDATE admin_llm_chat_conversations SET updated_at = NOW(3) WHERE conversation_id = ?`;
+  return mysqlModel.runQueryInMaster(q, [conversationId]);
+};
+
 exports.addUsageTotals = (conversationId, tokensIn, tokensOut, costUsd) => {
   const q = `UPDATE admin_llm_chat_conversations SET
     total_tokens_in = total_tokens_in + ?,

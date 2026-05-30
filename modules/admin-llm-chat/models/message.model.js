@@ -123,6 +123,30 @@ exports.updateContent = (messageId, content, finishReason) => {
   return mysqlModel.runQueryInMaster(q, [content, finishReason, messageId]);
 };
 
+/** Close assistant rows left in_progress (user left mid-stream, disconnect, crash). */
+exports.finalizeStaleInProgress = (conversationId, { excludeMessageId } = {}) => {
+  let q = `UPDATE admin_llm_chat_messages
+    SET finish_reason = 'interrupted'
+    WHERE conversation_id = ? AND role = 'assistant' AND finish_reason = 'in_progress'`;
+  const params = [conversationId];
+  if (excludeMessageId) {
+    q += ' AND message_id != ?';
+    params.push(excludeMessageId);
+  }
+  return mysqlModel.runQueryInMaster(q, params);
+};
+
+/**
+ * Atomic safety net for a single row: mark interrupted ONLY if still in_progress.
+ * Conditional on master so it never clobbers a row already finalized to stop/error.
+ */
+exports.finalizeIfInProgress = (messageId) => {
+  const q = `UPDATE admin_llm_chat_messages
+    SET finish_reason = 'interrupted'
+    WHERE message_id = ? AND finish_reason = 'in_progress'`;
+  return mysqlModel.runQueryInMaster(q, [messageId]);
+};
+
 exports.finalize = (messageId, data) => {
   const q = `UPDATE admin_llm_chat_messages SET
     content = ?, content_parts = ?, finish_reason = ?,
