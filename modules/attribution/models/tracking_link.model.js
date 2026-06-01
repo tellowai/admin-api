@@ -72,12 +72,13 @@ exports.insert = async function (row) {
     INSERT INTO tracking_links (
       id, short_code, display_name, channel, platform, placement_platform, source_name, campaign, utm_medium, ad_group, ad_name,
       deep_link_path, redirect_url, tags, is_active, created_by,
-      attribution_provider, external_link_key, metadata, schema_version, influencer_profile_id, photo_booth_id, sl_landing
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      attribution_provider, external_link_key, metadata, schema_version, influencer_profile_id, photo_booth_id, sl_landing, sl_open_mode
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   const tagsJson = row.tags != null ? JSON.stringify(row.tags) : null;
   const metadataJson = metadataToDb(row.metadata);
   const slLanding = row.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const slOpenMode = row.sl_open_mode === 'instant_redirect' ? 'instant_redirect' : 'landing_page';
   return mysqlQueryRunner.runQueryInMaster(q, [
     row.id,
     row.short_code,
@@ -101,7 +102,8 @@ exports.insert = async function (row) {
     row.schema_version != null ? row.schema_version : 1,
     row.influencer_profile_id || null,
     row.photo_booth_id || null,
-    slLanding
+    slLanding,
+    slOpenMode
   ]);
 };
 
@@ -127,7 +129,8 @@ exports.update = async function (id, patch) {
     schema_version: 'schema_version',
     influencer_profile_id: 'influencer_profile_id',
     photo_booth_id: 'photo_booth_id',
-    sl_landing: 'sl_landing'
+    sl_landing: 'sl_landing',
+    sl_open_mode: 'sl_open_mode'
   };
   Object.keys(map).forEach((k) => {
     if (patch[k] !== undefined) {
