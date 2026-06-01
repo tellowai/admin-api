@@ -364,6 +364,7 @@ exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId,
     throw err;
   }
   const slLanding = body.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const slOpenMode = body.sl_open_mode === 'instant_redirect' ? 'instant_redirect' : 'landing_page';
   const link = await AttributionAdminService.createPhotoboothAdminShareLink(
     {
       photo_booth_id: booth.photo_booth_id,
@@ -371,7 +372,7 @@ exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId,
       booth_name: booth.booth_name
     },
     adminUserId,
-    { sl_landing: slLanding }
+    { sl_landing: slLanding, sl_open_mode: slOpenMode }
   );
   return { link };
 };
@@ -383,14 +384,17 @@ exports.patchPhotoboothShareLink = async function (photoBoothId, body = {}) {
     err.status = 404;
     throw err;
   }
-  if (body.sl_landing === undefined || body.sl_landing === null) {
-    const err = new Error('sl_landing is required');
+  if (
+    (body.sl_landing === undefined || body.sl_landing === null) &&
+    (body.sl_open_mode === undefined || body.sl_open_mode === null)
+  ) {
+    const err = new Error('sl_landing or sl_open_mode is required');
     err.status = 400;
     throw err;
   }
-  const link = await AttributionAdminService.updatePhotoboothShareLinkSlLanding(
-    photoBoothId,
-    body.sl_landing
-  );
+  const link = await AttributionAdminService.updatePhotoboothShareLinkSettings(photoBoothId, {
+    sl_landing: body.sl_landing,
+    sl_open_mode: body.sl_open_mode
+  });
   return { link };
 };

@@ -14,6 +14,14 @@ const PROVIDER_RE = /^[a-z0-9][a-z0-9_.-]{0,48}$/i;
 const PROFILE_URL_PLATFORMS = new Set(['instagram', 'youtube', 'twitter', 'tiktok', 'linkedin', 'facebook']);
 const URL_RE = /^https?:\/\/[^\s]+$/i;
 
+function normalizeSlOpenMode(val) {
+  return val === 'instant_redirect' ? 'instant_redirect' : 'landing_page';
+}
+
+function normalizeSlLanding(val) {
+  return val === 'website_only' ? 'website_only' : 'app_install';
+}
+
 function normalizeUrl(u) {
   const s = String(u).trim();
   if (!s) return null;
@@ -392,7 +400,8 @@ exports.createTrackingLink = async function (payload, adminUserId) {
     }
   }
   const id = uuidv4();
-  const slLanding = payload.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const slLanding = normalizeSlLanding(payload.sl_landing);
+  const slOpenMode = normalizeSlOpenMode(payload.sl_open_mode);
   await TrackingLinkModel.insert({
     id,
     short_code: shortCode,
@@ -416,7 +425,8 @@ exports.createTrackingLink = async function (payload, adminUserId) {
     schema_version: payload.schema_version != null ? Number(payload.schema_version) : 1,
     influencer_profile_id: payload.influencer_profile_id || null,
     photo_booth_id: payload.photo_booth_id || null,
-    sl_landing: slLanding
+    sl_landing: slLanding,
+    sl_open_mode: slOpenMode
   });
   return TrackingLinkModel.getById(id);
 };
@@ -456,6 +466,12 @@ exports.updateTrackingLink = async function (id, patch) {
       throw err;
     }
     patch.short_code = normalized;
+  }
+  if (patch.sl_landing !== undefined) {
+    patch.sl_landing = normalizeSlLanding(patch.sl_landing);
+  }
+  if (patch.sl_open_mode !== undefined) {
+    patch.sl_open_mode = normalizeSlOpenMode(patch.sl_open_mode);
   }
   const next = { ...patch };
   if (next.attribution_provider !== undefined) {
@@ -663,7 +679,8 @@ exports.createPhotoboothAdminShareLink = async function ({ photo_booth_id, booth
     err.statusCode = 400;
     throw err;
   }
-  const slLanding = opts.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const slLanding = normalizeSlLanding(opts.sl_landing);
+  const slOpenMode = normalizeSlOpenMode(opts.sl_open_mode);
   const profile = await exports.ensureMagicPhotoboothProfile();
   const shortCode = await resolveShortCodeForCreate({});
   const codeEnc = encodeURIComponent(String(booth_code).trim());
@@ -693,12 +710,14 @@ exports.createPhotoboothAdminShareLink = async function ({ photo_booth_id, booth
       photo_booth_id,
       booth_code: String(booth_code).trim(),
       origin: 'admin_photobooth_detail',
-      sl_landing: slLanding
+      sl_landing: slLanding,
+      sl_open_mode: slOpenMode
     },
     schema_version: 1,
     influencer_profile_id: profile.id,
     photo_booth_id,
-    sl_landing: slLanding
+    sl_landing: slLanding,
+    sl_open_mode: slOpenMode
   });
   return TrackingLinkModel.getById(id);
 };
@@ -722,18 +741,36 @@ function parseTrackingLinkMetadata(raw) {
 }
 
 /**
- * Update sl_landing on the latest active share link for this booth (same short URL, new behavior on /sl).
+ * Update share-link settings on the latest active booth link (same short URL, new behavior on /sl).
  */
-exports.updatePhotoboothShareLinkSlLanding = async function (photoBoothId, slLandingRaw) {
+exports.updatePhotoboothShareLinkSettings = async function (photoBoothId, settings = {}) {
   const link = await TrackingLinkModel.getLatestByPhotoBoothId(photoBoothId);
   if (!link) {
     const err = new Error('Share link not found');
     err.statusCode = 404;
     throw err;
   }
-  const slLanding = slLandingRaw === 'website_only' ? 'website_only' : 'app_install';
+  const patch = {};
   const meta = parseTrackingLinkMetadata(link.metadata);
-  meta.sl_landing = slLanding;
-  await TrackingLinkModel.update(link.id, { sl_landing: slLanding, metadata: meta });
+  if (settings.sl_landing !== undefined && settings.sl_landing !== null) {
+    patch.sl_landing = normalizeSlLanding(settings.sl_landing);
+    meta.sl_landing = patch.sl_landing;
+  }
+  if (settings.sl_open_mode !== undefined && settings.sl_open_mode !== null) {
+    patch.sl_open_mode = normalizeSlOpenMode(settings.sl_open_mode);
+    meta.sl_open_mode = patch.sl_open_mode;
+  }
+  if (!Object.keys(patch).length) {
+    const err = new Error('sl_landing or sl_open_mode is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  patch.metadata = meta;
+  await TrackingLinkModel.update(link.id, patch);
   return TrackingLinkModel.getById(link.id);
+};
+
+/** @deprecated use updatePhotoboothShareLinkSettings */
+exports.updatePhotoboothShareLinkSlLanding = async function (photoBoothId, slLandingRaw) {
+  return exports.updatePhotoboothShareLinkSettings(photoBoothId, { sl_landing: slLandingRaw });
 };
