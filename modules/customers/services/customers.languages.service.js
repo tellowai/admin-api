@@ -40,13 +40,22 @@ exports.getContentLanguageOptedStats = async function ({ start_date, end_date, t
     // eslint-disable-next-line no-console
     console.log('[customers.languages] opted-stats range', { rangeStart, rangeEnd, start_date, end_date, tz });
   }
-  const rows = await CustomersLanguagesModel.queryContentLanguageOptedStats(rangeStart, rangeEnd);
-  return rows.map((row) => ({
-    code: row.code,
-    name: row.name,
-    native_name: row.native_name,
-    status: row.status,
-    is_content_language: row.is_content_language,
-    opted_count: Number(row.opted_count) || 0,
-  }));
+  const [rows, summaryRow] = await Promise.all([
+    CustomersLanguagesModel.queryContentLanguageOptedStats(rangeStart, rangeEnd),
+    CustomersLanguagesModel.queryContentLanguageOverallSummary(rangeStart, rangeEnd),
+  ]);
+
+  return {
+    languages: rows.map((row) => ({
+      code: row.code,
+      name: row.name,
+      native_name: row.native_name,
+      status: row.status,
+      is_content_language: row.is_content_language,
+      opted_count: Number(row.opted_count) || 0,
+    })),
+    summary: {
+      overall_opted_count: Number(summaryRow.overall_opted_count) || 0,
+    },
+  };
 };
