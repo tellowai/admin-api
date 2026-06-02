@@ -196,7 +196,7 @@ exports.listTemplateUserGenerations = async function (req, res) {
     const startDb = allTimeFlag ? null : summaryOptions.utcDateTimeStart;
     const endDb = allTimeFlag ? null : summaryOptions.utcDateTimeEnd;
 
-    const [templateRows, generationRows, userEntitlementRows] = await Promise.all([
+    const [templateRows, generationRows] = await Promise.all([
       generationsModel.getTemplatesByIds([templateId]),
       generationsModel.getTemplateUserGenerationTimelineRows(
         templateId,
@@ -204,15 +204,23 @@ exports.listTemplateUserGenerations = async function (req, res) {
         startDb,
         endDb,
         allTimeFlag
-      ),
-      generationsModel.getUserEntitlementsForTemplate([userId], templateId)
+      )
     ]);
 
     const templateMeta = templateRows[0] || {};
-    const timeline = buildTemplateUserGenerationTimelineItems(generationRows, userEntitlementRows, {
-      templateType: templateMeta.template_type,
-      credits: templateMeta.credits
-    });
+    const analyticsContext = await generationsModel.fetchTemplateAnalyticsAccessContext(
+      templateId,
+      generationRows
+    );
+    const timeline = buildTemplateUserGenerationTimelineItems(
+      generationRows,
+      analyticsContext.entitlementsByUserId[userId] || [],
+      {
+        templateType: templateMeta.template_type,
+        credits: templateMeta.credits
+      },
+      analyticsContext
+    );
 
     const data = timeline.map((item) => ({
       ...item,
@@ -533,24 +541,38 @@ exports.listGenerations = async function (req, res) {
       const startDb = allTime ? null : moment.utc(startDate).format('YYYY-MM-DD HH:mm:ss');
       const endDb = allTime ? null : moment.utc(endDate).format('YYYY-MM-DD HH:mm:ss');
       const templateMetaRow = templateMap[templateIdFilter] || null;
-      const [accessGenerationRows, userEntitlementRows] = await Promise.all([
-        generationsModel.getTemplateGenerationAccessRows(
-          templateIdFilter,
-          userIdsForTemplateAccess,
-          startDb,
-          endDb,
-          allTime
-        ),
-        generationsModel.getUserEntitlementsForTemplate(userIdsForTemplateAccess, templateIdFilter)
-      ]);
+      const accessGenerationRows = await generationsModel.getTemplateGenerationAccessRows(
+        templateIdFilter,
+        userIdsForTemplateAccess,
+        startDb,
+        endDb,
+        allTime
+      );
+      const accessRowIds = new Set(
+        (accessGenerationRows || []).map((r) => String(r.media_generation_id).trim()).filter(Boolean)
+      );
+      const rowsForContext = [...(accessGenerationRows || [])];
+      for (const gen of generations) {
+        const id = gen.media_generation_id != null ? String(gen.media_generation_id).trim() : '';
+        if (!id || accessRowIds.has(id)) continue;
+        rowsForContext.push({
+          media_generation_id: id,
+          user_id: gen.user_id,
+          activity_at: gen.created_at || gen.completed_at
+        });
+      }
+      const analyticsContext = await generationsModel.fetchTemplateAnalyticsAccessContext(
+        templateIdFilter,
+        rowsForContext
+      );
       applyTemplateAnalyticsAccessToGenerations(
         generations,
         accessGenerationRows,
-        userEntitlementRows,
         {
           templateType: templateMetaRow?.template_type,
           credits: templateMetaRow?.credits
-        }
+        },
+        analyticsContext
       );
     }
 

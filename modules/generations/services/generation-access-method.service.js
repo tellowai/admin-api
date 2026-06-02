@@ -24,6 +24,85 @@ function isAlacarteEntitlementRow(entitlement) {
   return tier === 'premium_single';
 }
 
+/** Subscription pool / bundle entitlement (not template-scoped à la carte). */
+function isSubscriptionEntitlementRow(entitlement) {
+  if (!entitlement || isAlacarteEntitlementRow(entitlement)) return false;
+  const tier = entitlement.tier_plan_type != null ? String(entitlement.tier_plan_type).trim() : '';
+  return !!(tier && SUBSCRIPTION_TIER_PLAN_TYPES.has(tier));
+}
+
+function hasClaimedTemplateSlotOnGeneration(gen) {
+  const raw = gen?.claimed_template_id ?? gen?.mg_claimed_template_id;
+  if (raw == null) return false;
+  const s = String(raw).trim();
+  return s !== '' && s !== '0' && s !== 'null';
+}
+
+function isPaidTemplateMeta(templateMeta = {}) {
+  const templateType =
+    templateMeta.templateType != null ? String(templateMeta.templateType).trim().toLowerCase() : '';
+  const credits = Number(templateMeta.credits);
+  if (templateType === 'free') return false;
+  if (Number.isFinite(credits)) return credits > 0;
+  return templateType !== '';
+}
+
+function hasExplicitEntitlementOnGeneration(gen) {
+  const explicit = gen.mg_entitlement_id ?? gen.claim_entitlement_id;
+  if (explicit == null) return false;
+  const s = String(explicit).trim();
+  return s !== '' && s !== 'null' && Number.isFinite(Number(explicit)) && Number(explicit) > 0;
+}
+
+/** Free-tier uses claimed_templates with entitlement_id IS NULL (not linked to subscription pool). */
+function isFreeTierClaimOnGeneration(gen) {
+  if (!hasClaimedTemplateSlotOnGeneration(gen)) return false;
+  const claimEnt = gen.claim_entitlement_id;
+  return claimEnt == null || String(claimEnt).trim() === '' || String(claimEnt) === 'null';
+}
+
+/**
+ * ALLOWED_FREE on a paid template: no credits, no entitlement on media_generations, no subscription claim link.
+ */
+function isFreeTierPaidTemplateGeneration(gen, creditUsageIds, templateMeta) {
+  if (!isPaidTemplateMeta(templateMeta)) return false;
+  const genId = gen.media_generation_id != null ? String(gen.media_generation_id) : '';
+  if (genId && creditUsageIds instanceof Set && creditUsageIds.has(genId)) return false;
+  if (hasExplicitEntitlementOnGeneration(gen)) return false;
+  if (hasClaimedTemplateSlotOnGeneration(gen)) return false;
+  return true;
+}
+
+function getChEntitlementIdForGeneration(gen, chEntitlementByMediaId) {
+  const genId = gen?.media_generation_id != null ? String(gen.media_generation_id) : '';
+  if (!genId || !(chEntitlementByMediaId instanceof Map)) return null;
+  const chEid = chEntitlementByMediaId.get(genId);
+  if (chEid == null || !Number.isFinite(Number(chEid)) || Number(chEid) <= 0) return null;
+  return Number(chEid);
+}
+
+function resolveEntitlementForAnalytics(gen, bucketEntitlementId, entitlementMap, chEntitlementByMediaId) {
+  const candidates = [gen.mg_entitlement_id, gen.claim_entitlement_id];
+  for (const raw of candidates) {
+    if (raw == null || String(raw).trim() === '' || String(raw) === 'null') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0 && entitlementMap[n]) {
+      return entitlementMap[n];
+    }
+  }
+  const chEid = getChEntitlementIdForGeneration(gen, chEntitlementByMediaId);
+  if (chEid != null && entitlementMap[chEid]) {
+    return entitlementMap[chEid];
+  }
+  if (bucketEntitlementId != null && String(bucketEntitlementId).trim() !== '' && String(bucketEntitlementId) !== 'null') {
+    const n = Number(bucketEntitlementId);
+    if (Number.isFinite(n) && n > 0 && entitlementMap[n]) {
+      return entitlementMap[n];
+    }
+  }
+  return null;
+}
+
 /**
  * Map entitlement + template context to admin generation access labels.
  * @param {{ entitlement?: { tier_plan_type?: string, template_id?: string|null }|null, templateType?: string|null, credits?: number|null }} input
@@ -145,12 +224,79 @@ function collectAccessMethodsFromBuckets(buckets, entitlementMap, templateMeta =
  * @param {Array} userEntitlements
  * @returns {Array<{ entitlement_id: number|null, cnt: number }>}
  */
+function toCreditDeductionSet(creditDeductionIds) {
+  if (creditDeductionIds instanceof Set) return creditDeductionIds;
+  return new Set((creditDeductionIds || []).map((id) => String(id).trim()).filter(Boolean));
+}
+
+/**
+ * Template analytics access:
+ * 1. Paid + credit reserve/deduction → Subscription
+ * 2. À la carte entitlement → À la carte
+ * 3. claimed_template with NULL entitlement (free-tier claim row) → Free
+ * 4. claimed_template with subscription entitlement → Subscription
+ * 5. Paid ALLOWED_FREE signature (no credits/claim/entitlement on row) → Free
+ * 6. Resolved subscription entitlement (row, bucket, or CH) → Subscription
+ * 7. Else → Free
+ */
+function mapTemplateAnalyticsAccessMethod({
+  hasCreditSubscriptionUsage = false,
+  entitlement = null,
+  gen = null,
+  creditUsageIds = new Set(),
+  templateMeta = {}
+} = {}) {
+  // Classify from per-generation signals (credits, entitlements, claims), not the template's
+  // current type — a template switched to free still has historical credit/à la carte rows.
+
+  if (hasCreditSubscriptionUsage) {
+    return {
+      generation_access_method: 'subscription',
+      generation_access_label: 'Subscription'
+    };
+  }
+  if (isAlacarteEntitlementRow(entitlement)) {
+    return {
+      generation_access_method: 'alacarte',
+      generation_access_label: 'À la carte'
+    };
+  }
+  if (gen && isFreeTierClaimOnGeneration(gen)) {
+    return {
+      generation_access_method: 'free',
+      generation_access_label: 'Free'
+    };
+  }
+  if (gen && hasClaimedTemplateSlotOnGeneration(gen)) {
+    return {
+      generation_access_method: 'subscription',
+      generation_access_label: 'Subscription'
+    };
+  }
+  if (isSubscriptionEntitlementRow(entitlement)) {
+    return {
+      generation_access_method: 'subscription',
+      generation_access_label: 'Subscription'
+    };
+  }
+  if (gen && isFreeTierPaidTemplateGeneration(gen, creditUsageIds, templateMeta)) {
+    return {
+      generation_access_method: 'free',
+      generation_access_label: 'Free'
+    };
+  }
+  return {
+    generation_access_method: 'free',
+    generation_access_label: 'Free'
+  };
+}
+
 function resolveEntitlementBucketsForUser(generationRows, userEntitlements = []) {
   const sorted = [...(generationRows || [])].sort(
     (a, b) => new Date(a.activity_at).getTime() - new Date(b.activity_at).getTime()
   );
   const ents = Array.isArray(userEntitlements) ? userEntitlements : [];
-  const subEnt = ents.find((e) => !isAlacarteEntitlementRow(e));
+  const subEnt = ents.find((e) => isSubscriptionEntitlementRow(e));
   const alacarteEnts = ents
     .filter((e) => isAlacarteEntitlementRow(e))
     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
@@ -169,7 +315,10 @@ function resolveEntitlementBucketsForUser(generationRows, userEntitlements = [])
 
     const activityMs = new Date(gen.activity_at).getTime();
     if (!Number.isFinite(activityMs)) {
-      buckets.push({ entitlement_id: null, cnt: 1 });
+      buckets.push({
+        entitlement_id: subEnt?.entitlement_id != null ? Number(subEnt.entitlement_id) : null,
+        cnt: 1
+      });
       continue;
     }
 
@@ -210,7 +359,41 @@ function resolveEntitlementBucketsForUser(generationRows, userEntitlements = [])
   return buckets;
 }
 
-function buildAccessMethodsByUserFromGenerations(generationRows, entitlementsByUserId, templateMeta = {}) {
+const TEMPLATE_ANALYTICS_ACCESS_LABELS = {
+  alacarte: 'À la carte',
+  subscription: 'Subscription',
+  free: 'Free'
+};
+
+const TEMPLATE_ANALYTICS_METHOD_SORT = { alacarte: 0, subscription: 1, free: 2 };
+
+function aggregateTemplateAnalyticsFromTimelineItems(timelineItems) {
+  const rolled = new Map();
+  for (const item of timelineItems || []) {
+    const method = item.access_method;
+    if (!method || !TEMPLATE_ANALYTICS_ACCESS_LABELS[method]) continue;
+    const label = TEMPLATE_ANALYTICS_ACCESS_LABELS[method];
+    const existing = rolled.get(method);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      rolled.set(method, { method, label, count: 1 });
+    }
+  }
+  return [...rolled.values()].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    const ai = TEMPLATE_ANALYTICS_METHOD_SORT[a.method] ?? 99;
+    const bi = TEMPLATE_ANALYTICS_METHOD_SORT[b.method] ?? 99;
+    return ai - bi;
+  });
+}
+
+function buildAccessMethodsByUserFromGenerations(
+  generationRows,
+  entitlementsByUserId,
+  templateMeta = {},
+  analyticsContext = {}
+) {
   const rowsByUser = new Map();
   for (const gen of generationRows || []) {
     const uid = gen.user_id != null ? String(gen.user_id).trim() : '';
@@ -222,12 +405,13 @@ function buildAccessMethodsByUserFromGenerations(generationRows, entitlementsByU
   const out = new Map();
   for (const [uid, userRows] of rowsByUser) {
     const userEntitlements = entitlementsByUserId[uid] || [];
-    const buckets = resolveEntitlementBucketsForUser(userRows, userEntitlements);
-    const entitlementMap = {};
-    for (const e of userEntitlements) {
-      if (e.entitlement_id != null) entitlementMap[e.entitlement_id] = e;
-    }
-    out.set(uid, collectTemplateAnalyticsAccessMethods(buckets, entitlementMap, templateMeta));
+    const items = buildTemplateUserGenerationTimelineItems(
+      userRows,
+      userEntitlements,
+      templateMeta,
+      analyticsContext
+    );
+    out.set(uid, aggregateTemplateAnalyticsFromTimelineItems(items));
   }
   return out;
 }
@@ -236,39 +420,46 @@ function buildAccessMethodsByUserFromGenerations(generationRows, entitlementsByU
  * One timeline row per generation with Subscription / À la carte access (analytics UI).
  * @returns {Array<{ media_generation_id: string, activity_at: *, job_status: string, access_method: string|null, access_label: string|null }>}
  */
-function buildTemplateUserGenerationTimelineItems(generationRows, userEntitlements, templateMeta = {}) {
+function buildTemplateUserGenerationTimelineItems(
+  generationRows,
+  userEntitlements,
+  templateMeta = {},
+  analyticsContext = {}
+) {
+  const {
+    creditUsageIds = new Set(),
+    chEntitlementByMediaId = new Map(),
+    entitlementMap: contextEntitlementMap = null
+  } = analyticsContext;
+  const creditSet = toCreditDeductionSet(creditUsageIds);
   const sorted = [...(generationRows || [])].sort(
     (a, b) => new Date(a.activity_at).getTime() - new Date(b.activity_at).getTime()
   );
   const buckets = resolveEntitlementBucketsForUser(sorted, userEntitlements);
-  const entitlementMap = {};
-  for (const e of userEntitlements || []) {
-    if (e.entitlement_id != null) entitlementMap[e.entitlement_id] = e;
+  const entitlementMap = contextEntitlementMap || {};
+  if (!contextEntitlementMap) {
+    for (const e of userEntitlements || []) {
+      if (e.entitlement_id != null) entitlementMap[e.entitlement_id] = e;
+    }
   }
 
   return sorted.map((gen, i) => {
     const bucket = buckets[i] || {};
-    const eidRaw = bucket.entitlement_id;
-    const eid =
-      eidRaw != null && String(eidRaw).trim() !== '' && String(eidRaw) !== 'null'
-        ? Number(eidRaw)
-        : null;
-    const ent =
-      eid != null && Number.isFinite(eid) && entitlementMap[eid] ? entitlementMap[eid] : null;
-    const access = mapGenerationAccessMethod({
+    const bucketEid = bucket.entitlement_id;
+    const ent = resolveEntitlementForAnalytics(gen, bucketEid, entitlementMap, chEntitlementByMediaId);
+    const genId = gen.media_generation_id != null ? String(gen.media_generation_id) : '';
+    const access = mapTemplateAnalyticsAccessMethod({
+      hasCreditSubscriptionUsage: genId ? creditSet.has(genId) : false,
       entitlement: ent,
-      templateType: templateMeta.templateType,
-      credits: templateMeta.credits
+      gen,
+      creditUsageIds: creditSet,
+      templateMeta
     });
     let method = access.generation_access_method;
     let label = access.generation_access_label;
-    if (method === 'subscription_credits') {
-      method = 'subscription';
-      label = 'Subscription';
-    }
-    if (method !== 'alacarte' && method !== 'subscription') {
-      method = null;
-      label = null;
+    if (!TEMPLATE_ANALYTICS_ACCESS_LABELS[method]) {
+      method = 'free';
+      label = 'Free';
     }
     return {
       media_generation_id: gen.media_generation_id,
@@ -287,25 +478,40 @@ function buildTemplateUserGenerationTimelineItems(generationRows, userEntitlemen
 function applyTemplateAnalyticsAccessToGenerations(
   generations,
   accessGenerationRows,
-  userEntitlementRows,
-  templateMeta = {}
+  templateMeta = {},
+  analyticsContext = {}
 ) {
   const list = Array.isArray(generations) ? generations : [];
-  const accessRows = Array.isArray(accessGenerationRows) ? accessGenerationRows : [];
-  if (!list.length || !accessRows.length) return;
+  if (!list.length) return;
 
-  const entsByUserId = {};
-  for (const e of userEntitlementRows || []) {
-    const uid = e.user_id != null ? String(e.user_id).trim() : '';
-    if (!uid) continue;
-    if (!entsByUserId[uid]) entsByUserId[uid] = [];
-    entsByUserId[uid].push(e);
+  const {
+    entitlementsByUserId = {},
+    claimsByUserId = {},
+    chEntitlementByMediaId = new Map(),
+    creditUsageIds = new Set(),
+    entitlementMap = {}
+  } = analyticsContext;
+
+  const accessRows = Array.isArray(accessGenerationRows) ? accessGenerationRows : [];
+  const rowByMediaId = new Map();
+  for (const row of accessRows) {
+    const id = row.media_generation_id != null ? String(row.media_generation_id) : '';
+    if (id) rowByMediaId.set(id, row);
   }
 
   const rowsByUser = new Map();
-  for (const row of accessRows) {
-    const uid = row.user_id != null ? String(row.user_id).trim() : '';
-    if (!uid) continue;
+  for (const gen of list) {
+    const id = gen.media_generation_id != null ? String(gen.media_generation_id) : '';
+    const uid = gen.user_id != null ? String(gen.user_id).trim() : '';
+    if (!id || !uid) continue;
+    const row = rowByMediaId.get(id) || {
+      media_generation_id: id,
+      user_id: uid,
+      mg_entitlement_id: gen.entitlement_id ?? null,
+      claim_entitlement_id: null,
+      claimed_template_id: null,
+      activity_at: gen.created_at || gen.completed_at
+    };
     if (!rowsByUser.has(uid)) rowsByUser.set(uid, []);
     rowsByUser.get(uid).push(row);
   }
@@ -314,25 +520,30 @@ function applyTemplateAnalyticsAccessToGenerations(
   for (const [uid, userRows] of rowsByUser) {
     const items = buildTemplateUserGenerationTimelineItems(
       userRows,
-      entsByUserId[uid] || [],
-      templateMeta
+      entitlementsByUserId[uid] || [],
+      templateMeta,
+      {
+        creditUsageIds,
+        chEntitlementByMediaId,
+        claimsByUserId,
+        entitlementMap
+      }
     );
     for (const item of items) {
-      if (!item.access_method || !item.media_generation_id) continue;
+      if (!item.media_generation_id) continue;
       accessByMediaId.set(String(item.media_generation_id), {
-        generation_access_method: item.access_method,
-        generation_access_label: item.access_label
+        generation_access_method: item.access_method || null,
+        generation_access_label: item.access_label || null
       });
     }
   }
 
   for (const gen of list) {
     const id = gen.media_generation_id != null ? String(gen.media_generation_id) : '';
-    const overlay = id ? accessByMediaId.get(id) : null;
-    if (overlay) {
-      gen.generation_access_method = overlay.generation_access_method;
-      gen.generation_access_label = overlay.generation_access_label;
-    }
+    if (!id || !accessByMediaId.has(id)) continue;
+    const overlay = accessByMediaId.get(id);
+    gen.generation_access_method = overlay.generation_access_method;
+    gen.generation_access_label = overlay.generation_access_label;
   }
 }
 
@@ -345,9 +556,9 @@ function collectTemplateAnalyticsAccessMethods(buckets, entitlementMap, template
     if (method === 'subscription_credits') {
       method = 'subscription';
     }
-    if (method !== 'alacarte' && method !== 'subscription') continue;
+    if (!TEMPLATE_ANALYTICS_ACCESS_LABELS[method]) continue;
 
-    const label = method === 'alacarte' ? 'À la carte' : 'Subscription';
+    const label = TEMPLATE_ANALYTICS_ACCESS_LABELS[method];
     const existing = rolled.get(method);
     if (existing) {
       existing.count += item.count;
@@ -358,12 +569,15 @@ function collectTemplateAnalyticsAccessMethods(buckets, entitlementMap, template
 
   return [...rolled.values()].sort((a, b) => {
     if (b.count !== a.count) return b.count - a.count;
-    return a.method === 'alacarte' ? -1 : 1;
+    const ai = TEMPLATE_ANALYTICS_METHOD_SORT[a.method] ?? 99;
+    const bi = TEMPLATE_ANALYTICS_METHOD_SORT[b.method] ?? 99;
+    return ai - bi;
   });
 }
 
 module.exports = {
   mapGenerationAccessMethod,
+  mapTemplateAnalyticsAccessMethod,
   collectAccessMethodsFromBuckets,
   collectTemplateAnalyticsAccessMethods,
   buildTemplateUserGenerationTimelineItems,
@@ -371,5 +585,6 @@ module.exports = {
   resolveEntitlementBucketsForUser,
   buildAccessMethodsByUserFromGenerations,
   isAlacarteEntitlementRow,
+  isSubscriptionEntitlementRow,
   SUBSCRIPTION_TIER_PLAN_TYPES
 };
