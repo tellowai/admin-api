@@ -3,6 +3,7 @@
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const { slaveClickhouse } = require('../../../config/lib/clickhouse');
 const moment = require('moment'); // Using moment as it's typically used in this project codebase based on API's media.generations.model.js
+const { buildAccessMethodsByUserFromGenerations } = require('../services/generation-access-method.service');
 
 /**
  * Convert ISO or Date to MySQL datetime string (YYYY-MM-DD HH:mm:ss).
@@ -11,7 +12,7 @@ const moment = require('moment'); // Using moment as it's typically used in this
  */
 function formatDateForMySQL(date) {
   if (!date) return null;
-  const m = moment(date);
+  const m = moment.utc(date);
   return m.isValid() ? m.format('YYYY-MM-DD HH:mm:ss') : null;
 }
 
@@ -314,11 +315,113 @@ exports.getUsersByIds = async function (userIds) {
 exports.getTemplatesByIds = async function (templateIds) {
   if (!templateIds || templateIds.length === 0) return [];
   const query = `
-    SELECT template_id, template_name, template_type
+    SELECT template_id, template_name, template_type, credits
     FROM templates
     WHERE template_id IN (?)
   `;
   return await mysqlQueryRunner.runQueryInSlave(query, [templateIds]);
+};
+
+/**
+ * Bulk-fetch entitlements for generation access-method labeling.
+ * @param {Array<number|string>} entitlementIds
+ * @returns {Promise<Array<{ entitlement_id, tier_plan_type, order_id, template_id, created_at }>>}
+ */
+exports.getEntitlementsByIds = async function (entitlementIds) {
+  if (!entitlementIds || entitlementIds.length === 0) return [];
+  const ids = [...new Set(entitlementIds.map((id) => Number(id)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return [];
+  const query = `
+    SELECT entitlement_id, tier_plan_type, order_id, template_id, created_at
+    FROM entitlements
+    WHERE entitlement_id IN (?)
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [ids]);
+};
+
+/**
+ * Active entitlements for users relevant to a template (pool + template-scoped à la carte).
+ */
+exports.getUserEntitlementsForTemplate = async function (userIds, templateId) {
+  if (!userIds?.length || !templateId) return [];
+  const tid = String(templateId).trim();
+  const uids = [...new Set(userIds.map((u) => String(u).trim()).filter(Boolean))];
+  if (!uids.length) return [];
+  const query = `
+    SELECT entitlement_id, user_id, tier_plan_type, template_id, order_id, created_at,
+           template_slots_remaining, max_creations_per_template
+    FROM entitlements
+    WHERE user_id IN (?)
+      AND status IN ('active', 'exhausted', 'expired')
+      AND (template_id IS NULL OR template_id = ?)
+    ORDER BY created_at ASC
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [uids, tid]);
+};
+
+/**
+ * Per-generation rows for access-method resolution (MySQL + claimed_templates join).
+ */
+exports.getTemplateGenerationAccessRows = async function (templateId, userIds, startDb, endDb, allTime) {
+  if (!userIds?.length) return [];
+  const tid = String(templateId).trim();
+  const uids = [...new Set(userIds.map((u) => String(u).trim()).filter(Boolean))];
+  if (!uids.length) return [];
+
+  const dateClause = allTime
+    ? ''
+    : 'AND COALESCE(mg.submitted_at, mg.created_at) >= ? AND COALESCE(mg.submitted_at, mg.created_at) <= ?';
+  const params = allTime ? [tid, uids] : [tid, uids, startDb, endDb];
+
+  const query = `
+    SELECT
+      mg.media_generation_id,
+      mg.user_id,
+      mg.entitlement_id AS mg_entitlement_id,
+      ct.entitlement_id AS claim_entitlement_id,
+      COALESCE(mg.submitted_at, mg.created_at) AS activity_at
+    FROM media_generations mg
+    LEFT JOIN claimed_templates ct ON ct.claimed_template_id = mg.claimed_template_id
+    WHERE mg.template_id = ?
+      AND mg.user_id IN (?)
+      AND mg.job_status IN ('submitted', 'in_progress', 'completed', 'failed')
+      AND mg.deleted_at IS NULL
+      ${dateClause}
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+/**
+ * Per-generation rows for one user on a template (timeline), oldest first.
+ */
+exports.getTemplateUserGenerationTimelineRows = async function (templateId, userId, startDb, endDb, allTime) {
+  const tid = templateId != null ? String(templateId).trim() : '';
+  const uid = userId != null ? String(userId).trim() : '';
+  if (!tid || !uid) return [];
+
+  const dateClause = allTime
+    ? ''
+    : 'AND COALESCE(mg.submitted_at, mg.created_at) >= ? AND COALESCE(mg.submitted_at, mg.created_at) <= ?';
+  const params = allTime ? [tid, uid] : [tid, uid, startDb, endDb];
+
+  const query = `
+    SELECT
+      mg.media_generation_id,
+      mg.user_id,
+      mg.entitlement_id AS mg_entitlement_id,
+      ct.entitlement_id AS claim_entitlement_id,
+      COALESCE(mg.submitted_at, mg.created_at) AS activity_at,
+      mg.job_status
+    FROM media_generations mg
+    LEFT JOIN claimed_templates ct ON ct.claimed_template_id = mg.claimed_template_id
+    WHERE mg.template_id = ?
+      AND mg.user_id = ?
+      AND mg.job_status IN ('submitted', 'in_progress', 'completed', 'failed')
+      AND mg.deleted_at IS NULL
+      ${dateClause}
+    ORDER BY activity_at ASC
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
 };
 
 function chStringLiteral(value) {
@@ -510,5 +613,176 @@ exports.mergeGenerationRowsForIds = async function (orderedIds, filters = {}) {
     out.push(row);
   }
   return out;
+};
+
+/**
+ * Per-user generation counts for a template in a date range (CH terminal + MySQL in-flight).
+ * @returns {Promise<{ rows: Array, total: number }>}
+ */
+exports.getTemplateGenerationUserSummary = async function (
+  templateId,
+  startDate,
+  endDate,
+  page = 1,
+  limit = 20,
+  options = {}
+) {
+  const tid = templateId != null ? String(templateId).trim() : '';
+  if (!tid) return { rows: [], total: 0, template_type: null };
+
+  const allTime = !!options.allTime;
+  let startFormatted = allTime ? null : options.utcDateTimeStart || formatDateForMySQL(startDate);
+  let endFormatted = allTime ? null : options.utcDateTimeEnd || formatDateForMySQL(endDate);
+  if (!allTime && !endFormatted) {
+    endFormatted = moment.utc().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+  const startDb = startFormatted;
+  const endDb = endFormatted;
+
+  const dateClauseCh = allTime
+    ? ''
+    : `AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'`;
+
+  const chStatsQuery = `
+    SELECT
+      user_id,
+      count() AS generation_count,
+      argMax(resource_generation_id, created_at) AS latest_generation_id,
+      max(created_at) AS last_created_at
+    FROM resource_generations
+    WHERE template_id = ${chStringLiteral(tid)}
+      AND user_id != ''
+      ${dateClauseCh}
+    GROUP BY user_id
+  `;
+  const chStatsRes = await slaveClickhouse.querying(chStatsQuery, { dataObjects: true });
+  const chStats = chStatsRes.data || [];
+
+  let mysqlStats = [];
+  const dateClauseMysql = allTime
+    ? ''
+    : 'AND COALESCE(submitted_at, created_at) >= ? AND COALESCE(submitted_at, created_at) <= ?';
+  const mysqlParams = allTime ? [tid] : [tid, startDb, endDb];
+
+  const mysqlStatsQuery = `
+    SELECT
+      user_id,
+      COUNT(*) AS generation_count,
+      SUBSTRING_INDEX(GROUP_CONCAT(media_generation_id ORDER BY COALESCE(submitted_at, created_at) DESC), ',', 1) AS latest_generation_id,
+      MAX(COALESCE(submitted_at, created_at)) AS last_created_at
+    FROM media_generations
+    WHERE template_id = ?
+      AND job_status IN ('submitted', 'in_progress')
+      ${dateClauseMysql}
+    GROUP BY user_id
+  `;
+  mysqlStats = await mysqlQueryRunner.runQueryInSlave(mysqlStatsQuery, mysqlParams);
+
+  const byUser = new Map();
+
+  const upsertStat = (row, source) => {
+    const uid = row.user_id != null ? String(row.user_id).trim() : '';
+    if (!uid) return;
+    const cnt = Number(row.generation_count) || 0;
+    const latestId = row.latest_generation_id != null ? String(row.latest_generation_id).trim() : '';
+    const lastAt = row.last_created_at;
+
+    let entry = byUser.get(uid);
+    if (!entry) {
+      entry = {
+        user_id: uid,
+        generation_count: 0,
+        latest_generation_id: '',
+        last_created_at: null
+      };
+      byUser.set(uid, entry);
+    }
+    entry.generation_count += cnt;
+    if (latestId) {
+      const existingMs = entry.last_created_at ? new Date(entry.last_created_at).getTime() : 0;
+      const newMs = lastAt ? new Date(lastAt).getTime() : 0;
+      if (!entry.latest_generation_id || newMs >= existingMs) {
+        entry.latest_generation_id = latestId;
+        entry.last_created_at = lastAt;
+      }
+    }
+  };
+
+  chStats.forEach((r) => upsertStat(r, 'ch'));
+  /** In-flight rows may exist only in MySQL until CH resource_generations is written. */
+  mysqlStats.forEach((r) => {
+    const uid = r.user_id != null ? String(r.user_id).trim() : '';
+    if (uid && !byUser.has(uid)) upsertStat(r, 'mysql');
+  });
+
+  let merged = [...byUser.values()].sort((a, b) => {
+    if (b.generation_count !== a.generation_count) {
+      return b.generation_count - a.generation_count;
+    }
+    const ta = a.last_created_at ? new Date(a.last_created_at).getTime() : 0;
+    const tb = b.last_created_at ? new Date(b.last_created_at).getTime() : 0;
+    return tb - ta;
+  });
+
+  const total = merged.length;
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
+  const offset = (safePage - 1) * safeLimit;
+  merged = merged.slice(offset, offset + safeLimit);
+
+  const templateRows = await exports.getTemplatesByIds([tid]);
+  const templateMeta = templateRows[0] || {};
+
+  const pageUserIds = merged.map((r) => r.user_id);
+  const [accessGenerationRows, userEntitlementRows] = await Promise.all([
+    exports.getTemplateGenerationAccessRows(tid, pageUserIds, startDb, endDb, allTime),
+    exports.getUserEntitlementsForTemplate(pageUserIds, tid)
+  ]);
+
+  const entitlementsByUserId = {};
+  for (const e of userEntitlementRows || []) {
+    const uid = e.user_id != null ? String(e.user_id).trim() : '';
+    if (!uid) continue;
+    if (!entitlementsByUserId[uid]) entitlementsByUserId[uid] = [];
+    entitlementsByUserId[uid].push(e);
+  }
+
+  const accessMethodsByUser = buildAccessMethodsByUserFromGenerations(
+    accessGenerationRows,
+    entitlementsByUserId,
+    { templateType: templateMeta.template_type, credits: templateMeta.credits }
+  );
+
+  const userIds = pageUserIds;
+  const users = userIds.length ? await exports.getUsersByIds(userIds) : [];
+  const userMap = {};
+  users.forEach((u) => {
+    userMap[u.user_id] = u;
+  });
+
+  const rows = merged.map((row) => {
+    const access_methods = accessMethodsByUser.get(row.user_id) || [];
+    const u = userMap[row.user_id];
+    return {
+      user_id: row.user_id,
+      generation_count: row.generation_count,
+      latest_generation_id: row.latest_generation_id || null,
+      last_created_at: row.last_created_at,
+      access_methods,
+      user_details: u
+        ? {
+            display_name: u.display_name,
+            email: u.email,
+            mobile: u.mobile
+          }
+        : null
+    };
+  });
+
+  return {
+    rows,
+    total,
+    template_type: templateMeta.template_type || null
+  };
 };
 
