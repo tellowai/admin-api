@@ -37,3 +37,26 @@ exports.queryContentLanguageOptedStats = async function (rangeStart, rangeEnd) {
 
   return mysqlQueryRunner.runQueryInMaster(query, [rangeStart, rangeEnd]);
 };
+
+/**
+ * Unique opted-in actors across all content languages in [rangeStart, rangeEnd]
+ * (deduplicated; not summed per language).
+ *
+ * @param {string} rangeStart
+ * @param {string} rangeEnd
+ */
+exports.queryContentLanguageOverallSummary = async function (rangeStart, rangeEnd) {
+  const query = `
+    SELECT COUNT(DISTINCT COALESCE(u.user_id, CONCAT('anon:', u.anon_device_id))) AS overall_opted_count
+    FROM user_content_language_selections u
+    INNER JOIN languages l ON l.code = u.language_code
+    WHERE l.is_content_language = 1
+      AND l.archived_at IS NULL
+      AND (u.user_id IS NOT NULL OR u.anon_device_id IS NOT NULL)
+      AND u.updated_at >= ?
+      AND u.updated_at <= ?
+  `;
+
+  const rows = await mysqlQueryRunner.runQueryInMaster(query, [rangeStart, rangeEnd]);
+  return rows[0] || { overall_opted_count: 0 };
+};

@@ -7,12 +7,12 @@ const logger = require('../../../config/lib/logger');
 exports.getContentLanguageOptedStats = async function (req, res) {
   try {
     const { start_date, end_date, tz } = req.validatedQuery || req.query;
-    const data = await CustomersLanguagesService.getContentLanguageOptedStats({
+    const { languages, summary } = await CustomersLanguagesService.getContentLanguageOptedStats({
       start_date,
       end_date,
       tz,
     });
-    return res.status(HTTP_STATUS_CODES.OK).json({ data });
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: languages, summary });
   } catch (err) {
     logger.error('getContentLanguageOptedStats failed', { error: err.message });
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({
