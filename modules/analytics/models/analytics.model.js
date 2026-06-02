@@ -1165,15 +1165,29 @@ error_category,
    * UTC timestamp predicates on analytics_events_raw.timestamp (DateTime64).
    * Matches the pattern used for payment-failure raw queries.
    */
-  static buildRawUtcTimestampConditions(startDate, endDate) {
-    const startMs = new Date(startDate).getTime();
-    const endMs = new Date(endDate).getTime();
-    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
-    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+  static buildRawUtcTimestampConditions(startDate, endDate, startTime, endTime) {
+    const startYmd =
+      startDate instanceof Date
+        ? startDate.toISOString().split('T')[0]
+        : String(startDate || '').split('T')[0];
+    const endYmd =
+      endDate instanceof Date ? endDate.toISOString().split('T')[0] : String(endDate || '').split('T')[0];
+    const st = startTime && String(startTime).trim() ? String(startTime).trim() : '00:00:00';
+    const et = endTime && String(endTime).trim() ? String(endTime).trim() : '23:59:59';
+    const startStr = `${startYmd} ${st.length === 5 ? `${st}:00` : st}`;
+    const endStr = `${endYmd} ${et.length === 5 ? `${et}:59` : et}`;
     return [
       `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
-      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`
+      `timestamp <= toDateTime64('${endStr}${endStr.includes('.') ? '' : '.999'}', 3, 'UTC')`
     ];
+  }
+
+  /** template_id on order lifecycle events (à la carte stores template_resource_id too). */
+  static orderEventTemplateIdExpr() {
+    return `coalesce(
+      nullIf(trim(properties['template_id']), ''),
+      nullIf(trim(properties['template_resource_id']), '')
+    )`;
   }
 
   /**
@@ -1228,7 +1242,7 @@ error_category,
     const ts = (timestampConditions || []).join(' AND ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
         count() AS purchases,
         sum(toFloat64OrZero(properties['amount'])) AS revenue
@@ -1236,8 +1250,8 @@ error_category,
       PREWHERE event_name = 'order_completed'
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-      GROUP BY properties['template_id'], currency
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+      GROUP BY template_id, currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
@@ -1254,7 +1268,7 @@ error_category,
       .join(', ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
         count() AS purchases,
         sum(toFloat64OrZero(properties['amount'])) AS revenue
@@ -1262,8 +1276,8 @@ error_category,
       PREWHERE event_name = 'order_completed'
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-        AND properties['template_id'] IN (${safeIds})
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+        AND ${AnalyticsModel.orderEventTemplateIdExpr()} IN (${safeIds})
       GROUP BY properties['template_id'], currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
@@ -1281,16 +1295,16 @@ error_category,
       .join(', ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         countIf(event_name = 'order_created') AS orders_created,
         countIf(event_name = 'order_completed') AS orders_completed
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
       PREWHERE event_name IN ('order_created', 'order_completed')
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-        AND properties['template_id'] IN (${safeIds})
-      GROUP BY properties['template_id']
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+        AND ${AnalyticsModel.orderEventTemplateIdExpr()} IN (${safeIds})
+      GROUP BY template_id
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];

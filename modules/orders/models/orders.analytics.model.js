@@ -732,3 +732,61 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   const rows = await runQuery(listQuery, [...baseFromParams, ...rangeParams, limit, offset]);
   return { rows: rows || [], total, summary };
 };
+
+/** Extract template_id from orders.transaction_notes (à la carte single-template purchases). */
+const ORDER_TEMPLATE_ID_EXPR = `
+  COALESCE(
+    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.template_id'))), ''),
+    NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o.transaction_notes, '$.template_resource_id'))), '')
+  )
+`;
+
+/**
+ * Per-template order_created / order_completed counts from MySQL (source of truth).
+ * Matches admin Top Templates by Generation — uses transaction_notes.template_id, not ClickHouse hub events.
+ *
+ * @param {{ rangeStartUtc: string, rangeEndUtc: string, templateIds: string[] }} opts
+ * @returns {Promise<Array<{ template_id: string, orders_created: number, orders_completed: number }>>}
+ */
+exports.getOrderCountsByTemplateIds = async function (opts) {
+  const { rangeStartUtc, rangeEndUtc, templateIds } = opts || {};
+  const ids = [...new Set((templateIds || []).map((id) => String(id).trim()).filter(Boolean))];
+  if (!ids.length || !rangeStartUtc || !rangeEndUtc) return [];
+
+  const query = `
+    SELECT
+      ${ORDER_TEMPLATE_ID_EXPR} AS template_id,
+      SUM(CASE WHEN o.created_at >= ? AND o.created_at <= ? THEN 1 ELSE 0 END) AS orders_created,
+      SUM(CASE
+        WHEN o.status = 'completed'
+          AND COALESCE(o.completed_at, o.created_at) >= ?
+          AND COALESCE(o.completed_at, o.created_at) <= ?
+        THEN 1 ELSE 0
+      END) AS orders_completed
+    FROM orders o
+    WHERE COALESCE(o.payment_gateway, '') <> 'admin_grant'
+      AND ${ORDER_TEMPLATE_ID_EXPR} IN (?)
+      AND (
+        (o.created_at >= ? AND o.created_at <= ?)
+        OR (
+          o.status = 'completed'
+          AND COALESCE(o.completed_at, o.created_at) >= ?
+          AND COALESCE(o.completed_at, o.created_at) <= ?
+        )
+      )
+    GROUP BY template_id
+  `;
+  const params = [
+    rangeStartUtc,
+    rangeEndUtc,
+    rangeStartUtc,
+    rangeEndUtc,
+    ids,
+    rangeStartUtc,
+    rangeEndUtc,
+    rangeStartUtc,
+    rangeEndUtc
+  ];
+  const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
+  return (rows || []).filter((r) => r.template_id);
+};
