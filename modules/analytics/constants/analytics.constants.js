@@ -32,6 +32,7 @@ const ANALYTICS_CONSTANTS = {
     AE_RENDERING_DAILY_STATS: "ae_rendering_daily_stats",
     TECH_HEALTH_DAILY_STATS: "tech_health_daily_stats",
     PAYMENT_FAILURES_DAILY_STATS: "payment_failures_daily_stats",
+    CLOUD_INFRA_COST_DAILY_STATS: "cloud_infra_cost_daily_stats",
   },
   // Allow-lists for payment_failures_daily_stats WHERE / GROUP BY (must be LowCardinality cols on the table).
   PAYMENT_FAILURES_FILTER_COLUMNS: [
