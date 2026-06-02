@@ -3,6 +3,7 @@
 const moment = require('moment-timezone');
 const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
+const OrdersAnalyticsModel = require('../../orders/models/orders.analytics.model');
 const TimezoneService = require('./timezone.service');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
@@ -630,6 +631,17 @@ class AnalyticsService {
     return this.queryMixedDateRange('LOGINS', filters, additionalFilters);
   }
 
+  static buildUtcRangeFromFilters(filters = {}) {
+    const { start_date, end_date, start_time, end_time } = filters;
+    const rangeStartUtc = moment
+      .utc(`${start_date} ${start_time || '00:00:00'}`, 'YYYY-MM-DD HH:mm:ss')
+      .format('YYYY-MM-DD HH:mm:ss');
+    const rangeEndUtc = moment
+      .utc(`${end_date} ${end_time || '23:59:59'}`, 'YYYY-MM-DD HH:mm:ss')
+      .format('YYYY-MM-DD HH:mm:ss');
+    return { rangeStartUtc, rangeEndUtc };
+  }
+
   static async getTopTemplatesByGeneration(filters) {
     const { start_date, end_date, page = 1, limit = 20 } = filters;
     const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
@@ -640,20 +652,34 @@ class AnalyticsService {
       return [];
     }
     const templateIds = rows.map(r => r.template_id).filter(Boolean);
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
-    const [templates, orderCountRows] = await Promise.all([
+    const { rangeStartUtc, rangeEndUtc } = this.buildUtcRangeFromFilters(filters);
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(
+      start_date,
+      end_date,
+      filters.start_time,
+      filters.end_time
+    );
+    const [templates, mysqlOrderRows, chOrderRows] = await Promise.all([
       TemplateModel.getTemplatesByIdsForAnalytics(templateIds),
+      OrdersAnalyticsModel.getOrderCountsByTemplateIds({
+        rangeStartUtc,
+        rangeEndUtc,
+        templateIds
+      }),
       AnalyticsModel.getOrderCountsByTemplateIdsRaw(tsRaw, templateIds)
     ]);
     const ordersById = {};
-    (orderCountRows || []).forEach((r) => {
-      if (r.template_id) {
-        ordersById[r.template_id] = {
-          orders_created: Number(r.orders_created) || 0,
-          orders_completed: Number(r.orders_completed) || 0
-        };
-      }
-    });
+    const mergeOrderRow = (r) => {
+      if (!r?.template_id) return;
+      const tid = String(r.template_id);
+      const existing = ordersById[tid] || { orders_created: 0, orders_completed: 0 };
+      ordersById[tid] = {
+        orders_created: Math.max(existing.orders_created, Number(r.orders_created) || 0),
+        orders_completed: Math.max(existing.orders_completed, Number(r.orders_completed) || 0)
+      };
+    };
+    (mysqlOrderRows || []).forEach(mergeOrderRow);
+    (chOrderRows || []).forEach(mergeOrderRow);
     const byId = {};
     (templates || []).forEach(t => { byId[t.template_id] = t; });
     return rows.map(row => {
@@ -806,7 +832,12 @@ class AnalyticsService {
       });
     }
 
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(
+      start_date,
+      end_date,
+      start_time,
+      end_time
+    );
     const purchaseById = {};
     for (let i = 0; i < templateIds.length; i += BATCH) {
       const batch = templateIds.slice(i, i + BATCH);
@@ -925,9 +956,14 @@ class AnalyticsService {
    * last-view-to-purchase attribution.
    */
   static async getTemplateConversionMetrics(filters) {
-    const { start_date, end_date, limit: limitRaw } = filters;
+    const { start_date, end_date, start_time, end_time, limit: limitRaw } = filters;
     const whereTemplate = this.buildMVTemplateConditions(start_date, end_date, {});
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(
+      start_date,
+      end_date,
+      start_time,
+      end_time
+    );
 
     const [viewRows, purchaseRows] = await Promise.all([
       AnalyticsModel.getTemplateViewsSumByTemplateId(whereTemplate),
