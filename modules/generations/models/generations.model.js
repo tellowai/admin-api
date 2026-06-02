@@ -378,6 +378,7 @@ exports.getTemplateGenerationAccessRows = async function (templateId, userIds, s
       mg.media_generation_id,
       mg.user_id,
       mg.entitlement_id AS mg_entitlement_id,
+      mg.claimed_template_id,
       ct.entitlement_id AS claim_entitlement_id,
       COALESCE(mg.submitted_at, mg.created_at) AS activity_at
     FROM media_generations mg
@@ -409,6 +410,7 @@ exports.getTemplateUserGenerationTimelineRows = async function (templateId, user
       mg.media_generation_id,
       mg.user_id,
       mg.entitlement_id AS mg_entitlement_id,
+      mg.claimed_template_id,
       ct.entitlement_id AS claim_entitlement_id,
       COALESCE(mg.submitted_at, mg.created_at) AS activity_at,
       mg.job_status
@@ -574,6 +576,116 @@ exports.getMediaGenerationEntitlementsByMediaIds = async function (mediaGenerati
 };
 
 /**
+ * media_generation_ids with wallet credit reserve or deduction (subscription via credits).
+ * Queued/in-flight gens often have only `reserve` until completion.
+ * @returns {Promise<Set<string>>}
+ */
+exports.getMediaGenerationIdsWithCreditSubscriptionUsage = async function (mediaGenerationIds) {
+  const ids = [...new Set((mediaGenerationIds || []).map((id) => String(id).trim()).filter(Boolean))];
+  if (!ids.length) return new Set();
+  const query = `
+    SELECT DISTINCT reference_id AS media_generation_id
+    FROM credits_transactions
+    WHERE reference_id IN (?)
+      AND transaction_type IN ('deduction', 'reserve')
+      AND status = 'completed'
+      AND amount > 0
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [ids]);
+  return new Set((rows || []).map((r) => String(r.media_generation_id).trim()).filter(Boolean));
+};
+
+/** @deprecated Use getMediaGenerationIdsWithCreditSubscriptionUsage */
+exports.getMediaGenerationIdsWithCreditDeduction = exports.getMediaGenerationIdsWithCreditSubscriptionUsage;
+
+/**
+ * Template claims for access-method resolution (subscription slot, no wallet credits).
+ */
+exports.getClaimedTemplatesByUsersAndTemplate = async function (userIds, templateId) {
+  if (!userIds?.length || !templateId) return [];
+  const tid = String(templateId).trim();
+  const uids = [...new Set(userIds.map((u) => String(u).trim()).filter(Boolean))];
+  if (!uids.length) return [];
+  const query = `
+    SELECT user_id, claimed_template_id, entitlement_id, template_id, claimed_at, status
+    FROM claimed_templates
+    WHERE user_id IN (?)
+      AND template_id = ?
+      AND status IN ('active', 'exhausted')
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, [uids, tid]);
+};
+
+/**
+ * ClickHouse + claims + credit usage for template analytics access labels.
+ */
+exports.fetchTemplateAnalyticsAccessContext = async function (templateId, accessGenerationRows) {
+  const rows = Array.isArray(accessGenerationRows) ? accessGenerationRows : [];
+  const mediaIds = [...new Set(rows.map((r) => r.media_generation_id).filter(Boolean))];
+  const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+
+  const [creditUsageIds, chRows, claimRows, userEntitlementRows] = await Promise.all([
+    exports.getMediaGenerationIdsWithCreditSubscriptionUsage(mediaIds),
+    mediaIds.length ? exports.getResourceGenerationsByIds(mediaIds) : [],
+    userIds.length ? exports.getClaimedTemplatesByUsersAndTemplate(userIds, templateId) : [],
+    userIds.length ? exports.getUserEntitlementsForTemplate(userIds, templateId) : []
+  ]);
+
+  const chEntitlementByMediaId = new Map();
+  for (const r of chRows || []) {
+    const id = r.resource_generation_id != null ? String(r.resource_generation_id).trim() : '';
+    const eid = r.entitlement_id != null ? Number(r.entitlement_id) : null;
+    if (id && Number.isFinite(eid) && eid > 0) {
+      chEntitlementByMediaId.set(id, eid);
+    }
+  }
+
+  const claimsByUserId = {};
+  for (const c of claimRows || []) {
+    const uid = c.user_id != null ? String(c.user_id).trim() : '';
+    if (!uid) continue;
+    if (!claimsByUserId[uid]) claimsByUserId[uid] = [];
+    claimsByUserId[uid].push(c);
+  }
+
+  const entitlementsByUserId = {};
+  const entitlementIdSet = new Set();
+  for (const e of userEntitlementRows || []) {
+    const uid = e.user_id != null ? String(e.user_id).trim() : '';
+    if (!uid) continue;
+    if (!entitlementsByUserId[uid]) entitlementsByUserId[uid] = [];
+    entitlementsByUserId[uid].push(e);
+    if (e.entitlement_id != null) entitlementIdSet.add(Number(e.entitlement_id));
+  }
+  for (const eid of chEntitlementByMediaId.values()) entitlementIdSet.add(eid);
+  for (const c of claimRows || []) {
+    if (c.entitlement_id != null) entitlementIdSet.add(Number(c.entitlement_id));
+  }
+  for (const row of rows) {
+    for (const key of ['mg_entitlement_id', 'claim_entitlement_id']) {
+      const n = Number(row[key]);
+      if (Number.isFinite(n) && n > 0) entitlementIdSet.add(n);
+    }
+  }
+
+  const entitlementRows = entitlementIdSet.size
+    ? await exports.getEntitlementsByIds([...entitlementIdSet])
+    : [];
+  const entitlementMap = {};
+  for (const e of entitlementRows || []) {
+    if (e.entitlement_id != null) entitlementMap[e.entitlement_id] = e;
+  }
+
+  return {
+    creditUsageIds,
+    chEntitlementByMediaId,
+    claimsByUserId,
+    entitlementsByUserId,
+    entitlementMap
+  };
+};
+
+/**
  * Build one row per id (preserves order) for admin generations enrichment.
  * Prefer ClickHouse terminal event; fall back to MySQL media_generations for in-flight jobs.
  */
@@ -734,23 +846,21 @@ exports.getTemplateGenerationUserSummary = async function (
   const templateMeta = templateRows[0] || {};
 
   const pageUserIds = merged.map((r) => r.user_id);
-  const [accessGenerationRows, userEntitlementRows] = await Promise.all([
-    exports.getTemplateGenerationAccessRows(tid, pageUserIds, startDb, endDb, allTime),
-    exports.getUserEntitlementsForTemplate(pageUserIds, tid)
-  ]);
+  const accessGenerationRows = await exports.getTemplateGenerationAccessRows(
+    tid,
+    pageUserIds,
+    startDb,
+    endDb,
+    allTime
+  );
 
-  const entitlementsByUserId = {};
-  for (const e of userEntitlementRows || []) {
-    const uid = e.user_id != null ? String(e.user_id).trim() : '';
-    if (!uid) continue;
-    if (!entitlementsByUserId[uid]) entitlementsByUserId[uid] = [];
-    entitlementsByUserId[uid].push(e);
-  }
+  const analyticsContext = await exports.fetchTemplateAnalyticsAccessContext(tid, accessGenerationRows);
 
   const accessMethodsByUser = buildAccessMethodsByUserFromGenerations(
     accessGenerationRows,
-    entitlementsByUserId,
-    { templateType: templateMeta.template_type, credits: templateMeta.credits }
+    analyticsContext.entitlementsByUserId,
+    { templateType: templateMeta.template_type, credits: templateMeta.credits },
+    analyticsContext
   );
 
   const userIds = pageUserIds;
