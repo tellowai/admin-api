@@ -1489,6 +1489,121 @@ error_category,
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  /**
+   * Cloud infra cost spoke (from Hub MV). One row per provider per day after FINAL merge.
+   */
+  static async queryCloudInfraCostDailyByDateRange(startCal, endCal) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.CLOUD_INFRA_COST_DAILY_STATS;
+    const query = `
+      SELECT
+        toString(report_date) AS cost_date,
+        provider,
+        currency,
+        status,
+        estimated_total_net,
+        estimated_total_gross,
+        resource_count,
+        error_message
+      FROM ${table} FINAL
+      WHERE report_date >= toDate('${esc(startCal)}')
+        AND report_date <= toDate('${esc(endCal)}')
+      ORDER BY report_date ASC, provider ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct users with any event per calendar day (infra unit economics denominator). */
+  static async queryInfraCostDailyActiveUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        uniqIf(user_id, user_id IS NOT NULL AND trimBoth(user_id) != '') AS active_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct commerce purchasers per calendar day (infra unit economics). */
+  static async queryInfraCostDailyPayingUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        uniqIf(
+          user_id,
+          event_name = 'purchase'
+            AND object_type = 'commerce'
+            AND revenue > 0
+            AND user_id IS NOT NULL
+            AND trimBoth(user_id) != ''
+        ) AS paying_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+        AND event_name = 'purchase'
+        AND object_type = 'commerce'
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct active users per calendar month in client TZ. */
+  static async queryInfraCostMonthlyActiveUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        formatDateTime(toDate(toTimeZone(timestamp, '${tzEsc}')), '%Y-%m') AS month,
+        uniqIf(user_id, user_id IS NOT NULL AND trimBoth(user_id) != '') AS active_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+      GROUP BY month
+      ORDER BY month ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct commerce purchasers per calendar month in client TZ. */
+  static async queryInfraCostMonthlyPayingUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        formatDateTime(toDate(toTimeZone(timestamp, '${tzEsc}')), '%Y-%m') AS month,
+        uniqIf(
+          user_id,
+          revenue > 0 AND user_id IS NOT NULL AND trimBoth(user_id) != ''
+        ) AS paying_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+        AND event_name = 'purchase'
+        AND object_type = 'commerce'
+      GROUP BY month
+      ORDER BY month ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;
