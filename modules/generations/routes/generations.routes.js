@@ -9,6 +9,12 @@ module.exports = function (app) {
   app.route('/admin/generations')
     .get(AuthMiddleware.isAdminUser, generationsController.listGenerations);
 
+  app.route('/admin/generations/template-users')
+    .get(AuthMiddleware.isAdminUser, generationsController.listTemplateGenerationUsers);
+
+  app.route('/admin/generations/template-user-generations')
+    .get(AuthMiddleware.isAdminUser, generationsController.listTemplateUserGenerations);
+
   app.route('/admin/generations/batch-status')
     .post(AuthMiddleware.isAdminUser, generationsController.batchGenerationStatus);
 
