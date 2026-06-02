@@ -1278,7 +1278,7 @@ error_category,
         AND ${ts}
       WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
         AND ${AnalyticsModel.orderEventTemplateIdExpr()} IN (${safeIds})
-      GROUP BY properties['template_id'], currency
+      GROUP BY template_id, currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
