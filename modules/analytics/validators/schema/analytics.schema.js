@@ -215,6 +215,39 @@ const ordersFunnelClickhouseSchema = Joi.object().keys({
 /** Growth overview: same date + tz semantics as orders-funnel ClickHouse routes. */
 const growthMetricsOverviewSchema = ordersFunnelClickhouseSchema;
 
+const searchAnalyticsSchema = Joi.object().keys({
+  start_date: Joi.date().required(),
+  end_date: Joi.date().min(Joi.ref('start_date')).required(),
+  tz: Joi.string().optional().allow(''),
+  language_code: Joi.string().max(8).optional().allow(''),
+  app_version: Joi.string().max(64).optional().allow(''),
+  os_name: Joi.string().max(64).optional().allow(''),
+  os_version: Joi.string().max(64).optional().allow(''),
+  device_brand: Joi.string().max(64).optional().allow(''),
+  device_model: Joi.string().max(128).optional().allow(''),
+  network_type: Joi.string().max(32).optional().allow(''),
+  device_type: Joi.string().valid('mobile', 'desktop', '').optional().allow(''),
+  store_country: Joi.string().max(8).optional().allow(''),
+  ip_country: Joi.string().max(8).optional().allow(''),
+  timezone: Joi.string().max(64).optional().allow(''),
+  zero_results_only: Joi.boolean().optional(),
+  group_by: Joi.string().valid(
+    'language_code',
+    'app_version',
+    'os_name',
+    'os_version',
+    'device_brand',
+    'device_model',
+    'network_type',
+    'store_country',
+    'ip_country',
+    'timezone',
+    'device_type'
+  ).optional(),
+  limit: Joi.number().integer().min(1).max(100).optional(),
+  offset: Joi.number().integer().min(0).max(10000).optional()
+});
+
 exports.dateRangeSchema = dateRangeSchema;
 exports.ordersFunnelClickhouseSchema = ordersFunnelClickhouseSchema;
 exports.growthMetricsOverviewSchema = growthMetricsOverviewSchema;
@@ -229,3 +262,4 @@ exports.creditsAnalyticsSchema = creditsAnalyticsSchema;
 exports.pipelineAnalyticsSchema = pipelineAnalyticsSchema;
 exports.techHealthAnalyticsSchema = techHealthAnalyticsSchema;
 exports.paymentFailuresAnalyticsSchema = paymentFailuresAnalyticsSchema;
+exports.searchAnalyticsSchema = searchAnalyticsSchema;

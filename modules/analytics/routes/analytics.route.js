@@ -463,4 +463,28 @@ module.exports = function(app) {
     AnalyticsCtrl.getGrowthMetricsOverview
   );
 
+  app.route(
+    versionConfig.routePrefix + '/analytics/search/summary'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateSearchAnalyticsQuery,
+    AnalyticsCtrl.getSearchSummary
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/search/daily'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateSearchAnalyticsQuery,
+    AnalyticsCtrl.getSearchDaily
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/analytics/search/top-queries'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    AnalyticsValidator.validateSearchAnalyticsQuery,
+    AnalyticsCtrl.getSearchTopQueries
+  );
+
 };

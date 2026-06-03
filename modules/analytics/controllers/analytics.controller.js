@@ -1867,6 +1867,102 @@ class AnalyticsController {
       AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
     }
   }
+
+  static async getSearchSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const summary = await AnalyticsService.getSearchSummary({
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date
+      });
+
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });
+    } catch (error) {
+      logger.error('Error fetching search analytics summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSearchDaily(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      let daily;
+      const filterPayload = {
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date
+      };
+      if (queryParams.group_by) {
+        daily = await AnalyticsService.getSearchDailyGrouped(filterPayload, queryParams.group_by);
+      } else {
+        daily = await AnalyticsService.getSearchDaily(filterPayload);
+      }
+
+      const convertedResults = TimezoneService.convertFromUTC(daily, timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching search analytics daily:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSearchTopQueries(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const rows = await AnalyticsService.getSearchTopQueries({
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date,
+        limit: queryParams.limit || 50,
+        offset: queryParams.offset || 0
+      });
+
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: rows });
+    } catch (error) {
+      logger.error('Error fetching search top queries:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
 }
 
 module.exports = AnalyticsController;
