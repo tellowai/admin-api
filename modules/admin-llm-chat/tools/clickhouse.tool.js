@@ -103,8 +103,8 @@ async function queryClickhouse({ sql, max_rows: maxRows }) {
         success: false,
         error: 'TABLE_NOT_FOUND',
         message: table
-          ? `ClickHouse table ${table} does not exist. Apply db migrations for meta_ads_insights_daily / google_ads_insights_daily, then ingest via workers.`
-          : 'ClickHouse table not found. Apply ads CH migrations and run workers ingestion.',
+          ? `ClickHouse table ${table} does not exist. Apply db migrations (meta_ads_insights_daily, google_ads_insights_daily, ga4_*_daily), then ingest via photobop-workers.`
+          : 'ClickHouse table not found. Apply CH migrations and run workers ads/ga4 ingestion.',
         retryable: false,
       };
     }
