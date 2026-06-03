@@ -37,4 +37,12 @@ module.exports = function(app) {
     PresignedValidator.validatePresignedUrlGeneration,
     PresignedCtrl.generateEphemeralPresignedUrls
   );
+
+  app.route(
+    versionConfig.routePrefix + '/os2/storage-objects/delete'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    PresignedValidator.validateDeleteStorageObjects,
+    PresignedCtrl.deleteStorageObjects
+  );
 }; 

@@ -5,6 +5,11 @@ const config = require('../../../config/config');
 const BoothAdminModel = require('../models/photo-booth.admin.model');
 const TemplateModel = require('../../templates/models/template.model');
 const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
+const {
   generateHumanFriendlyBoothCode,
   normalizeBoothCode,
   isValidBoothCode
@@ -193,6 +198,12 @@ exports.getBoothDetail = async function (photoBoothId) {
 
 exports.updateBooth = async function (photoBoothId, body) {
   body = { ...body };
+  const existing = await BoothAdminModel.getBoothById(photoBoothId);
+  if (!existing) {
+    const err = new Error('Photo booth not found');
+    err.status = 404;
+    throw err;
+  }
   if (Object.prototype.hasOwnProperty.call(body, 'camera_pipeline')) {
     body.camera_pipeline = normalizeCameraPipeline(body.camera_pipeline);
   }
@@ -211,11 +222,31 @@ exports.updateBooth = async function (photoBoothId, body) {
     throw err;
   }
   await BoothAdminModel.updateBooth(photoBoothId, body);
+  await cleanupReplacedFields(existing, body, [
+    {
+      keyKey: 'booth_cover_image_key',
+      bucketKey: 'booth_cover_image_bucket',
+      label: 'booth_cover_image',
+    },
+    {
+      keyKey: 'booth_cover_lottie_key',
+      bucketKey: 'booth_cover_lottie_bucket',
+      label: 'booth_cover_lottie',
+    },
+  ]);
   return enrichBoothPublicUrls(await BoothAdminModel.getBoothById(photoBoothId));
 };
 
 exports.archiveBooth = async function (photoBoothId) {
+  const existing = await BoothAdminModel.getBoothById(photoBoothId);
   await BoothAdminModel.archiveBooth(photoBoothId);
+  if (existing) {
+    const refs = [
+      normalizedMediaRef(existing.booth_cover_image_bucket, existing.booth_cover_image_key),
+      normalizedMediaRef(existing.booth_cover_lottie_bucket, existing.booth_cover_lottie_key),
+    ].filter(Boolean);
+    if (refs.length) await deleteMediaRefs(refs, 'photo_booth_cover');
+  }
 };
 
 exports.addTemplate = async function (photoBoothId, body) {

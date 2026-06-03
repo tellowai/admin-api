@@ -3,6 +3,11 @@
 const config = require('../../../config/config');
 const SduiModel = require('../models/sdui.model');
 const RedisService = require('../../core/models/redis.promise.model');
+const {
+  cleanupRemovedJsonAssets,
+  collectAssetRefsFromJson,
+  deleteMediaRefs,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /** Same as photobop-api SDUI font manifest: public CDN base + assets/... path (templates use cf_r2_key + bucketUrl). */
 function resolveRemoteFontPublicUrl(storedUrl) {
@@ -120,6 +125,9 @@ exports.updateScreen = async function(id, data) {
   if (data.body_json !== undefined) updateData.body_json = data.body_json;
   if (data.status !== undefined) updateData.status = data.status;
   updateData.updated_by = data.updated_by;
+  if (data.body_json !== undefined) {
+    await cleanupRemovedJsonAssets(screen.body_json, data.body_json, 'sdui_screen');
+  }
   await SduiModel.updateScreen(id, updateData);
   return await SduiModel.getScreenById(id);
 };
@@ -127,7 +135,9 @@ exports.updateScreen = async function(id, data) {
 exports.archiveScreen = async function(id) {
   const screen = await SduiModel.getScreenById(id);
   if (!screen) throw new Error('Screen not found');
+  const refs = collectAssetRefsFromJson(screen.body_json);
   await SduiModel.archiveScreen(id);
+  if (refs.length) await deleteMediaRefs(refs, 'sdui_screen');
 };
 
 exports.publishScreen = async function(id, publishedBy) {
@@ -223,6 +233,9 @@ exports.updateComponent = async function(id, data) {
   if (data.name !== undefined) updateData.name = data.name;
   if (data.description !== undefined) updateData.description = data.description;
   if (data.node_json !== undefined) updateData.node_json = data.node_json;
+  if (data.node_json !== undefined) {
+    await cleanupRemovedJsonAssets(component.node_json, data.node_json, 'sdui_component');
+  }
   const updated = await SduiModel.updateComponent(id, updateData);
   if (!updated) throw new Error('Component not found');
   await exports.invalidateComponentCache(component.component_key, liveComponentCacheVersion(updated));
@@ -266,7 +279,9 @@ exports.publishComponent = async function(id, publishedBy) {
 exports.deleteComponent = async function(id) {
   const component = await SduiModel.getComponentById(id);
   if (!component) throw new Error('Component not found');
+  const refs = collectAssetRefsFromJson(component.node_json);
   await SduiModel.deleteComponent(id);
+  if (refs.length) await deleteMediaRefs(refs, 'sdui_component');
   try { await RedisService.deleteData(MANIFEST_CACHE_KEY); } catch {}
 };
 
@@ -295,6 +310,9 @@ exports.createBlock = async function(data) {
 exports.updateBlock = async function(id, data) {
   const block = await SduiModel.getBlockById(id);
   if (!block) throw new Error('Block not found');
+  if (data.body_json !== undefined) {
+    await cleanupRemovedJsonAssets(block.body_json, data.body_json, 'sdui_block');
+  }
   const updated = await SduiModel.updateBlock(id, {
     name: data.name,
     description: data.description,
@@ -343,7 +361,9 @@ exports.publishBlock = async function(id, publishedBy) {
 exports.deleteBlock = async function(id) {
   const block = await SduiModel.getBlockById(id);
   if (!block) throw new Error('Block not found');
+  const refs = collectAssetRefsFromJson(block.body_json);
   await SduiModel.deleteBlock(id);
+  if (refs.length) await deleteMediaRefs(refs, 'sdui_block');
   try { await RedisService.deleteData(BLOCK_MANIFEST_CACHE_KEY); } catch {}
 };
 

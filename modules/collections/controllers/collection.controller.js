@@ -11,6 +11,11 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const config = require('../../../config/config');
+const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * @api {get} /collections List collections
@@ -137,13 +142,20 @@ exports.updateCollection = async function(req, res) {
   try {
     const { collectionId } = req.params;
     const collectionData = req.validatedBody;
-    
+    const existing = await CollectionModel.getCollectionById(collectionId);
+
     const updated = await CollectionModel.updateCollection(collectionId, collectionData);
     
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('collection:COLLECTION_NOT_FOUND')
       });
+    }
+
+    if (existing) {
+      await cleanupReplacedFields(existing, collectionData, [
+        { keyKey: 'thumbnail_cf_r2_key', defaultBucket: 'public', label: 'collection_thumbnail' },
+      ]);
     }
 
     // Publish activity log command
@@ -182,13 +194,21 @@ exports.updateCollection = async function(req, res) {
 exports.archiveCollection = async function(req, res) {
   try {
     const { collectionId } = req.params;
-    
+    const existing = await CollectionModel.getCollectionById(collectionId);
+
     const archived = await CollectionModel.archiveCollection(collectionId);
     
     if (!archived) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('collection:COLLECTION_NOT_FOUND')
       });
+    }
+
+    if (existing?.thumbnail_cf_r2_key) {
+      await deleteMediaRefs(
+        normalizedMediaRef('public', existing.thumbnail_cf_r2_key),
+        'collection_thumbnail'
+      );
     }
 
     // Publish activity log command

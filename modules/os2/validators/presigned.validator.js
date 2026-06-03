@@ -33,6 +33,42 @@ exports.validatePresignedUrlGeneration = async function(req, res, next) {
   }
 };
 
+exports.validateDeleteStorageObjects = async function (req, res, next) {
+  try {
+    const objectSchema = Joi.object({
+      asset_key: Joi.string().trim().max(2048).required(),
+      asset_bucket: Joi.string().trim().max(128).optional(),
+    });
+
+    const schema = Joi.object({
+      objects: Joi.array().items(objectSchema).min(1).max(20).required(),
+    });
+
+    const { error, value } = schema.validate(req.body);
+
+    if (error) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: error.details[0].message,
+      });
+    }
+
+    for (const obj of value.objects) {
+      if (obj.asset_key.includes('..')) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Invalid object key',
+        });
+      }
+    }
+
+    req.validatedBody = value;
+    next();
+  } catch (err) {
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: req.t('os2:INVALID_REQUEST_DATA'),
+    });
+  }
+};
+
 exports.validatePresignedReadUrls = async function (req, res, next) {
   try {
     const itemSchema = Joi.object({

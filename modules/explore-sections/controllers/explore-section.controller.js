@@ -8,6 +8,11 @@ const logger = require('../../../config/lib/logger');
 const config = require('../../../config/config');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const {
+  cleanupExploreSectionBannerChange,
+  deleteMediaRefs,
+  extractBannerAssetRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * Build banner image URL from asset_bucket and asset_key for admin UI display.
@@ -137,13 +142,18 @@ exports.updateExploreSection = async function(req, res) {
   try {
     const { sectionId } = req.params;
     const sectionData = req.validatedBody;
-    
+    const existing = await ExploreSectionModel.getExploreSectionById(sectionId);
+
     const updated = await ExploreSectionModel.updateExploreSection(sectionId, sectionData);
     
     if (!updated) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('explore_section:EXPLORE_SECTION_NOT_FOUND')
       });
+    }
+
+    if (existing) {
+      await cleanupExploreSectionBannerChange(existing, sectionData);
     }
 
     // Publish activity log command
@@ -182,13 +192,19 @@ exports.updateExploreSection = async function(req, res) {
 exports.archiveExploreSection = async function(req, res) {
   try {
     const { sectionId } = req.params;
-    
+    const existing = await ExploreSectionModel.getExploreSectionById(sectionId);
+
     const archived = await ExploreSectionModel.archiveExploreSection(sectionId);
     
     if (!archived) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('explore_section:EXPLORE_SECTION_NOT_FOUND')
       });
+    }
+
+    const bannerRef = extractBannerAssetRef(existing?.additional_data);
+    if (bannerRef) {
+      await deleteMediaRefs(bannerRef, 'explore_banner');
     }
 
     // Publish activity log command

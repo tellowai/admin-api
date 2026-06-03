@@ -5,6 +5,7 @@ const AiModelModel = require('../models/ai-model.model');
 const AiModelErrorHandler = require('../middlewares/ai-model.error.handler');
 const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const { cleanupReplacedFields } = require('../../os2/utils/r2-orphan-cleanup.util');
 const config = require('../../../config/config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
@@ -582,6 +583,14 @@ exports.updatePlatform = async function(req, res) {
     }
 
     await AiModelModel.updatePlatform(platformId, updateData);
+
+    await cleanupReplacedFields(platform, updateData, [
+      {
+        keyKey: 'platform_logo_key',
+        bucketKey: 'platform_logo_bucket',
+        label: 'platform_logo',
+      },
+    ]);
 
     // Publish activity log command
     await kafkaCtrl.sendMessage(
