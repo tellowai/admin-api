@@ -63,6 +63,7 @@ function buildWidgetPromptSection() {
     '- After tools return numeric or time-series data, call render_widget in the same turn (before your final text). Do not wait for the final answer-only round.',
     '- Default: show data visually. Most analytics answers should include at least one widget (chart or KPI cards), not prose-only numbers.',
     '- Chart pick: line_chart for trends over time; bar_chart for category comparisons; pie_chart for share/mix; kpi_cards for 2–4 headline metrics; data_table only when the user needs row-level detail, a long list, or export of raw rows.',
+    '- kpi_cards: delta is a short change label (≤80 chars, e.g. "↓27% WoW" or "vs prior 7d"); use hint for longer context — never put full sentences in delta.',
     '- Do not show both data_table and a chart for the same dataset unless the user asked for both.',
     '- If the user explicitly asks for a chart, graph, plot, trend, visual, or names a chart type (line, bar, pie) — you MUST call render_widget with the matching type; never substitute markdown or a table only.',
     '- Use markdown only for short non-data replies (greetings, scope refusals, clarifying questions, or when no query data exists).',

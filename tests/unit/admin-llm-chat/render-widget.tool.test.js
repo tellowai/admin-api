@@ -17,6 +17,21 @@ describe('render-widget.tool', () => {
     expect(r.widgetSpec.data.cards).to.have.length(1);
   });
 
+  it('accepts kpi_cards delta up to 80 characters', () => {
+    const r = renderWidget({
+      widget_type: 'kpi_cards',
+      data: {
+        cards: [{
+          label: 'GA4 active users',
+          value: '7,974',
+          delta: '-27.4% from first to latest available day',
+          deltaDirection: 'down',
+        }],
+      },
+    });
+    expect(r.success).to.equal(true);
+  });
+
   it('rejects unknown widget_type', () => {
     const r = renderWidget({
       widget_type: 'not_a_widget',
