@@ -21,7 +21,7 @@ const WIDGET_DATA_SCHEMAS = {
           properties: {
             label: { type: 'string' },
             value: { oneOf: [{ type: 'string' }, { type: 'number' }] },
-            delta: { type: 'string' },
+            delta: { type: 'string', maxLength: 80 },
             deltaDirection: { type: 'string', enum: ['up', 'down', 'neutral'] },
             hint: { type: 'string' },
           },
