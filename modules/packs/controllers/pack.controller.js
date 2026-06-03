@@ -10,6 +10,11 @@ const logger = require('../../../config/lib/logger');
 const config = require('../../../config/config');
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 const { recomputePackPricing } = require('../utils/packPricing.util');
+const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 
 class PackController {
   static async listPacks(req, res) {
@@ -132,6 +137,10 @@ class PackController {
         });
       }
 
+      await cleanupReplacedFields(pack, packData, [
+        { keyKey: 'thumbnail_cf_r2_key', defaultBucket: 'public', label: 'pack_thumbnail' },
+      ]);
+
       await publishNewAdminActivityLog({
         adminUserId: req.user && req.user.userId ? req.user.userId : null,
         entityType: 'PACKS',
@@ -171,6 +180,13 @@ class PackController {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
           message: req.t('packs:errors.pack_not_found')
         });
+      }
+
+      if (pack.thumbnail_cf_r2_key) {
+        await deleteMediaRefs(
+          normalizedMediaRef('public', pack.thumbnail_cf_r2_key),
+          'pack_thumbnail'
+        );
       }
 
       await publishNewAdminActivityLog({

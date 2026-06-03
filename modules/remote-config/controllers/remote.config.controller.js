@@ -1,5 +1,9 @@
 'use strict';
 const RemoteConfigDbo = require('../models/remote.config.model');
+const {
+  cleanupRemoteConfigAssetChange,
+  parseJsonValue,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 const RemoteConfigErrorHandler = require('../middlewares/remote.config.error.handler');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 
@@ -109,7 +113,15 @@ exports.updateRemoteConfigValueByKey = async function (req, res, next) {
       rc_default_value: strValue,
       rc_value: strValue
     };
+    let oldConfigObj = null;
+    if (data_type === 'json') {
+      const oldRows = await RemoteConfigDbo.getValueByKeyFromRemoteConfig(payload.rc_key_name);
+      oldConfigObj = parseJsonValue(oldRows?.[0]?.rc_value);
+    }
     await RemoteConfigDbo.createOrUpdateRemoteConfig(payload);
+    if (data_type === 'json') {
+      await cleanupRemoteConfigAssetChange(oldConfigObj, parseJsonValue(strValue));
+    }
     const overlayCacheKeys = {
       output_logo_overlay_config: ['output_logo_overlay_config_json'],
       free_template_video_logo_config: ['free_template_video_logo_config_json', 'output_logo_overlay_config_json'],
