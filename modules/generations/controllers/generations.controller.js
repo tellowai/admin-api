@@ -829,12 +829,18 @@ exports.getNodeExecutions = async function (req, res) {
     // Keep DB order (created_at ASC): matches worker insertion order (per-clip DAG execution order, then AE).
 
     let templateAiClips = [];
+    let templateInputFields = null;
     const templateId = mediaGeneration && mediaGeneration.template_id;
     if (templateId) {
       try {
         templateAiClips = await generationNodeExecutionsModel.listTemplateAiClipsByTemplateId(templateId);
       } catch (e) {
         console.error('listTemplateAiClipsByTemplateId failed:', e.message);
+      }
+      try {
+        templateInputFields = await generationNodeExecutionsModel.getTemplateUserInputFields(templateId);
+      } catch (e) {
+        console.error('getTemplateUserInputFields failed:', e.message);
       }
     }
 
@@ -897,7 +903,8 @@ exports.getNodeExecutions = async function (req, res) {
     res.json({
       data: rows,
       mediaGeneration: mediaGeneration || null,
-      templateAiClips
+      templateAiClips,
+      templateInputFields: templateInputFields || null
     });
   } catch (err) {
     console.error('Error fetching generation node executions:', err);

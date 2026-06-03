@@ -69,3 +69,30 @@ exports.listTemplateAiClipsByTemplateId = async function (templateId) {
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
   return rows || [];
 };
+
+/**
+ * Template custom text / input field definitions for admin timeline labels.
+ * @param {string} templateId
+ * @returns {Promise<Array<Object>|null>}
+ */
+exports.getTemplateUserInputFields = async function (templateId) {
+  if (!templateId) return null;
+  const query = `
+    SELECT custom_text_input_fields
+    FROM templates
+    WHERE template_id = ?
+    LIMIT 1
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  if (!rows || !rows[0]) return null;
+  let fields = rows[0].custom_text_input_fields;
+  if (fields == null) return null;
+  if (typeof fields === 'string') {
+    try {
+      fields = JSON.parse(fields);
+    } catch (_) {
+      return null;
+    }
+  }
+  return Array.isArray(fields) ? fields : null;
+};
