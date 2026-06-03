@@ -9,6 +9,7 @@ const {
   insertUploadPresignedURLGeneration
 } = require('../models/presigned.model');
 const logger = require('../../../config/lib/logger');
+const { deleteMediaRefs, normalizedMediaRef } = require('../utils/r2-orphan-cleanup.util');
 
 /**
  * @api {post} /os2/presigned-urls Generate presigned upload URLs
@@ -422,4 +423,31 @@ exports.generateEphemeralPresignedUrls = async function (req, res) {
       message: error.message || req.t('os2:PRESIGNED_URL_GENERATION_FAILED')
     });
   }
-}; 
+};
+
+/**
+ * @api {post} /os2/storage-objects/delete Delete objects from R2 (e.g. ephemeral studio uploads)
+ */
+exports.deleteStorageObjects = async function (req, res) {
+  try {
+    const { objects } = req.validatedBody;
+    const refs = objects
+      .map((obj) => normalizedMediaRef(obj.asset_bucket || 'ephemeral', obj.asset_key))
+      .filter(Boolean)
+      .filter((ref) => ref.bucket === 'ephemeral');
+    if (refs.length !== objects.length) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'Only ephemeral bucket objects can be deleted via this endpoint',
+      });
+    }
+    if (refs.length) {
+      await deleteMediaRefs(refs, 'storage_object');
+    }
+    return res.status(HTTP_STATUS_CODES.OK).json({ deleted_count: refs.length });
+  } catch (error) {
+    logger.error('Error deleting storage objects:', { error: error.message, stack: error.stack });
+    return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+      message: error.message || req.t('os2:STORAGE_OBJECT_DELETE_FAILED'),
+    });
+  }
+};

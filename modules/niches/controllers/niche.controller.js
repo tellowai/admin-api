@@ -7,6 +7,11 @@ const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
+const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
 
@@ -207,6 +212,15 @@ exports.updateNiche = async function(req, res) {
       });
     }
 
+    await cleanupReplacedFields(existingNiche, nicheData, [
+      {
+        keyKey: 'thumb_image_object_key',
+        bucketKey: 'thumb_image_storage_bucket',
+        defaultBucket: 'public',
+        label: 'niche_thumbnail',
+      },
+    ]);
+
     // Publish activity log command
     await kafkaCtrl.sendMessage(
       TOPICS.ADMIN_COMMAND_CREATE_ACTIVITY_LOG,
@@ -243,6 +257,7 @@ exports.updateNiche = async function(req, res) {
 exports.archiveNiche = async function(req, res) {
   try {
     const { nicheId } = req.params;
+    const existing = await NicheModel.getNicheById(nicheId);
 
     const archived = await NicheModel.archiveNiche(nicheId);
 
@@ -250,6 +265,13 @@ exports.archiveNiche = async function(req, res) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('niche:NICHE_NOT_FOUND')
       });
+    }
+
+    if (existing?.thumb_image_object_key) {
+      await deleteMediaRefs(
+        normalizedMediaRef(existing.thumb_image_storage_bucket, existing.thumb_image_object_key),
+        'niche_thumbnail'
+      );
     }
 
     // Publish activity log command

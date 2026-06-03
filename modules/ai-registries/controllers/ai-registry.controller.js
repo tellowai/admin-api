@@ -8,6 +8,7 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 const config = require('../../../config/config');
 const aiRegistryExport = require('../services/ai-registry-export.service');
+const { cleanupReplacedFields } = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf/array structure).
@@ -876,7 +877,21 @@ exports.updateProvider = async function (req, res) {
     delete updateData.updated_at;
     delete updateData.provider_logo_url; // computed from provider_logo_key/bucket, not a DB column
 
+    const existing = await aiRegistryModel.getProviderById(ampId);
+    if (!existing) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:PROVIDER_NOT_FOUND') || 'Provider not found' });
+    }
+
     await aiRegistryModel.updateProvider(ampId, updateData);
+
+    await cleanupReplacedFields(existing, updateData, [
+      {
+        keyKey: 'provider_logo_key',
+        bucketKey: 'provider_logo_bucket',
+        label: 'provider_logo',
+      },
+    ]);
+
     const updateKeys = Object.keys(updateData);
     const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status') || Object.prototype.hasOwnProperty.call(updateData, 'circuit_state'));
     await publishNewAdminActivityLog({

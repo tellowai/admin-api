@@ -11,6 +11,7 @@ const googlePhoneNumberValidator = require('../../user/validators/google.lib.pho
 const random = require('random').default;
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
+const { cleanupCharacterThumbChange } = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * @api {post} /characters Create a new character
@@ -362,8 +363,7 @@ exports.updateUserCharacter = async function(req, res) {
     const userId = req.user.userId;
     const updateData = req.validatedBody;
 
-    // Verify character access
-    const hasAccess = await CharacterModel.verifyCharacterOwnership(characterId, userId);
+    const hasAccess = await CharacterModel.verifyCharacterAccess(characterId, userId);
     
     if (!hasAccess) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
@@ -371,8 +371,15 @@ exports.updateUserCharacter = async function(req, res) {
       });
     }
 
-    // Update character
-    await CharacterModel.updateUserCharacter(characterId, userId, updateData);
+    const [existing] = await CharacterModel.getCharacterData(characterId);
+    if (!existing) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        message: req.t('character:CHARACTER_NOT_FOUND')
+      });
+    }
+
+    await cleanupCharacterThumbChange(existing, updateData);
+    await CharacterModel.updateCharacterData(characterId, updateData);
 
     // Publish activity log command
     await kafkaCtrl.sendMessage(
