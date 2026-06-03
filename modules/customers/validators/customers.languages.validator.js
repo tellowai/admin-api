@@ -8,6 +8,7 @@ const optedStatsQuerySchema = Joi.object({
   start_date: Joi.alternatives().try(Joi.date(), Joi.string()).optional().allow(''),
   end_date: Joi.alternatives().try(Joi.date(), Joi.string()).optional().allow(''),
   tz: Joi.string().optional().allow(''),
+  client_platform: Joi.string().valid('', 'ios', 'android', 'web').optional().allow(''),
 });
 
 exports.validateContentLanguageOptedStatsQuery = function (req, res, next) {
