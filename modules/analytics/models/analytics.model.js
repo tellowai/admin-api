@@ -1618,6 +1618,85 @@ error_category,
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
   }
+
+  static async querySearchDailyStats(whereConditions) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        report_date AS date,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async querySearchSummary(whereConditions) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        sum(search_count) AS total_searches,
+        sum(zero_result_count) AS total_zero_results,
+        sum(click_count) AS total_clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || {
+      total_searches: 0,
+      total_zero_results: 0,
+      total_clicks: 0,
+      unique_devices: 0
+    };
+  }
+
+  static async querySearchTopQueries(whereConditions, limit, offset) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const query = `
+      SELECT
+        any(query_normalized) AS query,
+        query_hash,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY query_hash
+      ORDER BY searches DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async querySearchDailyStatsGrouped(whereConditions, groupByColumn) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        report_date AS date,
+        ${groupByColumn} AS group_key,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
 }
 
 module.exports = AnalyticsModel;

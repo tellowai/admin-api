@@ -2059,6 +2059,75 @@ class AnalyticsService {
       }
     };
   }
+
+  static buildMVSearchConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ANALYTICS_CONSTANTS.SEARCH_FILTER_COLUMNS;
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    if (additionalFilters.zero_results_only === true || additionalFilters.zero_results_only === 'true') {
+      conditions.push('zero_result_count > 0');
+    }
+    return conditions;
+  }
+
+  static async getSearchSummary(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    const summary = await AnalyticsModel.querySearchSummary(whereConditions);
+    const totalSearches = Number(summary.total_searches) || 0;
+    const totalZero = Number(summary.total_zero_results) || 0;
+    const totalClicks = Number(summary.total_clicks) || 0;
+    return {
+      total_searches: totalSearches,
+      total_zero_results: totalZero,
+      total_clicks: totalClicks,
+      unique_devices: Number(summary.unique_devices) || 0,
+      zero_result_rate: totalSearches > 0 ? totalZero / totalSearches : 0,
+      click_through_rate: totalSearches > 0 ? totalClicks / totalSearches : 0
+    };
+  }
+
+  static async getSearchDaily(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchDailyStats(whereConditions);
+  }
+
+  static async getSearchTopQueries(filters) {
+    const { start_date, end_date, limit, offset } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    if (filters.zero_results_only) additionalFilters.zero_results_only = filters.zero_results_only;
+
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchTopQueries(whereConditions, limit, offset);
+  }
+
+  static async getSearchDailyGrouped(filters, groupBy) {
+    const allowed = ANALYTICS_CONSTANTS.SEARCH_GROUP_BY_COLUMNS;
+    if (!allowed.includes(groupBy)) return [];
+
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchDailyStatsGrouped(whereConditions, groupBy);
+  }
+
+  static _pickSearchFilters(filters = {}) {
+    const additionalFilters = {};
+    ANALYTICS_CONSTANTS.SEARCH_FILTER_COLUMNS.forEach((key) => {
+      if (filters[key] != null && filters[key] !== '') {
+        additionalFilters[key] = filters[key];
+      }
+    });
+    return additionalFilters;
+  }
 }
 
 module.exports = AnalyticsService;
