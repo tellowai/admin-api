@@ -34,15 +34,26 @@ function resolveUtcRange(start_date, end_date, tz) {
   };
 }
 
-exports.getContentLanguageOptedStats = async function ({ start_date, end_date, tz }) {
+exports.getContentLanguageOptedStats = async function ({ start_date, end_date, tz, client_platform }) {
   const { rangeStart, rangeEnd } = resolveUtcRange(start_date, end_date, tz);
+  const clientPlatform =
+    client_platform != null && String(client_platform).trim() !== ''
+      ? String(client_platform).trim().toLowerCase()
+      : '';
   if (process.env.NODE_ENV !== 'production') {
     // eslint-disable-next-line no-console
-    console.log('[customers.languages] opted-stats range', { rangeStart, rangeEnd, start_date, end_date, tz });
+    console.log('[customers.languages] opted-stats range', {
+      rangeStart,
+      rangeEnd,
+      start_date,
+      end_date,
+      tz,
+      client_platform: clientPlatform || undefined,
+    });
   }
   const [rows, summaryRow] = await Promise.all([
-    CustomersLanguagesModel.queryContentLanguageOptedStats(rangeStart, rangeEnd),
-    CustomersLanguagesModel.queryContentLanguageOverallSummary(rangeStart, rangeEnd),
+    CustomersLanguagesModel.queryContentLanguageOptedStats(rangeStart, rangeEnd, clientPlatform),
+    CustomersLanguagesModel.queryContentLanguageOverallSummary(rangeStart, rangeEnd, clientPlatform),
   ]);
 
   return {
