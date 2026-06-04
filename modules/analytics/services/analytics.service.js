@@ -24,6 +24,33 @@ class AnalyticsService {
     return [`report_date >= '${startDateFormatted}'`, `report_date <= '${endDateFormatted}'`];
   }
 
+  /**
+   * MV `report_date` is UTC (toDate(timestamp)). Expand client calendar range to UTC date bounds.
+   */
+  static buildMVDateConditionsFromClientCalendar(startCal, endCal, tzRaw) {
+    const start = TimezoneService.toCalendarYmd(startCal);
+    const end = TimezoneService.toCalendarYmd(endCal);
+    if (!start || !end) {
+      return this.buildMVDateConditions(startCal, endCal);
+    }
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(start, end, tzRaw);
+    const startDateFormatted = moment.utc(rangeStartUtc).format('YYYY-MM-DD');
+    const endDateFormatted = moment.utc(rangeEndUtc).format('YYYY-MM-DD');
+    return [`report_date >= '${startDateFormatted}'`, `report_date <= '${endDateFormatted}'`];
+  }
+
+  static buildMVTemplateConditionsForClientCalendar(startCal, endCal, tzRaw, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditionsFromClientCalendar(startCal, endCal, tzRaw);
+    const allowed = ['template_id', 'output_type', 'generation_type'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
+  }
+
   static buildMVAuthConditions(start_date, end_date, eventName, additionalFilters = {}) {
     const conditions = this.buildMVDateConditions(start_date, end_date);
     if (eventName) conditions.push(`event_name = '${String(eventName).replace(/'/g, "''")}'`);
@@ -643,8 +670,11 @@ class AnalyticsService {
   }
 
   static async getTopTemplatesByGeneration(filters) {
-    const { start_date, end_date, page = 1, limit = 20 } = filters;
-    const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
+    const { start_date, end_date, tz, page = 1, limit = 20 } = filters;
+    const startCal = TimezoneService.toCalendarYmd(start_date);
+    const endCal = TimezoneService.toCalendarYmd(end_date);
+    const clientTz = TimezoneService.normalizeTimezoneAlias(tz || TimezoneService.getDefaultTimezone());
+    const whereConditions = this.buildMVTemplateConditionsForClientCalendar(startCal, endCal, clientTz, {});
     const offset = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
@@ -652,13 +682,11 @@ class AnalyticsService {
       return [];
     }
     const templateIds = rows.map(r => r.template_id).filter(Boolean);
-    const { rangeStartUtc, rangeEndUtc } = this.buildUtcRangeFromFilters(filters);
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(
-      start_date,
-      end_date,
-      filters.start_time,
-      filters.end_time
-    );
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(startCal, endCal, clientTz);
+    const tsRaw = [
+      `timestamp >= toDateTime64('${rangeStartUtc}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${rangeEndUtc}', 3, 'UTC')`
+    ];
     const [templates, mysqlOrderRows, chOrderRows] = await Promise.all([
       TemplateModel.getTemplatesByIdsForAnalytics(templateIds),
       OrdersAnalyticsModel.getOrderCountsByTemplateIds({

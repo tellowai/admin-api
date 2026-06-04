@@ -49,16 +49,10 @@ class TimezoneService {
     
     if (typeof startDateStrForCheck === 'string') {
       if (startDateStrForCheck.includes('T') && (startDateStrForCheck.includes('.') || startDateStrForCheck.includes('Z'))) {
-        // This is already a timestamp with timezone info, use it directly
-        const startMoment = moment(startDateStrForCheck);
-        const endMoment = moment(endDateStrForCheck);
-        
-        return {
-          start_date: startMoment.format('YYYY-MM-DD'),
-          end_date: endMoment.format('YYYY-MM-DD'),
-          start_time: startMoment.format('HH:mm:ss'),
-          end_time: endMoment.format('HH:mm:ss')
-        };
+        // Calendar date from the browser + client tz — do not parse bare ISO as server-local.
+        const startYmd = this.toCalendarYmd(startDateStrForCheck);
+        const endYmd = this.toCalendarYmd(endDateStrForCheck);
+        return this.convertToUTC(startYmd, endYmd, startTime, endTime, timezone);
       }
     }
     

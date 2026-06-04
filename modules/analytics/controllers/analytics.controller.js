@@ -306,15 +306,12 @@ class AnalyticsController {
     try {
       const queryParams = req.validatedQuery;
       const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        null,
-        null,
-        timezone
-      );
+      const startCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.start_date);
+      const endCal = TimezoneService.toCalendarYmdFromHttpParam(req.query.end_date);
       const filters = {
-        ...utcFilters,
+        start_date: startCal,
+        end_date: endCal,
+        tz: timezone,
         page: queryParams.page || 1,
         limit: queryParams.limit || 20
       };
