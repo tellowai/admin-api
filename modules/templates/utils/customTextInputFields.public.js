@@ -39,51 +39,43 @@ function toPublicCustomTextInputFields(fields) {
 }
 
 /**
- * User-submitted values for admin timeline: primary template fields only, one row per user_input_field_name.
- * @param {Array} generationFields - From resource_generations.additional_data.custom_text_input_fields
- * @param {Array|null} templateDefs - Template custom_text_input_fields definitions
+ * ClickHouse audit blob at SUBMIT — return as stored (labels + values at generation time).
+ * Only drops empty values and AE linked follower layers; does not remap to today's template names.
+ *
+ * @param {Array} generationFields - resource_generations.additional_data.custom_text_input_fields
+ * @param {Array|null} templateDefs - optional, to detect linked_layer_names on template
  */
 function filterGenerationCustomTextFieldsForDisplay(generationFields, templateDefs) {
   if (!Array.isArray(generationFields) || generationFields.length === 0) return [];
 
-  const defs = Array.isArray(templateDefs) && templateDefs.length ? templateDefs : generationFields;
-  const publicDefs = toPublicCustomTextInputFields(defs);
-  const secondaryLayers = collectLinkedSecondaryLayerNames(defs);
-  const primaryNames = new Set(
-    publicDefs
-      .map((f) => f?.user_input_field_name)
-      .filter((n) => n != null && String(n).trim() !== '')
-      .map((n) => String(n).trim())
-  );
+  const defs =
+    Array.isArray(templateDefs) && templateDefs.length ? templateDefs : generationFields;
+  const secondary = collectLinkedSecondaryLayerNames(defs);
 
-  const byName = new Map();
+  const out = [];
+  const seenNames = new Set();
+
   for (const field of generationFields) {
     if (!field || typeof field !== 'object') continue;
-    const layerName = field.layer_name != null ? String(field.layer_name).trim() : '';
-    if (layerName && secondaryLayers.has(layerName)) continue;
 
-    const fieldName = field.user_input_field_name != null ? String(field.user_input_field_name).trim() : '';
+    const layerName = field.layer_name != null ? String(field.layer_name).trim() : '';
+    if (layerName && secondary.has(layerName)) continue;
+
+    const fieldName =
+      field.user_input_field_name != null ? String(field.user_input_field_name).trim() : '';
     if (!fieldName) continue;
-    if (primaryNames.size > 0 && !primaryNames.has(fieldName)) continue;
 
     const val = field.value ?? field.text ?? null;
     if (val == null || String(val).trim() === '') continue;
 
-    if (!byName.has(fieldName)) {
-      byName.set(fieldName, field);
-    }
+    const dedupeKey = fieldName.toLowerCase();
+    if (seenNames.has(dedupeKey)) continue;
+    seenNames.add(dedupeKey);
+
+    out.push({ ...field });
   }
 
-  if (publicDefs.length > 0) {
-    const ordered = [];
-    for (const def of publicDefs) {
-      const name = def?.user_input_field_name != null ? String(def.user_input_field_name).trim() : '';
-      if (name && byName.has(name)) ordered.push(byName.get(name));
-    }
-    if (ordered.length > 0) return ordered;
-  }
-
-  return [...byName.values()];
+  return out;
 }
 
 module.exports = {
