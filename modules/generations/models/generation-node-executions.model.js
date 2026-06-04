@@ -98,14 +98,9 @@ exports.getTemplateUserInputFields = async function (templateId) {
   return Array.isArray(fields) ? fields : null;
 };
 
-/**
- * User-submitted custom_text_input_fields for one generation (from resource_generations audit blob).
- * @param {string} mediaGenerationId
- * @returns {Promise<Array<Object>>}
- */
-exports.getGenerationCustomTextInputFields = async function (mediaGenerationId) {
+async function getGenerationAuditAdditionalData(mediaGenerationId) {
   const id = mediaGenerationId != null ? String(mediaGenerationId).trim() : '';
-  if (!id) return [];
+  if (!id) return null;
 
   const esc = (s) => String(s).replace(/'/g, "''");
   const query = `
@@ -116,20 +111,42 @@ exports.getGenerationCustomTextInputFields = async function (mediaGenerationId) 
   `;
   const result = await slaveClickhouse.querying(query, { dataObjects: true });
   const raw = result.data?.[0]?.additional_data;
-  if (raw == null || raw === '') return [];
+  if (raw == null || raw === '') return null;
 
-  let data = raw;
   if (typeof raw === 'string') {
     try {
-      data = JSON.parse(raw);
+      return JSON.parse(raw);
     } catch (_) {
-      return [];
+      return null;
     }
   }
-  if (!data || typeof data !== 'object') return [];
+  return typeof raw === 'object' ? raw : null;
+}
+
+/**
+ * User-submitted custom_text_input_fields for one generation (from resource_generations audit blob).
+ * @param {string} mediaGenerationId
+ * @returns {Promise<Array<Object>>}
+ */
+exports.getGenerationCustomTextInputFields = async function (mediaGenerationId) {
+  const data = await getGenerationAuditAdditionalData(mediaGenerationId);
+  if (!data) return [];
 
   const fields = data.custom_text_input_fields;
   if (Array.isArray(fields)) return fields;
   if (fields && typeof fields === 'object') return Object.values(fields);
   return [];
+};
+
+/**
+ * User-uploaded assets at generation time (from resource_generations.additional_data.uploaded_assets).
+ * @param {string} mediaGenerationId
+ * @returns {Promise<Array<Object>>}
+ */
+exports.getGenerationUploadedAssets = async function (mediaGenerationId) {
+  const data = await getGenerationAuditAdditionalData(mediaGenerationId);
+  if (!data) return [];
+
+  const assets = data.uploaded_assets;
+  return Array.isArray(assets) ? assets : [];
 };
