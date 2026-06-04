@@ -2,6 +2,7 @@
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
 const { slaveClickhouse } = require('../../../config/lib/clickhouse');
+const AnalyticsModel = require('../../analytics/models/analytics.model');
 const moment = require('moment'); // Using moment as it's typically used in this project codebase based on API's media.generations.model.js
 const { buildAccessMethodsByUserFromGenerations } = require('../services/generation-access-method.service');
 
@@ -745,30 +746,48 @@ exports.getTemplateGenerationUserSummary = async function (
   const allTime = !!options.allTime;
   let startFormatted = allTime ? null : options.utcDateTimeStart || formatDateForMySQL(startDate);
   let endFormatted = allTime ? null : options.utcDateTimeEnd || formatDateForMySQL(endDate);
+  const rangeStartUtc = allTime ? null : (options.rangeStartUtc || startFormatted);
+  const rangeEndUtc = allTime ? null : (options.rangeEndUtc || endFormatted);
   if (!allTime && !endFormatted) {
     endFormatted = moment.utc().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
   const startDb = startFormatted;
   const endDb = endFormatted;
 
-  const dateClauseCh = allTime
-    ? ''
-    : `AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'`;
-
-  const chStatsQuery = `
-    SELECT
-      user_id,
-      count() AS generation_count,
-      argMax(resource_generation_id, created_at) AS latest_generation_id,
-      max(created_at) AS last_created_at
-    FROM resource_generations
-    WHERE template_id = ${chStringLiteral(tid)}
-      AND user_id != ''
-      ${dateClauseCh}
-    GROUP BY user_id
-  `;
-  const chStatsRes = await slaveClickhouse.querying(chStatsQuery, { dataObjects: true });
-  const chStats = chStatsRes.data || [];
+  let chStats = [];
+  if (!allTime && rangeStartUtc && rangeEndUtc) {
+    chStats = await AnalyticsModel.getTemplateQueueUserSummaryRaw(tid, rangeStartUtc, rangeEndUtc);
+  } else if (!allTime) {
+    const dateClauseCh = `AND created_at >= '${startFormatted}' AND created_at <= '${endFormatted}'`;
+    const chStatsQuery = `
+      SELECT
+        user_id,
+        count() AS generation_count,
+        argMax(resource_generation_id, created_at) AS latest_generation_id,
+        max(created_at) AS last_created_at
+      FROM resource_generations
+      WHERE template_id = ${chStringLiteral(tid)}
+        AND user_id != ''
+        ${dateClauseCh}
+      GROUP BY user_id
+    `;
+    const chStatsRes = await slaveClickhouse.querying(chStatsQuery, { dataObjects: true });
+    chStats = chStatsRes.data || [];
+  } else {
+    const chStatsQuery = `
+      SELECT
+        user_id,
+        count() AS generation_count,
+        argMax(resource_generation_id, created_at) AS latest_generation_id,
+        max(created_at) AS last_created_at
+      FROM resource_generations
+      WHERE template_id = ${chStringLiteral(tid)}
+        AND user_id != ''
+      GROUP BY user_id
+    `;
+    const chStatsRes = await slaveClickhouse.querying(chStatsQuery, { dataObjects: true });
+    chStats = chStatsRes.data || [];
+  }
 
   let mysqlStats = [];
   const dateClauseMysql = allTime
@@ -821,7 +840,7 @@ exports.getTemplateGenerationUserSummary = async function (
   };
 
   chStats.forEach((r) => upsertStat(r, 'ch'));
-  /** In-flight rows may exist only in MySQL until CH resource_generations is written. */
+  /** In-flight rows may exist only in MySQL until hub queue event is visible; supplement missing users only. */
   mysqlStats.forEach((r) => {
     const uid = r.user_id != null ? String(r.user_id).trim() : '';
     if (uid && !byUser.has(uid)) upsertStat(r, 'mysql');

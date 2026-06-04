@@ -25,6 +25,46 @@ const BATCH_STATUS_MAX_IDS = 50;
 
 const TEMPLATE_USER_SUMMARY_PER_PAGE = 20;
 
+/** Client-calendar bounds for template analytics drill-down (matches Analytics > Templates). */
+function buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime }) {
+  if (allTime) {
+    return { startDate: null, endDate: null, summaryOptions: { allTime: true } };
+  }
+
+  let utcFilters;
+  let rangeStartUtc;
+  let rangeEndUtc;
+
+  if (!start_date || !end_date) {
+    const endDay = moment.tz(timezone);
+    const startDay = endDay.clone().subtract(6, 'days');
+    const calStart = startDay.format('YYYY-MM-DD');
+    const calEnd = endDay.format('YYYY-MM-DD');
+    ({ rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(calStart, calEnd, timezone));
+    utcFilters = TimezoneService.convertToUTC(calStart, calEnd, '00:00:00', '23:59:59', timezone);
+  } else {
+    const calStart = TimezoneService.toCalendarYmd(start_date);
+    const calEnd = TimezoneService.toCalendarYmd(end_date);
+    ({ rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(calStart, calEnd, timezone));
+    utcFilters = TimezoneService.convertToUTC(calStart, calEnd, '00:00:00', '23:59:59', timezone);
+  }
+
+  const startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
+  const endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
+
+  return {
+    startDate,
+    endDate,
+    summaryOptions: {
+      allTime: false,
+      utcDateTimeStart: `${utcFilters.start_date} ${utcFilters.start_time}`,
+      utcDateTimeEnd: `${utcFilters.end_date} ${utcFilters.end_time}`,
+      rangeStartUtc,
+      rangeEndUtc
+    }
+  };
+}
+
 exports.listTemplateGenerationUsers = async function (req, res) {
   try {
     const templateId = req.query.template_id ? String(req.query.template_id).trim() : '';
@@ -41,32 +81,14 @@ exports.listTemplateGenerationUsers = async function (req, res) {
     let summaryOptions = { allTime };
 
     if (!allTime) {
-      let utcFilters;
-      if (!start_date || !end_date) {
-        const endDay = moment.tz(timezone);
-        const startDay = endDay.clone().subtract(6, 'days');
-        utcFilters = {
-          start_date: startDay.format('YYYY-MM-DD'),
-          end_date: endDay.format('YYYY-MM-DD'),
-          start_time: '00:00:00',
-          end_time: '23:59:59'
-        };
-      } else {
-        utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
-      }
-
-      startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
-      endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
+      const window = buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime });
+      startDate = window.startDate;
+      endDate = window.endDate;
+      summaryOptions = window.summaryOptions;
 
       if (moment(startDate).isAfter(moment(endDate))) {
         return res.status(400).send({ message: 'Start date cannot be after end date.' });
       }
-
-      summaryOptions = {
-        allTime: false,
-        utcDateTimeStart: `${utcFilters.start_date} ${utcFilters.start_time}`,
-        utcDateTimeEnd: `${utcFilters.end_date} ${utcFilters.end_time}`
-      };
     }
 
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
@@ -164,32 +186,14 @@ exports.listTemplateUserGenerations = async function (req, res) {
     let summaryOptions = { allTime };
 
     if (!allTime) {
-      let utcFilters;
-      if (!start_date || !end_date) {
-        const endDay = moment.tz(timezone);
-        const startDay = endDay.clone().subtract(6, 'days');
-        utcFilters = {
-          start_date: startDay.format('YYYY-MM-DD'),
-          end_date: endDay.format('YYYY-MM-DD'),
-          start_time: '00:00:00',
-          end_time: '23:59:59'
-        };
-      } else {
-        utcFilters = TimezoneService.convertToUTC(start_date, end_date, null, null, timezone);
-      }
-
-      startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
-      endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
+      const window = buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime });
+      startDate = window.startDate;
+      endDate = window.endDate;
+      summaryOptions = window.summaryOptions;
 
       if (moment(startDate).isAfter(moment(endDate))) {
         return res.status(400).send({ message: 'Start date cannot be after end date.' });
       }
-
-      summaryOptions = {
-        allTime: false,
-        utcDateTimeStart: `${utcFilters.start_date} ${utcFilters.start_time}`,
-        utcDateTimeEnd: `${utcFilters.end_date} ${utcFilters.end_time}`
-      };
     }
 
     const allTimeFlag = !!summaryOptions.allTime;
