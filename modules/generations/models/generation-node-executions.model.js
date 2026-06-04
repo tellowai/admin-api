@@ -1,6 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const { slaveClickhouse } = require('../../../config/lib/clickhouse');
 
 /**
  * Get all generation_node_executions for a media_generation_id. No joins.
@@ -95,4 +96,40 @@ exports.getTemplateUserInputFields = async function (templateId) {
     }
   }
   return Array.isArray(fields) ? fields : null;
+};
+
+/**
+ * User-submitted custom_text_input_fields for one generation (from resource_generations audit blob).
+ * @param {string} mediaGenerationId
+ * @returns {Promise<Array<Object>>}
+ */
+exports.getGenerationCustomTextInputFields = async function (mediaGenerationId) {
+  const id = mediaGenerationId != null ? String(mediaGenerationId).trim() : '';
+  if (!id) return [];
+
+  const esc = (s) => String(s).replace(/'/g, "''");
+  const query = `
+    SELECT additional_data
+    FROM resource_generations
+    WHERE resource_generation_id = '${esc(id)}'
+    LIMIT 1
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  const raw = result.data?.[0]?.additional_data;
+  if (raw == null || raw === '') return [];
+
+  let data = raw;
+  if (typeof raw === 'string') {
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      return [];
+    }
+  }
+  if (!data || typeof data !== 'object') return [];
+
+  const fields = data.custom_text_input_fields;
+  if (Array.isArray(fields)) return fields;
+  if (fields && typeof fields === 'object') return Object.values(fields);
+  return [];
 };
