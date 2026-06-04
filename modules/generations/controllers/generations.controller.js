@@ -655,6 +655,32 @@ function collectAssetRefsForPresign(rows) {
   return refs;
 }
 
+function collectAssetRefsFromObjects(objects) {
+  const refs = new Map();
+  if (!Array.isArray(objects)) return refs;
+  for (const obj of objects) {
+    visitAssetRefs(obj, (target, bucket, key) => {
+      if (typeof target.url === 'string' && target.url.startsWith('http')) return;
+      const refKey = `${bucket}:${key}`;
+      if (!refs.has(refKey)) refs.set(refKey, { bucket, key });
+    });
+  }
+  return refs;
+}
+
+function enrichObjectsWithPresignedUrls(objects, urlByRefKey) {
+  if (!Array.isArray(objects) || !urlByRefKey || urlByRefKey.size === 0) return objects;
+  return objects.map((obj) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    const clone = Array.isArray(obj) ? [...obj] : { ...obj };
+    visitAssetRefs(clone, (target, bucket, key) => {
+      const url = urlByRefKey.get(`${bucket}:${key}`);
+      if (url) target.url = url;
+    });
+    return clone;
+  });
+}
+
 /**
  * Parse node_client_id from workflow v2: "{clipIndex}_{nodeType}#{systemType}#{wfnId}" (e.g. 1_SYSTEM_NODE#AI_MODEL#536).
  */
@@ -806,38 +832,10 @@ exports.getNodeExecutions = async function (req, res) {
       generationNodeExecutionsModel.getMediaGenerationTimestamps(mediaGenerationId)
     ]);
 
-    const refs = collectAssetRefsForPresign(rows);
-    if (refs.size > 0) {
-      const storage = StorageFactory.getProvider();
-      const opts = { expiresIn: 3600 };
-      const urlByRefKey = new Map();
-      await Promise.all(
-        Array.from(refs.entries()).map(async ([refKey, { bucket, key }]) => {
-          try {
-            const url = await storage.generatePresignedDownloadUrlFromBucket(bucket, key, opts);
-            urlByRefKey.set(refKey, url);
-          } catch (e) {
-            console.error(`Presign failed for ${refKey}:`, e.message);
-          }
-        })
-      );
-      enrichOutputPayloadsWithUrls(rows, urlByRefKey);
-      enrichInputPayloadsWithUrls(rows, urlByRefKey);
-    }
-
-    // Ensure payloads are parsed objects in the JSON response (MySQL may return JSON columns as strings).
-    for (const row of rows) {
-      const ip = parseJsonPayloadColumn(row.input_payload);
-      if (ip != null) row.input_payload = ip;
-      const op = parseJsonPayloadColumn(row.output_payload);
-      if (op != null) row.output_payload = op;
-    }
-
-    // Keep DB order (created_at ASC): matches worker insertion order (per-clip DAG execution order, then AE).
-
     let templateAiClips = [];
     let templateInputFields = null;
     let generationCustomTextFields = [];
+    let generationUploadedAssets = [];
     const templateId = mediaGeneration && mediaGeneration.template_id;
     if (templateId) {
       try {
@@ -862,6 +860,46 @@ exports.getNodeExecutions = async function (req, res) {
     } catch (e) {
       console.error('getGenerationCustomTextInputFields failed:', e.message);
     }
+    try {
+      generationUploadedAssets = await generationNodeExecutionsModel.getGenerationUploadedAssets(
+        mediaGenerationId
+      );
+    } catch (e) {
+      console.error('getGenerationUploadedAssets failed:', e.message);
+    }
+
+    const refs = collectAssetRefsForPresign(rows);
+    for (const [refKey, ref] of collectAssetRefsFromObjects(generationUploadedAssets)) {
+      if (!refs.has(refKey)) refs.set(refKey, ref);
+    }
+    if (refs.size > 0) {
+      const storage = StorageFactory.getProvider();
+      const opts = { expiresIn: 3600 };
+      const urlByRefKey = new Map();
+      await Promise.all(
+        Array.from(refs.entries()).map(async ([refKey, { bucket, key }]) => {
+          try {
+            const url = await storage.generatePresignedDownloadUrlFromBucket(bucket, key, opts);
+            urlByRefKey.set(refKey, url);
+          } catch (e) {
+            console.error(`Presign failed for ${refKey}:`, e.message);
+          }
+        })
+      );
+      enrichOutputPayloadsWithUrls(rows, urlByRefKey);
+      enrichInputPayloadsWithUrls(rows, urlByRefKey);
+      generationUploadedAssets = enrichObjectsWithPresignedUrls(generationUploadedAssets, urlByRefKey);
+    }
+
+    // Ensure payloads are parsed objects in the JSON response (MySQL may return JSON columns as strings).
+    for (const row of rows) {
+      const ip = parseJsonPayloadColumn(row.input_payload);
+      if (ip != null) row.input_payload = ip;
+      const op = parseJsonPayloadColumn(row.output_payload);
+      if (op != null) row.output_payload = op;
+    }
+
+    // Keep DB order (created_at ASC): matches worker insertion order (per-clip DAG execution order, then AE).
 
     const wfnIds = [];
     for (const row of rows) {
@@ -924,7 +962,8 @@ exports.getNodeExecutions = async function (req, res) {
       mediaGeneration: mediaGeneration || null,
       templateAiClips,
       templateInputFields: templateInputFields || null,
-      generationCustomTextFields: generationCustomTextFields || []
+      generationCustomTextFields: generationCustomTextFields || [],
+      generationUploadedAssets: generationUploadedAssets || []
     });
   } catch (err) {
     console.error('Error fetching generation node executions:', err);
