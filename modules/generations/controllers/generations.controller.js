@@ -834,6 +834,7 @@ exports.getNodeExecutions = async function (req, res) {
 
     let templateAiClips = [];
     let templateInputFields = null;
+    let generationCustomTextFields = [];
     const templateId = mediaGeneration && mediaGeneration.template_id;
     if (templateId) {
       try {
@@ -846,6 +847,13 @@ exports.getNodeExecutions = async function (req, res) {
       } catch (e) {
         console.error('getTemplateUserInputFields failed:', e.message);
       }
+    }
+    try {
+      generationCustomTextFields = await generationNodeExecutionsModel.getGenerationCustomTextInputFields(
+        mediaGenerationId
+      );
+    } catch (e) {
+      console.error('getGenerationCustomTextInputFields failed:', e.message);
     }
 
     const wfnIds = [];
@@ -908,7 +916,8 @@ exports.getNodeExecutions = async function (req, res) {
       data: rows,
       mediaGeneration: mediaGeneration || null,
       templateAiClips,
-      templateInputFields: templateInputFields || null
+      templateInputFields: templateInputFields || null,
+      generationCustomTextFields: generationCustomTextFields || []
     });
   } catch (err) {
     console.error('Error fetching generation node executions:', err);
