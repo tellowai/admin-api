@@ -82,6 +82,14 @@ const ANALYTICS_CONSTANTS = {
     SUCCESSES: "successes",
     FAILURES: "failures",
   },
+  /** Hub event_name for each template daily chart metric (client-TZ bucketing on raw). */
+  TEMPLATE_RAW_EVENT_NAMES: {
+    TEMPLATE_VIEWS: "template_view",
+    TEMPLATE_TRIES: "template_generation_queue",
+    TEMPLATE_DOWNLOADS: "template_download",
+    TEMPLATE_SUCCESSES: "template_generation_success",
+    TEMPLATE_FAILURES: "template_generation_fail",
+  },
   // Allowed group_by columns per domain (for MV tables)
   AUTH_GROUP_BY_COLUMNS: ["provider"],
   REVENUE_GROUP_BY_COLUMNS: ["currency", "payment_provider", "plan_name"],
