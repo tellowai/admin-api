@@ -557,6 +557,67 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  /**
+   * Top templates from hub events with precise UTC timestamp window (client-calendar semantics).
+   * Aligns with template_generation_queue / template_generation_success chart totals.
+   */
+  static async getTopTemplatesByGenerationRaw(rangeStartUtc, rangeEndUtc, limit, offset) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(String(rangeStartUtc || '').trim());
+    const endEsc = esc(String(rangeEndUtc || '').trim());
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        object_id AS template_id,
+        countIf(event_name = 'template_generation_queue') AS tries,
+        countIf(event_name = 'template_generation_success') AS successes
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${startEsc}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')
+        AND object_type = 'template'
+        AND event_name IN ('template_generation_queue', 'template_generation_success')
+      WHERE object_id != '' AND trimBoth(object_id) != ''
+      GROUP BY template_id
+      HAVING tries > 0 OR successes > 0
+      ORDER BY successes DESC, tries DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Per-user template_generation_queue counts for template analytics drill-down.
+   */
+  static async getTemplateQueueUserSummaryRaw(templateId, rangeStartUtc, rangeEndUtc) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tid = esc(String(templateId || '').trim());
+    if (!tid) return [];
+    const startEsc = esc(String(rangeStartUtc || '').trim());
+    const endEsc = esc(String(rangeEndUtc || '').trim());
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        user_id,
+        count() AS generation_count,
+        argMax(properties['generationId'], timestamp) AS latest_generation_id,
+        max(timestamp) AS last_created_at
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${startEsc}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')
+        AND object_type = 'template'
+        AND event_name = 'template_generation_queue'
+        AND object_id = '${tid}'
+      WHERE user_id != '' AND trimBoth(user_id) != ''
+      GROUP BY user_id
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   // --- AI execution daily stats (SummingMergeTree: use FINAL so merged rows with summed totals are returned) ---
   static async queryAIExecutionSummary(whereConditions) {
     const query = `
