@@ -773,10 +773,22 @@ class AnalyticsService {
 
   static async getTopTemplatesByGeneration(filters) {
     const { page = 1, limit = 20 } = filters;
-    const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, {});
     const offset = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
+
+    let rows;
+    if (filters.rangeStartUtc && filters.rangeEndUtc) {
+      rows = await AnalyticsModel.getTopTemplatesByGenerationRaw(
+        filters.rangeStartUtc,
+        filters.rangeEndUtc,
+        safeLimit,
+        offset
+      );
+    } else {
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, {});
+      rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
+    }
+
     if (!rows || rows.length === 0) {
       return [];
     }
