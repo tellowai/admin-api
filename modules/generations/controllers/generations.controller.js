@@ -2,6 +2,9 @@
 
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
+const {
+  filterGenerationCustomTextFieldsForDisplay
+} = require('../../templates/utils/customTextInputFields.public');
 const workflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
 const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-registry.model');
 const BoothAdminModel = require('../../photo-booths/models/photo-booth.admin.model');
@@ -851,6 +854,10 @@ exports.getNodeExecutions = async function (req, res) {
     try {
       generationCustomTextFields = await generationNodeExecutionsModel.getGenerationCustomTextInputFields(
         mediaGenerationId
+      );
+      generationCustomTextFields = filterGenerationCustomTextFieldsForDisplay(
+        generationCustomTextFields,
+        templateInputFields
       );
     } catch (e) {
       console.error('getGenerationCustomTextInputFields failed:', e.message);
