@@ -222,6 +222,39 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  /** Template hub events by client-local calendar day (replaces UTC `report_date` MV buckets). */
+  static async queryTemplateEventsDailyClientTz(whereClause, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Template hub events grouped by dimension, bucketed in client TZ. */
+  static async queryTemplateEventsDailyGroupedClientTz(whereClause, groupKeyExpr, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        ${groupKeyExpr} AS group_key,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date, group_key
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   /** Commerce purchase counts by client-local calendar day (`revenue_mv` semantics on raw). */
   static async queryPurchasesCommerceDailyClientTz(whereClause, clientTz) {
     const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
