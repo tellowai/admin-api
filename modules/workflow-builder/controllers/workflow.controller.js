@@ -18,6 +18,7 @@ const TemplateRedisService = require('../../templates/services/template.redis.se
 const {
   collectWorkflowNodeAssetRefs,
   deleteRemovedMediaRefSet,
+  buildRefSignatureSet,
 } = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
@@ -84,7 +85,8 @@ async function cleanupWorkflowNodeAssetChanges(workflowId, newNodes) {
     const oldNodes = await WorkflowNodeModel.getNodesByWorkflowIds([workflowId]);
     const oldRefs = collectWorkflowNodeAssetRefs(oldNodes);
     const newRefs = collectWorkflowNodeAssetRefs(newNodes);
-    await deleteRemovedMediaRefSet(oldRefs, newRefs, 'workflow_node_asset');
+    const neverDeleteSigs = buildRefSignatureSet(newRefs);
+    await deleteRemovedMediaRefSet(oldRefs, newRefs, 'workflow_node_asset', neverDeleteSigs);
   } catch (err) {
     logger.warn('cleanupWorkflowNodeAssetChanges failed', { workflowId, error: err.message });
   }

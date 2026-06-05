@@ -1,7 +1,60 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('async_hooks');
+const axios = require('axios');
 const StorageFactory = require('../providers/storage.factory');
+const config = require('../../../config/config');
 const logger = require('../../../config/lib/logger');
+
+const R2_CLEANUP_LOG_TAG = 'R2 asset cleanup';
+const r2CleanupEventStorage = new AsyncLocalStorage();
+
+/**
+ * @param {{
+ *   status: 'deleted'|'delete_failed'|'skipped',
+ *   label?: string,
+ *   bucket?: string,
+ *   key?: string,
+ *   reason?: string,
+ *   replacement_key?: string,
+ *   error?: string,
+ * }} event
+ */
+function logR2AssetCleanup(event) {
+  const payload = {
+    tag: R2_CLEANUP_LOG_TAG,
+    status: event.status,
+    label: event.label || 'asset',
+    bucket: event.bucket,
+    key: event.key,
+    ...(event.reason ? { reason: event.reason } : {}),
+    ...(event.replacement_key ? { replacement_key: event.replacement_key } : {}),
+    ...(event.error ? { error: event.error } : {}),
+  };
+
+  const store = r2CleanupEventStorage.getStore();
+  if (store?.events) {
+    store.events.push(payload);
+  }
+
+  if (event.status === 'delete_failed') {
+    logger.warn(`${R2_CLEANUP_LOG_TAG}: delete failed`, payload);
+    return;
+  }
+  if (event.status === 'deleted') {
+    logger.info(`${R2_CLEANUP_LOG_TAG}: deleted`, payload);
+    return;
+  }
+  logger.info(`${R2_CLEANUP_LOG_TAG}: skipped`, payload);
+}
+
+/** Run orphan cleanup and collect per-asset log events for the API response / admin UI console. */
+async function runWithR2CleanupLog(fn) {
+  return r2CleanupEventStorage.run({ events: [] }, async () => {
+    await fn();
+    return r2CleanupEventStorage.getStore()?.events || [];
+  });
+}
 
 /** @returns {string|null} */
 function normalizeStorageObjectKey(key) {
@@ -32,15 +85,138 @@ function refSignature(ref) {
   return ref ? `${ref.bucket}::${ref.key}` : '';
 }
 
-async function deleteR2RefOnce(storage, dedupe, ref, label) {
+/** @param {Array<{ bucket: string, key: string }>} refs */
+function buildRefSignatureSet(refs) {
+  return new Set((refs || []).filter(Boolean).map(refSignature));
+}
+
+function resolveStorageBucketName(storage, bucketAlias) {
+  if (storage && typeof storage.resolveBucketName === 'function') {
+    return storage.resolveBucketName(bucketAlias);
+  }
+  if (bucketAlias === 'public') {
+    return config.os2?.r2?.public?.bucket || bucketAlias;
+  }
+  return bucketAlias;
+}
+
+function isPublicBucketRef(ref) {
+  if (!ref?.bucket) return false;
+  const publicBucketName = config.os2?.r2?.public?.bucket;
+  return ref.bucket === 'public' || (publicBucketName && ref.bucket === publicBucketName);
+}
+
+/** HEAD the public CDN URL — browsers may still play cached copies after R2 delete. */
+async function headPublicCdnUrl(ref) {
+  const base = String(config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
+  if (!base || !isPublicBucketRef(ref) || !ref.key) return null;
+  const cdnUrl = `${base}/${String(ref.key).replace(/^\//, '')}`;
+  try {
+    const res = await axios.head(cdnUrl, { timeout: 8000, validateStatus: () => true });
+    return { cdn_url: cdnUrl, cdn_status: res.status };
+  } catch (err) {
+    return { cdn_url: cdnUrl, cdn_error: err.message };
+  }
+}
+
+async function deleteR2RefOnce(storage, dedupe, ref, label, neverDeleteSigs = null) {
   if (!ref) return;
   const sig = refSignature(ref);
-  if (dedupe.has(sig)) return;
+  if (neverDeleteSigs && neverDeleteSigs.has(sig)) {
+    logR2AssetCleanup({
+      status: 'skipped',
+      label,
+      bucket: ref.bucket,
+      key: ref.key,
+      reason: 'current_upload_protected',
+    });
+    return;
+  }
+  if (dedupe.has(sig)) {
+    logR2AssetCleanup({
+      status: 'skipped',
+      label,
+      bucket: ref.bucket,
+      key: ref.key,
+      reason: 'already_deleted_in_batch',
+    });
+    return;
+  }
   dedupe.add(sig);
+
+  let exists = true;
+  try {
+    exists = await storage.objectExistsInBucket(ref.bucket, ref.key);
+  } catch (err) {
+    logR2AssetCleanup({
+      status: 'delete_failed',
+      label,
+      bucket: ref.bucket,
+      key: ref.key,
+      reason: 'existence_check_failed',
+      error: err.message,
+    });
+    return;
+  }
+
+  if (!exists) {
+    logR2AssetCleanup({
+      status: 'skipped',
+      label,
+      bucket: ref.bucket,
+      key: ref.key,
+      reason: 'not_in_bucket',
+    });
+    return;
+  }
+
   try {
     await storage.deleteObjectFromBucket(ref.bucket, ref.key);
+    let stillExists = false;
+    try {
+      stillExists = await storage.objectExistsInBucket(ref.bucket, ref.key);
+    } catch (verifyErr) {
+      logR2AssetCleanup({
+        status: 'delete_failed',
+        label,
+        bucket: ref.bucket,
+        key: ref.key,
+        reason: 'post_delete_verify_failed',
+        error: verifyErr.message,
+      });
+      return;
+    }
+    if (stillExists) {
+      logR2AssetCleanup({
+        status: 'delete_failed',
+        label,
+        bucket: ref.bucket,
+        key: ref.key,
+        reason: 'still_exists_after_delete',
+        resolved_bucket: resolveStorageBucketName(storage, ref.bucket),
+      });
+      return;
+    }
+    const cdnVerify = await headPublicCdnUrl(ref);
+    const deleteEvent = {
+      status: 'deleted',
+      label,
+      bucket: ref.bucket,
+      key: ref.key,
+      resolved_bucket: resolveStorageBucketName(storage, ref.bucket),
+      ...(cdnVerify?.cdn_url ? { cdn_url: cdnVerify.cdn_url } : {}),
+      ...(cdnVerify?.cdn_status != null ? { cdn_status: cdnVerify.cdn_status } : {}),
+      ...(cdnVerify?.cdn_error ? { cdn_error: cdnVerify.cdn_error } : {}),
+    };
+    if (cdnVerify?.cdn_status != null && cdnVerify.cdn_status !== 404 && cdnVerify.cdn_status !== 410) {
+      deleteEvent.cdn_cache_note =
+        'R2 object removed but CDN still returns asset; browser may also cache immutable media for up to 1 year';
+      logger.warn(`${R2_CLEANUP_LOG_TAG}: deleted from R2 but CDN still serves`, deleteEvent);
+    }
+    logR2AssetCleanup(deleteEvent);
   } catch (err) {
-    logger.warn('Failed to delete R2 object', {
+    logR2AssetCleanup({
+      status: 'delete_failed',
       label,
       bucket: ref.bucket,
       key: ref.key,
@@ -50,20 +226,40 @@ async function deleteR2RefOnce(storage, dedupe, ref, label) {
 }
 
 /**
- * Delete old object when key/bucket changed or cleared. Skips delete if replacement is not yet in R2.
+ * Delete previous object when key/bucket changed or cleared.
+ * Never deletes newRef. When the PATCH names a new key, trust it and remove the previous key.
  */
-async function deleteReplacedMediaRef(storage, dedupe, oldRef, newRef, label) {
+async function deleteReplacedMediaRef(storage, dedupe, oldRef, newRef, label, neverDeleteSigs = null) {
   if (!oldRef) return;
-  if (newRef && refSignature(oldRef) === refSignature(newRef)) return;
-  if (newRef && !(await storage.objectExistsInBucket(newRef.bucket, newRef.key))) {
-    logger.warn('Skipping R2 orphan delete — replacement object not found', {
+  if (newRef && refSignature(oldRef) === refSignature(newRef)) {
+    logR2AssetCleanup({
+      status: 'skipped',
       label,
-      old_key: oldRef.key,
-      new_key: newRef.key,
+      bucket: oldRef.bucket,
+      key: oldRef.key,
+      reason: 'unchanged_key',
+      replacement_key: newRef.key,
     });
     return;
   }
-  await deleteR2RefOnce(storage, dedupe, oldRef, label);
+  const patchConfirmsNewUpload =
+    newRef && neverDeleteSigs && neverDeleteSigs.has(refSignature(newRef));
+  if (
+    newRef &&
+    !patchConfirmsNewUpload &&
+    !(await storage.objectExistsInBucket(newRef.bucket, newRef.key))
+  ) {
+    logR2AssetCleanup({
+      status: 'skipped',
+      label,
+      bucket: oldRef.bucket,
+      key: oldRef.key,
+      reason: 'replacement_not_in_bucket',
+      replacement_key: newRef.key,
+    });
+    return;
+  }
+  await deleteR2RefOnce(storage, dedupe, oldRef, label, neverDeleteSigs);
 }
 
 function resolveField(existing, patch, field) {
@@ -76,7 +272,7 @@ function resolveField(existing, patch, field) {
  * @param {object} patch
  * @param {Array<{ keyKey: string, bucketKey?: string|null, defaultBucket?: string, label?: string }>} fields
  */
-async function cleanupReplacedFields(existing, patch, fields) {
+async function cleanupReplacedFields(existing, patch, fields, neverDeleteSigs = null) {
   if (!existing || !fields?.length || !patch || typeof patch !== 'object') return;
   const storage = StorageFactory.getProvider();
   const dedupe = new Set();
@@ -99,7 +295,14 @@ async function cleanupReplacedFields(existing, patch, fields) {
       const newBucket = bucketKey ? resolveField(existing, patch, bucketKey) : defaultBucket;
       const newKey = resolveField(existing, patch, field.keyKey);
       const newRef = normalizedMediaRef(newBucket, newKey, defaultBucket);
-      await deleteReplacedMediaRef(storage, dedupe, oldRef, newRef, field.label || field.keyKey);
+      await deleteReplacedMediaRef(
+        storage,
+        dedupe,
+        oldRef,
+        newRef,
+        field.label || field.keyKey,
+        neverDeleteSigs
+      );
     })
   );
 }
@@ -231,6 +434,156 @@ function collectWorkflowNodeAssetRefs(nodes, refs = []) {
   return refs;
 }
 
+function layerMediaSlotKey(sceneOrder, zIndex) {
+  return `${sceneOrder}:${zIndex}`;
+}
+
+/** Align with template_scenes.scene_order default: scene.scene_order || (i + 1). */
+function resolveSceneOrder(scene, sceneIndex) {
+  if (scene?.scene_order != null && scene.scene_order !== '') {
+    return Number(scene.scene_order);
+  }
+  return sceneIndex + 1;
+}
+
+function resolveLayerZIndex(layer) {
+  const z = layer?.z_index;
+  return z != null && z !== '' ? Number(z) : null;
+}
+
+/** Slot id shared by DB snapshot + PATCH (single-scene templates use z-index only). */
+function resolveLayerSlotKey(scene, sceneIndex, zIndex, sceneCount) {
+  if (sceneCount === 1) {
+    return layerMediaSlotKey('z', zIndex);
+  }
+  return layerMediaSlotKey(resolveSceneOrder(scene, sceneIndex), zIndex);
+}
+
+const LAYER_TYPES_WITH_R2_MEDIA = new Set(['video_transparent_webm', 'video_webm']);
+
+/** DB layer row or PATCH layer — only the layer's own asset_key (not nested layer_config). */
+function layerRowMediaRef(layer) {
+  if (!layer || typeof layer !== 'object') return null;
+  return normalizedMediaRef(layer.asset_bucket || layer.bucket, layer.asset_key || layer.key);
+}
+
+/**
+ * Per timeline slot, the media ref PATCH assigns (null = cleared).
+ * Every video_transparent_webm / video_webm row in scenes is explicit.
+ */
+function buildLayerSlotMapFromScenesPayload(scenes) {
+  const map = new Map();
+  if (!Array.isArray(scenes)) return map;
+  const sceneCount = scenes.length;
+  scenes.forEach((scene, sceneIndex) => {
+    (scene.layers || []).forEach((layer) => {
+      if (!LAYER_TYPES_WITH_R2_MEDIA.has(layer.layer_type)) return;
+      const zIndex = resolveLayerZIndex(layer);
+      if (zIndex == null) return;
+      const slot = resolveLayerSlotKey(scene, sceneIndex, zIndex, sceneCount);
+      const ref = layerRowMediaRef(layer);
+      map.set(slot, { explicit: true, ref: ref || null });
+    });
+  });
+  return map;
+}
+
+/** DB snapshot slots for layers that currently hold an asset key. */
+function buildLayerSlotMapFromDbLayers(scenes, layers) {
+  const map = new Map();
+  if (!Array.isArray(scenes) || !Array.isArray(layers) || !scenes.length) return map;
+  const sceneCount = scenes.length;
+  const orderBySceneId = new Map(scenes.map((s) => [s.scene_id, s.scene_order]));
+  for (const layer of layers) {
+    if (!LAYER_TYPES_WITH_R2_MEDIA.has(layer.layer_type)) continue;
+    const sceneOrder = orderBySceneId.get(layer.scene_id);
+    if (sceneOrder == null) continue;
+    const zIndex = resolveLayerZIndex(layer);
+    if (zIndex == null) continue;
+    const ref = layerRowMediaRef(layer);
+    if (!ref) continue;
+    const sceneIndex = scenes.findIndex((s) => s.scene_id === layer.scene_id);
+    const slot = resolveLayerSlotKey(
+      { scene_order: sceneOrder },
+      sceneIndex >= 0 ? sceneIndex : 0,
+      zIndex,
+      sceneCount
+    );
+    map.set(slot, ref);
+  }
+  return map;
+}
+
+/**
+ * Replace layer media per slot: delete previous key only when PATCH names a different key (or null).
+ * Never uses global set-diff (which deleted newly uploaded keys on follow-up saves).
+ */
+async function cleanupReplacedLayerAssetsBySlot(oldSlotMap, newSlotMap, neverDeleteSigs = null) {
+  if (!oldSlotMap?.size) return;
+  const storage = StorageFactory.getProvider();
+  const dedupe = new Set();
+
+  logger.info('R2 layer cleanup: comparing slots', {
+    tag: R2_CLEANUP_LOG_TAG,
+    old_slot_count: oldSlotMap.size,
+    patch_slot_count: newSlotMap?.size ?? 0,
+    patch_slots: [...(newSlotMap || new Map()).keys()].join(','),
+  });
+
+  for (const [slot, oldRef] of oldSlotMap.entries()) {
+    let entry = newSlotMap.get(slot);
+    if (!entry?.explicit) {
+      const zPart = slot.split(':')[1];
+      if (zPart) {
+        for (const [newSlot, newEntry] of newSlotMap.entries()) {
+          if (newEntry?.explicit && newSlot.endsWith(`:${zPart}`)) {
+            entry = newEntry;
+            break;
+          }
+        }
+      }
+    }
+    if (!entry?.explicit) {
+      logR2AssetCleanup({
+        status: 'skipped',
+        label: 'template_layer_asset',
+        bucket: oldRef.bucket,
+        key: oldRef.key,
+        reason: 'layer_slot_not_in_patch',
+        replacement_key: slot,
+        patch_slots: [...newSlotMap.keys()].join(','),
+      });
+      continue;
+    }
+    const newRef = entry.ref;
+    if (newRef && refSignature(newRef) === refSignature(oldRef)) {
+      logR2AssetCleanup({
+        status: 'skipped',
+        label: 'template_layer_asset',
+        bucket: oldRef.bucket,
+        key: oldRef.key,
+        reason: 'unchanged_key',
+        replacement_key: newRef.key,
+      });
+      continue;
+    }
+    logger.info('R2 layer cleanup: replacing slot media', {
+      tag: R2_CLEANUP_LOG_TAG,
+      slot,
+      old_key: oldRef.key,
+      new_key: newRef?.key ?? null,
+    });
+    await deleteReplacedMediaRef(
+      storage,
+      dedupe,
+      oldRef,
+      newRef,
+      'template_layer_asset',
+      neverDeleteSigs
+    );
+  }
+}
+
 /** template_layers rows and/or scene layer payloads. */
 function collectLayerAssetRefs(layers, refs = []) {
   if (!Array.isArray(layers)) return refs;
@@ -256,17 +609,18 @@ function refsNotInSet(refs, sigSet) {
   return refs.filter((ref) => !sigSet.has(refSignature(ref)));
 }
 
-async function deleteRemovedMediaRefSet(oldRefs, newRefs, label = 'asset') {
-  const newSigs = new Set((newRefs || []).map(refSignature));
+/**
+ * Delete refs present in oldRefs but not in newRefs (same slot / JSON tree).
+ * Never deletes refs in neverDeleteSigs (current uploads from PATCH + unchanged row fields).
+ */
+async function deleteRemovedMediaRefSet(oldRefs, newRefs, label = 'asset', neverDeleteSigs = null) {
+  const newSigs = buildRefSignatureSet(newRefs);
   const removed = refsNotInSet(oldRefs || [], newSigs);
   if (!removed.length) return;
   const storage = StorageFactory.getProvider();
   const dedupe = new Set();
   await Promise.all(
-    removed.map(async (ref) => {
-      if (!(await storage.objectExistsInBucket(ref.bucket, ref.key))) return;
-      await deleteR2RefOnce(storage, dedupe, ref, label);
-    })
+    removed.map(async (ref) => deleteR2RefOnce(storage, dedupe, ref, label, neverDeleteSigs))
   );
 }
 
@@ -311,24 +665,96 @@ async function cleanupCharacterThumbChange(existing, patch) {
   );
 }
 
-async function cleanupRemovedJsonAssets(oldJson, newJson, label = 'json_asset') {
+async function cleanupRemovedJsonAssets(oldJson, newJson, label = 'json_asset', neverDeleteSigs = null) {
   if (newJson === undefined) return;
   const oldRefs = collectAssetRefsFromJson(parseJsonValue(oldJson));
   const newRefs = collectAssetRefsFromJson(parseJsonValue(newJson));
-  const newSigs = new Set(newRefs.map(refSignature));
+  const newSigs = buildRefSignatureSet(newRefs);
   const removed = oldRefs.filter((ref) => !newSigs.has(refSignature(ref)));
   if (!removed.length) return;
   const storage = StorageFactory.getProvider();
   const dedupe = new Set();
   await Promise.all(
-    removed.map(async (ref) => {
-      if (!(await storage.objectExistsInBucket(ref.bucket, ref.key))) return;
-      await deleteR2RefOnce(storage, dedupe, ref, label);
-    })
+    removed.map(async (ref) => deleteR2RefOnce(storage, dedupe, ref, label, neverDeleteSigs))
   );
 }
 
+/** Template row media columns — keys in PATCH are current uploads; omitted columns keep existing refs. */
+const TEMPLATE_ROW_MEDIA_FIELD_DEFS = [
+  { keyKey: 'cf_r2_key', bucketKey: 'cf_r2_bucket', defaultBucket: 'public' },
+  { keyKey: 'thumb_frame_asset_key', bucketKey: 'thumb_frame_bucket', defaultBucket: 'public' },
+  { keyKey: 'color_video_key', bucketKey: 'color_video_bucket', defaultBucket: 'public' },
+  { keyKey: 'mask_video_key', bucketKey: 'mask_video_bucket', defaultBucket: 'public' },
+  {
+    keyKey: 'transparent_webm_video_key',
+    bucketKey: 'transparent_webm_video_bucket',
+    defaultBucket: 'public',
+  },
+  { keyKey: 'bodymovin_json_key', bucketKey: 'bodymovin_json_bucket', defaultBucket: 'public' },
+];
+
+/**
+ * Signatures that must not be deleted: new keys from PATCH + unchanged template-row / JSON refs.
+ * Does not read DB (avoids master/slave lag blocking legitimate orphan deletes).
+ */
+function buildNeverDeleteSigsFromPatch(patch, existing = null) {
+  const refs = [];
+  if (!patch || typeof patch !== 'object') {
+    return buildRefSignatureSet(refs);
+  }
+
+  for (const field of TEMPLATE_ROW_MEDIA_FIELD_DEFS) {
+    const keyInPatch = Object.prototype.hasOwnProperty.call(patch, field.keyKey);
+    const bucketInPatch =
+      field.bucketKey && Object.prototype.hasOwnProperty.call(patch, field.bucketKey);
+    if (keyInPatch || bucketInPatch) {
+      const bucket = bucketInPatch
+        ? patch[field.bucketKey]
+        : (existing?.[field.bucketKey] ?? field.defaultBucket);
+      const key = keyInPatch ? patch[field.keyKey] : existing?.[field.keyKey];
+      const ref = normalizedMediaRef(bucket, key, field.defaultBucket);
+      if (ref) refs.push(ref);
+    } else if (existing) {
+      const ref = normalizedMediaRef(
+        existing[field.bucketKey],
+        existing[field.keyKey],
+        field.defaultBucket
+      );
+      if (ref) refs.push(ref);
+    }
+  }
+
+  if (Array.isArray(patch.scenes)) {
+    const layerSlots = buildLayerSlotMapFromScenesPayload(patch.scenes);
+    for (const entry of layerSlots.values()) {
+      if (entry.ref) refs.push(entry.ref);
+    }
+  }
+
+  if (patch.custom_text_input_fields !== undefined) {
+    collectAssetRefsFromJson(parseJsonValue(patch.custom_text_input_fields), refs);
+  } else if (existing?.custom_text_input_fields) {
+    collectAssetRefsFromJson(parseJsonValue(existing.custom_text_input_fields), refs);
+  }
+
+  if (patch.image_input_fields_json !== undefined) {
+    collectAssetRefsFromJson(parseJsonValue(patch.image_input_fields_json), refs);
+  } else if (existing?.image_input_fields_json) {
+    collectAssetRefsFromJson(parseJsonValue(existing.image_input_fields_json), refs);
+  }
+
+  if (patch.clips !== undefined) {
+    collectClipWorkflowAssetRefs(patch.clips || [], refs);
+  }
+
+  return buildRefSignatureSet(refs);
+}
+
 module.exports = {
+  logR2AssetCleanup,
+  runWithR2CleanupLog,
+  refSignature,
+  buildRefSignatureSet,
   normalizeStorageObjectKey,
   normalizedMediaRef,
   deleteReplacedMediaRef,
@@ -341,8 +767,18 @@ module.exports = {
   collectClipWorkflowAssetRefs,
   collectWorkflowNodeAssetRefs,
   collectLayerAssetRefs,
+  layerMediaSlotKey,
+  layerRowMediaRef,
+  resolveSceneOrder,
+  resolveLayerZIndex,
+  resolveLayerSlotKey,
+  buildLayerSlotMapFromScenesPayload,
+  buildLayerSlotMapFromDbLayers,
+  cleanupReplacedLayerAssetsBySlot,
   deleteRemovedMediaRefSet,
   cleanupCharacterThumbChange,
   cleanupRemovedJsonAssets,
   parseJsonValue,
+  TEMPLATE_ROW_MEDIA_FIELD_DEFS,
+  buildNeverDeleteSigsFromPatch,
 };

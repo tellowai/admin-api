@@ -14,11 +14,15 @@ const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const {
   cleanupReplacedFields,
+  runWithR2CleanupLog,
   cleanupRemovedJsonAssets,
   collectClipWorkflowAssetRefs,
   collectWorkflowNodeAssetRefs,
-  collectLayerAssetRefs,
+  buildLayerSlotMapFromDbLayers,
+  buildLayerSlotMapFromScenesPayload,
+  cleanupReplacedLayerAssetsBySlot,
   deleteRemovedMediaRefSet,
+  buildNeverDeleteSigsFromPatch,
 } = require('../../os2/utils/r2-orphan-cleanup.util');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
@@ -131,6 +135,32 @@ async function mergeHubDownloadsLast7dUtcIntoTemplates(templates) {
  * @param {Object} templateData - Payload merged for create/update (mutated)
  * @param {Object} [existingTemplate={}] - Existing row (PATCH); omit for create
  */
+const VIDEO_TRANSPARENT_WEBM_LAYER_TYPE = 'video_transparent_webm';
+
+/** True when payload scenes include at least one video_transparent_webm layer with asset_key. */
+function templatePayloadHasSceneWebmLayers(templateData) {
+  const scenes = templateData?.scenes;
+  if (!Array.isArray(scenes) || scenes.length === 0) return false;
+  return scenes.some((scene) => {
+    const layers = scene?.layers;
+    if (!Array.isArray(layers)) return false;
+    return layers.some((layer) => {
+      const layerType = layer.layer_type || layer.type;
+      const key = layer.asset_key != null ? String(layer.asset_key).trim() : '';
+      return layerType === VIDEO_TRANSPARENT_WEBM_LAYER_TYPE && key !== '';
+    });
+  });
+}
+
+/**
+ * V2 timeline: WebM is stored on scene layers. Do not persist legacy templates.transparent_webm_video_*.
+ */
+function clearTemplateRowWebmWhenScenesHaveWebm(templateData) {
+  if (!templateData || !templatePayloadHasSceneWebmLayers(templateData)) return;
+  templateData.transparent_webm_video_key = null;
+  templateData.transparent_webm_video_bucket = null;
+}
+
 function syncThumbFrameWithCfR2ForImageTemplate(templateData, existingTemplate = {}) {
   const outputType = templateData.template_output_type !== undefined
     ? templateData.template_output_type
@@ -165,26 +195,46 @@ function normalizeStorageObjectKey(key) {
   return k || null;
 }
 
+const TEMPLATE_ROW_MEDIA_FIELDS = [
+  { keyKey: 'cf_r2_key', bucketKey: 'cf_r2_bucket', defaultBucket: 'public', label: 'cf_r2' },
+  {
+    keyKey: 'thumb_frame_asset_key',
+    bucketKey: 'thumb_frame_bucket',
+    defaultBucket: 'public',
+    label: 'thumb_frame',
+  },
+  { keyKey: 'color_video_key', bucketKey: 'color_video_bucket', defaultBucket: 'public', label: 'color_video' },
+  { keyKey: 'mask_video_key', bucketKey: 'mask_video_bucket', defaultBucket: 'public', label: 'mask_video' },
+  {
+    keyKey: 'transparent_webm_video_key',
+    bucketKey: 'transparent_webm_video_bucket',
+    defaultBucket: 'public',
+    label: 'transparent_webm_video',
+  },
+  {
+    keyKey: 'bodymovin_json_key',
+    bucketKey: 'bodymovin_json_bucket',
+    defaultBucket: 'public',
+    label: 'bodymovin_json',
+  },
+];
+
 /**
  * After a successful DB update, remove replaced-or-cleared preview assets from R2.
  */
-async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData) {
+async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs) {
   try {
-    await cleanupReplacedFields(existingTemplate, templateData, [
-      { keyKey: 'cf_r2_key', bucketKey: 'cf_r2_bucket', label: 'cf_r2' },
-      { keyKey: 'thumb_frame_asset_key', bucketKey: 'thumb_frame_bucket', label: 'thumb_frame' },
-      { keyKey: 'color_video_key', bucketKey: 'color_video_bucket', label: 'color_video' },
-      { keyKey: 'mask_video_key', bucketKey: 'mask_video_bucket', label: 'mask_video' },
-      {
-        keyKey: 'transparent_webm_video_key',
-        bucketKey: 'transparent_webm_video_bucket',
-        label: 'transparent_webm_video',
-      },
-      { keyKey: 'bodymovin_json_key', bucketKey: 'bodymovin_json_bucket', label: 'bodymovin_json' },
-    ]);
+    await cleanupReplacedFields(existingTemplate, templateData, TEMPLATE_ROW_MEDIA_FIELDS, neverDeleteSigs);
   } catch (err) {
     logger.warn('deleteOrphanedTemplateR2MediaAfterUpdate failed', { error: err.message });
   }
+}
+
+async function snapshotTemplateLayerAssetsBySlot(templateId) {
+  const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+  if (!scenes.length) return new Map();
+  const layers = await TemplateLayersModel.getLayersBySceneIds(scenes.map((s) => s.scene_id));
+  return buildLayerSlotMapFromDbLayers(scenes, layers);
 }
 
 async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
@@ -198,14 +248,26 @@ async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
   }
 
   if (templateData.scenes !== undefined) {
-    const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
-    const sceneIds = scenes.map((s) => s.scene_id);
-    snapshot.oldLayerRefs = collectLayerAssetRefs(
-      sceneIds.length ? await TemplateLayersModel.getLayersBySceneIds(sceneIds) : []
-    );
+    snapshot.oldLayerSlotMap = await snapshotTemplateLayerAssetsBySlot(templateId);
+    // Capture PATCH layer slots before updateTemplate() deletes templateData.scenes.
+    snapshot.newLayerSlotMap = buildLayerSlotMapFromScenesPayload(templateData.scenes);
+    const summarizeSlots = (slotMap) =>
+      [...(slotMap || new Map()).entries()].map(([slot, entry]) => {
+        const ref = entry?.ref ?? entry;
+        return { slot, key: ref?.key ?? null };
+      });
+    logger.info('R2 layer cleanup: patch vs db snapshot', {
+      tag: 'R2 asset cleanup',
+      templateId,
+      scenes_in_patch: true,
+      patch_scene_count: templateData.scenes?.length ?? 0,
+      old_slots: summarizeSlots(snapshot.oldLayerSlotMap),
+      new_slots: summarizeSlots(snapshot.newLayerSlotMap),
+    });
   }
 
   if (templateData.clips !== undefined) {
+    snapshot.patchClips = templateData.clips;
     const oldClips = (await TemplateModel.getTemplateAiClips(templateId)) || [];
     const visualClips = oldClips.filter((c) => c.asset_type === 'image' || c.asset_type === 'video');
     snapshot.oldClipWorkflowRefs = collectClipWorkflowAssetRefs(visualClips);
@@ -218,36 +280,67 @@ async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
   return snapshot;
 }
 
-async function cleanupExtendedTemplateR2MediaAfterUpdate(existingTemplate, templateData, snapshot) {
+async function cleanupExtendedTemplateR2MediaAfterUpdate(
+  existingTemplate,
+  templateData,
+  snapshot,
+  neverDeleteSigs,
+  templateId
+) {
   if (!snapshot) return;
   try {
     if (snapshot.customTextFields) {
       await cleanupRemovedJsonAssets(
         existingTemplate.custom_text_input_fields,
         templateData.custom_text_input_fields,
-        'template_custom_field_ref'
+        'template_custom_field_ref',
+        neverDeleteSigs
       );
     }
     if (snapshot.imageInputFields) {
       await cleanupRemovedJsonAssets(
         existingTemplate.image_input_fields_json,
         templateData.image_input_fields_json,
-        'template_image_input_ref'
+        'template_image_input_ref',
+        neverDeleteSigs
       );
     }
-    if (snapshot.oldLayerRefs) {
-      const newLayerRefs = [];
-      if (Array.isArray(templateData.scenes)) {
-        for (const scene of templateData.scenes) {
-          collectLayerAssetRefs(scene.layers || [], newLayerRefs);
-        }
+    if (snapshot.oldLayerSlotMap) {
+      const newLayerSlotMap = snapshot.newLayerSlotMap || new Map();
+      if (!newLayerSlotMap.size && snapshot.oldLayerSlotMap.size) {
+        logger.warn('R2 layer cleanup: empty patch slot map after update (scenes stripped from patch?)', {
+          tag: 'R2 asset cleanup',
+          templateId,
+          old_slot_count: snapshot.oldLayerSlotMap.size,
+          patch_slots_from_snapshot: [...newLayerSlotMap.keys()].join(','),
+        });
       }
-      await deleteRemovedMediaRefSet(snapshot.oldLayerRefs, newLayerRefs, 'template_layer_asset');
+      await cleanupReplacedLayerAssetsBySlot(
+        snapshot.oldLayerSlotMap,
+        newLayerSlotMap,
+        neverDeleteSigs
+      );
     }
     if (snapshot.oldClipWorkflowRefs || snapshot.oldWorkflowNodeRefs) {
-      const newClipRefs = collectClipWorkflowAssetRefs(templateData.clips || []);
-      await deleteRemovedMediaRefSet(snapshot.oldClipWorkflowRefs || [], newClipRefs, 'template_clip_asset');
-      await deleteRemovedMediaRefSet(snapshot.oldWorkflowNodeRefs || [], [], 'template_workflow_node_asset');
+      const newClipRefs = collectClipWorkflowAssetRefs(snapshot.patchClips || []);
+      await deleteRemovedMediaRefSet(
+        snapshot.oldClipWorkflowRefs || [],
+        newClipRefs,
+        'template_clip_asset',
+        neverDeleteSigs
+      );
+
+      const clipsAfterUpdate = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      const wfIds = clipsAfterUpdate.map((c) => c.wf_id).filter(Boolean);
+      const newWorkflowNodeRefs = wfIds.length
+        ? collectWorkflowNodeAssetRefs(await WorkflowNodeModel.getNodesByWorkflowIds(wfIds))
+        : [];
+      await deleteRemovedMediaRefSet(
+        snapshot.oldWorkflowNodeRefs || [],
+        newWorkflowNodeRefs,
+        'template_workflow_node_asset',
+        neverDeleteSigs
+      );
     }
   } catch (err) {
     logger.warn('cleanupExtendedTemplateR2MediaAfterUpdate failed', { error: err.message });
@@ -1945,6 +2038,7 @@ async function processNewFieldsWithNicheSlug(customTextInputFields, nicheSlug) {
 exports.createTemplate = async function (req, res) {
   try {
     const templateData = req.validatedBody;
+    clearTemplateRowWebmWhenScenesHaveWebm(templateData);
     // Generate UUID for template_id
     templateData.template_id = uuidv7();
     // Default workflow builder to v2
@@ -3392,6 +3486,7 @@ exports.updateTemplate = async function (req, res) {
   try {
     const { templateId } = req.params;
     const templateData = req.validatedBody;
+    clearTemplateRowWebmWhenScenesHaveWebm(templateData);
 
     if (isClipMetadataOnlyClips(templateData.clips)) {
       await TemplateModel.updateTemplateClipMetadata(templateId, templateData.clips);
@@ -3872,6 +3967,8 @@ exports.updateTemplate = async function (req, res) {
     const platformPricingPayload = templateData.platform_pricing;
     delete templateData.platform_pricing;
     const r2CleanupSnapshot = await snapshotTemplateR2MediaForUpdate(templateId, templateData);
+    // Build before updateTemplate — model deletes templateData.scenes / .clips for SQL.
+    const neverDeleteSigs = buildNeverDeleteSigsFromPatch(templateData, existingTemplate);
 
     let updated;
     if (hasClips) {
@@ -3907,8 +4004,16 @@ exports.updateTemplate = async function (req, res) {
       });
     }
 
-    await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData);
-    await cleanupExtendedTemplateR2MediaAfterUpdate(existingTemplate, templateData, r2CleanupSnapshot);
+    const r2AssetCleanup = await runWithR2CleanupLog(async () => {
+      await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs);
+      await cleanupExtendedTemplateR2MediaAfterUpdate(
+        existingTemplate,
+        templateData,
+        r2CleanupSnapshot,
+        neverDeleteSigs,
+        templateId
+      );
+    });
 
     if (surfaceToArchiveAfterIsEffectsChange) {
       try {
@@ -3956,10 +4061,15 @@ exports.updateTemplate = async function (req, res) {
     const template = await TemplateModel.getTemplateById(templateId);
     await enrichAdminTemplateDetailForGetResponse(template);
 
-    return res.status(HTTP_STATUS_CODES.OK).json({
+    const responseBody = {
       message: req.t('template:TEMPLATE_UPDATED'),
       data: template
-    });
+    };
+    if (r2AssetCleanup.length) {
+      responseBody.r2_asset_cleanup = r2AssetCleanup;
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json(responseBody);
 
   } catch (error) {
     logger.error('Error updating template:', { error: error.message, stack: error.stack });

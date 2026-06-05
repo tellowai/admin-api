@@ -8,6 +8,7 @@ const WorkflowModel = require('../../workflow-builder/models/workflow.model');
 const TemplateScenesModel = require('./template.scenes.model');
 const TemplateLayersModel = require('./template.layers.model');
 const ScriptFontModel = require('../../script-fonts/models/script.font.model');
+const { buildPublicAssetUrl } = require('../utils/public.asset.url');
 
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
 const TEMPLATE_WORKFLOW_TYPE_ENUM = ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'];
@@ -211,7 +212,8 @@ exports.getTemplateGenerationMeta = async function (templateId, options = {}) {
       if (!layersByScene[layer.scene_id]) layersByScene[layer.scene_id] = [];
 
       if (layer.asset_key) {
-        layer.asset_url = `${config.os2.r2.public.bucketUrl}/${layer.asset_key}`;
+        const cdnHints = [template.cf_r2_url, template.r2_url, template.thumb_frame_url].filter(Boolean);
+        layer.asset_url = buildPublicAssetUrl(layer.asset_key, cdnHints);
       }
 
       layersByScene[layer.scene_id].push(layer);
@@ -834,7 +836,8 @@ exports.getTemplateById = async function (templateId) {
       if (!layersByScene[layer.scene_id]) layersByScene[layer.scene_id] = [];
 
       if (layer.asset_key) {
-        layer.asset_url = `${config.os2.r2.public.bucketUrl}/${layer.asset_key}`;
+        const cdnHints = [template.cf_r2_url, template.r2_url, template.thumb_frame_url].filter(Boolean);
+        layer.asset_url = buildPublicAssetUrl(layer.asset_key, cdnHints);
       }
 
       layersByScene[layer.scene_id].push(layer);
