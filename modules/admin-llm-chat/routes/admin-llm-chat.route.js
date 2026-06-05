@@ -12,6 +12,7 @@ const AttachmentCtrl = require('../controllers/attachment.controller');
 const DigestCtrl = require('../controllers/digest.controller');
 const HealthCtrl = require('../controllers/health.controller');
 const ComplianceCtrl = require('../controllers/compliance.controller');
+const MemoryCtrl = require('../controllers/memory.controller');
 const Validator = require('../validators/admin-llm-chat.validator');
 
 const perm = PermissionMiddleware.hasPermission(CONSTANTS.PERMISSION_CODE);
@@ -40,6 +41,15 @@ module.exports = function (app) {
 
   app.get(prefix + '/business-context', admin, perm, ChatMiddleware.requireEnabled, DigestCtrl.getBusinessContext);
   app.patch(prefix + '/business-context', admin, perm, ChatMiddleware.requireEnabled, Validator.validateBusinessContext, DigestCtrl.patchBusinessContext);
+
+  app.get(prefix + '/memories', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.listMemories);
+  app.get(prefix + '/memories/episodic/list', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.listEpisodicMemories);
+  app.delete(prefix + '/memories/episodic/:episodicId', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.deleteEpisodicMemory);
+  app.get(prefix + '/memories/profile', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.getProfile);
+  app.patch(prefix + '/memories/profile', admin, perm, ChatMiddleware.requireEnabled, Validator.validateUpdateProfile, MemoryCtrl.updateProfile);
+  app.get(prefix + '/memories/:memoryKey', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.getMemory);
+  app.put(prefix + '/memories/:memoryKey', admin, perm, ChatMiddleware.requireEnabled, Validator.validateUpsertMemory, MemoryCtrl.upsertMemory);
+  app.delete(prefix + '/memories/:memoryKey', admin, perm, ChatMiddleware.requireEnabled, MemoryCtrl.deleteMemory);
 
   app.post(prefix + '/internal/digest', DigestHmac.verifyDigestHmac, Validator.validateDigest, DigestCtrl.runDigest);
 
