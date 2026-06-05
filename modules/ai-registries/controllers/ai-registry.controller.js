@@ -8,6 +8,7 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const { publishNewAdminActivityLog } = require('../../core/controllers/activitylog.controller');
 const config = require('../../../config/config');
 const aiRegistryExport = require('../services/ai-registry-export.service');
+const { cleanupReplacedFields } = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * Extract versioning-relevant part of parameter_schema (property keys, types, required, default, enum, object/oneOf/array structure).
@@ -125,6 +126,33 @@ function ioDefinitionsVersioningDiff(incomingList, existingList) {
     return sorted.map(i => ioDefVersioningRelevant(i));
   };
   return JSON.stringify(scrub(incomingList)) !== JSON.stringify(scrub(existingList));
+}
+
+/**
+ * True when an active model needs a version clone (parameter_schema / IO structure only).
+ * Circuit breaker and fallback config never trigger a version bump.
+ * @param {Object} existingModel
+ * @param {Object} updateData
+ * @param {Array|undefined} incomingIoDefinitions
+ * @param {number|string} amrId
+ * @returns {Promise<boolean>}
+ */
+async function hasStructuralVersioningChange(existingModel, updateData, incomingIoDefinitions, amrId) {
+  if (updateData.parameter_schema) {
+    const existingParsed = typeof existingModel.parameter_schema === 'string'
+      ? (() => { try { return JSON.parse(existingModel.parameter_schema); } catch (e) { return {}; } })()
+      : (existingModel.parameter_schema || {});
+    if (parameterSchemaVersioningDiff(updateData.parameter_schema, existingParsed)) {
+      return true;
+    }
+  }
+  if (incomingIoDefinitions) {
+    const existingIos = await aiRegistryModel.getIoDefinitionsByModelId(amrId);
+    if (ioDefinitionsVersioningDiff(incomingIoDefinitions, existingIos)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -609,31 +637,19 @@ exports.update = async function (req, res) {
     delete updateData.io_definitions;
 
     // --- VERSIONING CHECK ---
+    // Circuit/fallback are operational config — never clone a new model version for those alone.
+    // Versioning applies only when parameter_schema or io_definitions are in the request and structurally changed.
     let needsVersioning = false;
+    const touchesStructuralPayload =
+      updateData.parameter_schema != null || incomingIoDefinitions != null;
 
-    // Versioning only applies if the model is already ACTIVE. 
-    // Draft models can change params/IO without bumping version.
-    if (existingModel.status === 'active') {
-
-      // 1. Check Parameter Schema change (versioning only for structural: keys, types, required, default, enum, object/oneOf)
-      // Title, description, UI widget config, validation constraints → direct update, no version bump
-      if (updateData.parameter_schema) {
-        const existingParsed = typeof existingModel.parameter_schema === 'string'
-          ? (() => { try { return JSON.parse(existingModel.parameter_schema); } catch (e) { return {}; } })()
-          : (existingModel.parameter_schema || {});
-        if (parameterSchemaVersioningDiff(updateData.parameter_schema, existingParsed)) {
-          needsVersioning = true;
-        }
-      }
-
-      // 2. Check IO Definition change (versioning only for name, direction, amst_id, is_required, is_list, default_value, add/remove)
-      // Label, description, constraints, sort_order → direct update, no version bump
-      if (!needsVersioning && incomingIoDefinitions) {
-        const existingIos = await aiRegistryModel.getIoDefinitionsByModelId(amrId);
-        if (ioDefinitionsVersioningDiff(incomingIoDefinitions, existingIos)) {
-          needsVersioning = true;
-        }
-      }
+    if (existingModel.status === 'active' && touchesStructuralPayload) {
+      needsVersioning = await hasStructuralVersioningChange(
+        existingModel,
+        updateData,
+        incomingIoDefinitions,
+        amrId
+      );
     }
 
     if (needsVersioning) {
@@ -777,6 +793,12 @@ exports.updateStatus = async function (req, res) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:AI_MODEL_NOT_FOUND') || 'AI Model not found' });
     }
 
+    if (status === 'active' && model.status === 'deprecated') {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).send({
+        message: req.t('ai_model:CANNOT_ACTIVATE_DEPRECATED') || 'Deprecated models cannot be activated.'
+      });
+    }
+
     await aiRegistryModel.updateAiModel(amrId, { status });
     await publishNewAdminActivityLog({
       adminUserId: req.user.userId,
@@ -855,7 +877,21 @@ exports.updateProvider = async function (req, res) {
     delete updateData.updated_at;
     delete updateData.provider_logo_url; // computed from provider_logo_key/bucket, not a DB column
 
+    const existing = await aiRegistryModel.getProviderById(ampId);
+    if (!existing) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).send({ message: req.t('ai_model:PROVIDER_NOT_FOUND') || 'Provider not found' });
+    }
+
     await aiRegistryModel.updateProvider(ampId, updateData);
+
+    await cleanupReplacedFields(existing, updateData, [
+      {
+        keyKey: 'provider_logo_key',
+        bucketKey: 'provider_logo_bucket',
+        label: 'provider_logo',
+      },
+    ]);
+
     const updateKeys = Object.keys(updateData);
     const isStatusOnly = updateKeys.length === 1 && (Object.prototype.hasOwnProperty.call(updateData, 'is_active') || Object.prototype.hasOwnProperty.call(updateData, 'status') || Object.prototype.hasOwnProperty.call(updateData, 'circuit_state'));
     await publishNewAdminActivityLog({

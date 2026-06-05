@@ -1,6 +1,7 @@
 'use strict';
 
 const mysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const { slaveClickhouse } = require('../../../config/lib/clickhouse');
 
 /**
  * Get all generation_node_executions for a media_generation_id. No joins.
@@ -68,4 +69,84 @@ exports.listTemplateAiClipsByTemplateId = async function (templateId) {
   `;
   const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
   return rows || [];
+};
+
+/**
+ * Template custom text / input field definitions for admin timeline labels.
+ * @param {string} templateId
+ * @returns {Promise<Array<Object>|null>}
+ */
+exports.getTemplateUserInputFields = async function (templateId) {
+  if (!templateId) return null;
+  const query = `
+    SELECT custom_text_input_fields
+    FROM templates
+    WHERE template_id = ?
+    LIMIT 1
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  if (!rows || !rows[0]) return null;
+  let fields = rows[0].custom_text_input_fields;
+  if (fields == null) return null;
+  if (typeof fields === 'string') {
+    try {
+      fields = JSON.parse(fields);
+    } catch (_) {
+      return null;
+    }
+  }
+  return Array.isArray(fields) ? fields : null;
+};
+
+async function getGenerationAuditAdditionalData(mediaGenerationId) {
+  const id = mediaGenerationId != null ? String(mediaGenerationId).trim() : '';
+  if (!id) return null;
+
+  const esc = (s) => String(s).replace(/'/g, "''");
+  const query = `
+    SELECT additional_data
+    FROM resource_generations
+    WHERE resource_generation_id = '${esc(id)}'
+    LIMIT 1
+  `;
+  const result = await slaveClickhouse.querying(query, { dataObjects: true });
+  const raw = result.data?.[0]?.additional_data;
+  if (raw == null || raw === '') return null;
+
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+  return typeof raw === 'object' ? raw : null;
+}
+
+/**
+ * User-submitted custom_text_input_fields for one generation (from resource_generations audit blob).
+ * @param {string} mediaGenerationId
+ * @returns {Promise<Array<Object>>}
+ */
+exports.getGenerationCustomTextInputFields = async function (mediaGenerationId) {
+  const data = await getGenerationAuditAdditionalData(mediaGenerationId);
+  if (!data) return [];
+
+  const fields = data.custom_text_input_fields;
+  if (Array.isArray(fields)) return fields;
+  if (fields && typeof fields === 'object') return Object.values(fields);
+  return [];
+};
+
+/**
+ * User-uploaded assets at generation time (from resource_generations.additional_data.uploaded_assets).
+ * @param {string} mediaGenerationId
+ * @returns {Promise<Array<Object>>}
+ */
+exports.getGenerationUploadedAssets = async function (mediaGenerationId) {
+  const data = await getGenerationAuditAdditionalData(mediaGenerationId);
+  if (!data) return [];
+
+  const assets = data.uploaded_assets;
+  return Array.isArray(assets) ? assets : [];
 };

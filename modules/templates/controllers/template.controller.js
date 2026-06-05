@@ -12,6 +12,14 @@ const TemplateErrorHandler = require('../middlewares/template.error.handler');
 const PaginationCtrl = require('../../core/controllers/pagination.controller');
 const logger = require('../../../config/lib/logger');
 const StorageFactory = require('../../os2/providers/storage.factory');
+const {
+  cleanupReplacedFields,
+  cleanupRemovedJsonAssets,
+  collectClipWorkflowAssetRefs,
+  collectWorkflowNodeAssetRefs,
+  collectLayerAssetRefs,
+  deleteRemovedMediaRefSet,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 const { TOPICS } = require('../../core/constants/kafka.events.config');
 const kafkaCtrl = require('../../core/controllers/kafka.controller');
 const TEMPLATE_CONSTANTS = require('../constants/template.constants');
@@ -35,6 +43,9 @@ const {
   VALID_WORKFLOW_TYPES: TEMPLATE_PUBLISH_VALID_WORKFLOW_TYPES
 } = require('../services/template.workflow.publish.validation');
 const ExploreSectionItemModel = require('../../explore-sections/models/explore-section-item.model');
+const TemplateJourneyStageModel = require('../../journey-stages/models/template.journey.stage.model');
+const TemplateVariantModel = require('../models/template.variant.model');
+const { enrichTemplateListCardsUrls } = require('../utils/template.list.card.enrich');
 
 // Timeout for reading Bodymovin JSON (in milliseconds)
 const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
@@ -154,78 +165,92 @@ function normalizeStorageObjectKey(key) {
   return k || null;
 }
 
-function normalizedTemplateMediaRef(bucket, key) {
-  const k = normalizeStorageObjectKey(key);
-  if (!k) return null;
-  const b = bucket != null && String(bucket).trim() !== '' ? String(bucket).trim() : 'public';
-  return { bucket: b, key: k };
-}
-
-async function deletePriorTemplateR2ObjectOnce(storage, dedupe, oldRef, label) {
-  if (!oldRef) return;
-  const sig = `${oldRef.bucket}::${oldRef.key}`;
-  if (dedupe.has(sig)) return;
-  dedupe.add(sig);
-  try {
-    await storage.deleteObjectFromBucket(oldRef.bucket, oldRef.key);
-  } catch (err) {
-    logger.warn('Failed to delete prior template asset from R2', {
-      label,
-      bucket: oldRef.bucket,
-      key: oldRef.key,
-      error: err.message
-    });
-  }
-}
-
 /**
  * After a successful DB update, remove replaced-or-cleared preview assets from R2.
- * Uses existingTemplate + patch (templateData) to detect cf_r2 / thumb_frame changes.
  */
 async function deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData) {
   try {
-    const storage = StorageFactory.getProvider();
-    const dedupe = new Set();
-
-    const oldCf = normalizedTemplateMediaRef(existingTemplate.cf_r2_bucket, existingTemplate.cf_r2_key);
-    const newCf = normalizedTemplateMediaRef(
-      templateData.cf_r2_bucket !== undefined ? templateData.cf_r2_bucket : existingTemplate.cf_r2_bucket,
-      templateData.cf_r2_key !== undefined ? templateData.cf_r2_key : existingTemplate.cf_r2_key
-    );
-    if (oldCf && (!newCf || oldCf.bucket !== newCf.bucket || oldCf.key !== newCf.key)) {
-      if (!newCf) {
-        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldCf, 'cf_r2');
-      } else if (await storage.objectExistsInBucket(newCf.bucket, newCf.key)) {
-        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldCf, 'cf_r2');
-      } else {
-        logger.warn('Skipping cf_r2 orphan delete — replacement object not in R2', {
-          template_id: existingTemplate.template_id,
-          old_key: oldCf.key,
-          new_key: newCf.key
-        });
-      }
-    }
-
-    const oldThumb = normalizedTemplateMediaRef(existingTemplate.thumb_frame_bucket, existingTemplate.thumb_frame_asset_key);
-    const newThumb = normalizedTemplateMediaRef(
-      templateData.thumb_frame_bucket !== undefined ? templateData.thumb_frame_bucket : existingTemplate.thumb_frame_bucket,
-      templateData.thumb_frame_asset_key !== undefined ? templateData.thumb_frame_asset_key : existingTemplate.thumb_frame_asset_key
-    );
-    if (oldThumb && (!newThumb || oldThumb.bucket !== newThumb.bucket || oldThumb.key !== newThumb.key)) {
-      if (!newThumb) {
-        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldThumb, 'thumb_frame');
-      } else if (await storage.objectExistsInBucket(newThumb.bucket, newThumb.key)) {
-        await deletePriorTemplateR2ObjectOnce(storage, dedupe, oldThumb, 'thumb_frame');
-      } else {
-        logger.warn('Skipping thumb_frame orphan delete — replacement object not in R2', {
-          template_id: existingTemplate.template_id,
-          old_key: oldThumb.key,
-          new_key: newThumb.key
-        });
-      }
-    }
+    await cleanupReplacedFields(existingTemplate, templateData, [
+      { keyKey: 'cf_r2_key', bucketKey: 'cf_r2_bucket', label: 'cf_r2' },
+      { keyKey: 'thumb_frame_asset_key', bucketKey: 'thumb_frame_bucket', label: 'thumb_frame' },
+      { keyKey: 'color_video_key', bucketKey: 'color_video_bucket', label: 'color_video' },
+      { keyKey: 'mask_video_key', bucketKey: 'mask_video_bucket', label: 'mask_video' },
+      {
+        keyKey: 'transparent_webm_video_key',
+        bucketKey: 'transparent_webm_video_bucket',
+        label: 'transparent_webm_video',
+      },
+      { keyKey: 'bodymovin_json_key', bucketKey: 'bodymovin_json_bucket', label: 'bodymovin_json' },
+    ]);
   } catch (err) {
     logger.warn('deleteOrphanedTemplateR2MediaAfterUpdate failed', { error: err.message });
+  }
+}
+
+async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
+  const snapshot = {};
+
+  if (templateData.custom_text_input_fields !== undefined) {
+    snapshot.customTextFields = true;
+  }
+  if (templateData.image_input_fields_json !== undefined) {
+    snapshot.imageInputFields = true;
+  }
+
+  if (templateData.scenes !== undefined) {
+    const scenes = await TemplateScenesModel.getScenesByTemplateId(templateId);
+    const sceneIds = scenes.map((s) => s.scene_id);
+    snapshot.oldLayerRefs = collectLayerAssetRefs(
+      sceneIds.length ? await TemplateLayersModel.getLayersBySceneIds(sceneIds) : []
+    );
+  }
+
+  if (templateData.clips !== undefined) {
+    const oldClips = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+    const visualClips = oldClips.filter((c) => c.asset_type === 'image' || c.asset_type === 'video');
+    snapshot.oldClipWorkflowRefs = collectClipWorkflowAssetRefs(visualClips);
+    const wfIds = visualClips.map((c) => c.wf_id).filter(Boolean);
+    snapshot.oldWorkflowNodeRefs = wfIds.length
+      ? collectWorkflowNodeAssetRefs(await WorkflowNodeModel.getNodesByWorkflowIds(wfIds))
+      : [];
+  }
+
+  return snapshot;
+}
+
+async function cleanupExtendedTemplateR2MediaAfterUpdate(existingTemplate, templateData, snapshot) {
+  if (!snapshot) return;
+  try {
+    if (snapshot.customTextFields) {
+      await cleanupRemovedJsonAssets(
+        existingTemplate.custom_text_input_fields,
+        templateData.custom_text_input_fields,
+        'template_custom_field_ref'
+      );
+    }
+    if (snapshot.imageInputFields) {
+      await cleanupRemovedJsonAssets(
+        existingTemplate.image_input_fields_json,
+        templateData.image_input_fields_json,
+        'template_image_input_ref'
+      );
+    }
+    if (snapshot.oldLayerRefs) {
+      const newLayerRefs = [];
+      if (Array.isArray(templateData.scenes)) {
+        for (const scene of templateData.scenes) {
+          collectLayerAssetRefs(scene.layers || [], newLayerRefs);
+        }
+      }
+      await deleteRemovedMediaRefSet(snapshot.oldLayerRefs, newLayerRefs, 'template_layer_asset');
+    }
+    if (snapshot.oldClipWorkflowRefs || snapshot.oldWorkflowNodeRefs) {
+      const newClipRefs = collectClipWorkflowAssetRefs(templateData.clips || []);
+      await deleteRemovedMediaRefSet(snapshot.oldClipWorkflowRefs || [], newClipRefs, 'template_clip_asset');
+      await deleteRemovedMediaRefSet(snapshot.oldWorkflowNodeRefs || [], [], 'template_workflow_node_asset');
+    }
+  } catch (err) {
+    logger.warn('cleanupExtendedTemplateR2MediaAfterUpdate failed', { error: err.message });
   }
 }
 
@@ -537,6 +562,53 @@ function splitTemplateAiClipsForApiResponse(allClips) {
     }
   }
   return { visualClips, audioClips };
+}
+
+/**
+ * Lightweight list-card URLs for variant siblings (thumb + cf preview).
+ * @param {Object} template
+ */
+async function enrichTemplateListCardUrls(template) {
+  if (!template) return;
+  const storage = StorageFactory.getProvider();
+
+  if (template.cf_r2_key) {
+    template.r2_url = `${config.os2.r2.public.bucketUrl}/${template.cf_r2_key}`;
+  } else {
+    template.r2_url = template.cf_r2_url;
+  }
+
+  if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
+    try {
+      const isPublic =
+        template.thumb_frame_bucket === 'public' ||
+        template.thumb_frame_bucket === storage.publicBucket ||
+        template.thumb_frame_bucket === config.os2?.r2?.public?.bucket;
+
+      if (isPublic) {
+        template.thumb_frame_url = `${config.os2.r2.public.bucketUrl}/${template.thumb_frame_asset_key}`;
+      } else {
+        template.thumb_frame_url = await storage.generatePresignedDownloadUrl(
+          template.thumb_frame_asset_key,
+          { expiresIn: 3600 }
+        );
+      }
+    } catch (error) {
+      logger.error('Error generating variant sibling thumb URL:', {
+        error: error.message,
+        template_id: template.template_id
+      });
+      template.thumb_frame_url = null;
+    }
+  }
+
+  alignImageTemplateThumbWithCfR2ForResponse(template);
+}
+
+async function enrichVariantSiblingsListCards(siblings) {
+  if (!siblings?.length) return siblings;
+  await Promise.all(siblings.map((row) => enrichTemplateListCardUrls(row)));
+  return siblings;
 }
 
 /**
@@ -1087,12 +1159,83 @@ exports.getTemplate = async function (req, res) {
 
     await enrichAdminTemplateDetailForGetResponse(template);
 
+    template.journey_stage_ids = await TemplateJourneyStageModel.listStageIdsForTemplate(templateId);
+    const variantMeta = await TemplateVariantModel.getTemplateGroupMeta(templateId, { useMaster: true });
+    if (variantMeta) {
+      template.variant_label = variantMeta.variant_label ?? template.variant_label;
+    }
+    if (variantMeta?.group_id) {
+      template.group_id = variantMeta.group_id;
+      const siblingRows = await TemplateVariantModel.listTemplatesByGroupId(variantMeta.group_id, {
+        useMaster: true
+      });
+      template.variant_siblings = await enrichTemplateListCardsUrls(siblingRows);
+    } else {
+      template.variant_siblings = [];
+    }
+
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: template
     });
 
   } catch (error) {
     logger.error('Error getting template:', { error: error.message, stack: error.stack, templateId: req.params.templateId });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
+ * @api {get} /templates/:templateId/hover-card Lightweight template preview for admin hover panels
+ */
+exports.getTemplateHoverCard = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+
+    if (!templateId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        error: 'Template ID is required'
+      });
+    }
+
+    const template = await TemplateModel.getTemplateHoverCardById(templateId);
+
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    await enrichTemplateListCardUrls(template);
+
+    let nicheName = null;
+    if (template.niche_id) {
+      const niche = await NicheModel.getNicheById(template.niche_id);
+      nicheName = niche?.niche_name ?? null;
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        template_id: template.template_id,
+        template_name: template.template_name,
+        template_code: template.template_code,
+        template_output_type: template.template_output_type,
+        template_type: template.template_type,
+        template_workflow_type: template.template_workflow_type,
+        status: template.status,
+        credits: template.credits,
+        alacarte_price: template.alacarte_price,
+        niche_name: nicheName,
+        is_archived: template.archived_at != null,
+        thumb_frame_url: template.thumb_frame_url || null,
+        r2_url: template.r2_url || null
+      }
+    });
+  } catch (error) {
+    logger.error('Error getting template hover card:', {
+      error: error.message,
+      stack: error.stack,
+      templateId: req.params.templateId
+    });
     TemplateErrorHandler.handleTemplateErrors(error, res);
   }
 };
@@ -3728,6 +3871,7 @@ exports.updateTemplate = async function (req, res) {
 
     const platformPricingPayload = templateData.platform_pricing;
     delete templateData.platform_pricing;
+    const r2CleanupSnapshot = await snapshotTemplateR2MediaForUpdate(templateId, templateData);
 
     let updated;
     if (hasClips) {
@@ -3764,6 +3908,7 @@ exports.updateTemplate = async function (req, res) {
     }
 
     await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData);
+    await cleanupExtendedTemplateR2MediaAfterUpdate(existingTemplate, templateData, r2CleanupSnapshot);
 
     if (surfaceToArchiveAfterIsEffectsChange) {
       try {

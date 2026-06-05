@@ -12,6 +12,22 @@ describe('clickhouse.sql.validator', () => {
     expect(r.sql).to.include('LIMIT');
   });
 
+  it('allows UNION ALL period comparison on same whitelisted table', () => {
+    const r = validateClickHouseSql(
+      "SELECT 'current' AS period, currency, sum(total_revenue) AS revenue FROM revenue_daily_stats WHERE report_date BETWEEN '2026-05-23' AND '2026-05-29' GROUP BY currency UNION ALL SELECT 'prior' AS period, currency, sum(total_revenue) AS revenue FROM revenue_daily_stats WHERE report_date BETWEEN '2026-05-16' AND '2026-05-22' GROUP BY currency",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.sql).to.include('UNION ALL');
+    expect(r.tables).to.include('revenue_daily_stats');
+  });
+
+  it('rejects bare UNION without ALL', () => {
+    const r = validateClickHouseSql(
+      "SELECT 1 FROM revenue_daily_stats WHERE report_date >= '2026-05-01' UNION SELECT 2 FROM revenue_daily_stats WHERE report_date >= '2026-05-01'",
+    );
+    expect(r.ok).to.equal(false);
+  });
+
   it('rejects JOIN', () => {
     const r = validateClickHouseSql(
       "SELECT * FROM meta_ads_insights_daily a JOIN google_ads_insights_daily b ON a.date = b.date WHERE a.date >= '2025-01-01'",
@@ -39,6 +55,30 @@ describe('clickhouse.sql.validator', () => {
     );
     expect(r.ok).to.equal(false);
     expect(r.code).to.equal('DATE_PREDICATE_REQUIRED');
+  });
+
+  it('rejects unbounded min/max date discovery query', () => {
+    const r = validateClickHouseSql(
+      'SELECT max(date) AS latest_date, min(date) AS earliest_date, count(*) AS total_rows FROM meta_ads_insights_daily',
+    );
+    expect(r.ok).to.equal(false);
+    expect(r.code).to.equal('DATE_PREDICATE_REQUIRED');
+    expect(r.hint).to.include('get_table_date_bounds');
+  });
+
+  it('allows subquery wrapping a whitelisted table', () => {
+    const r = validateClickHouseSql(
+      "SELECT count() AS users_active FROM ( SELECT user_id, countDistinct(toDate(timestamp, 'Asia/Kolkata')) AS active_days FROM analytics_events_raw WHERE toDate(timestamp, 'Asia/Kolkata') >= '2026-05-16' AND toDate(timestamp, 'Asia/Kolkata') <= '2026-05-29' GROUP BY user_id HAVING active_days = 14 )",
+    );
+    expect(r.ok).to.equal(true);
+    expect(r.tables).to.include('analytics_events_raw');
+  });
+
+  it('allows bounded date bounds aggregate query', () => {
+    const r = validateClickHouseSql(
+      "SELECT min(date) AS earliest_date, max(date) AS latest_date, count(*) AS row_count FROM meta_ads_insights_daily WHERE date >= '2024-01-01' AND date <= '2026-05-30'",
+    );
+    expect(r.ok).to.equal(true);
   });
 
   it('auto-fixes date column on report_date tables', () => {

@@ -49,16 +49,10 @@ class TimezoneService {
     
     if (typeof startDateStrForCheck === 'string') {
       if (startDateStrForCheck.includes('T') && (startDateStrForCheck.includes('.') || startDateStrForCheck.includes('Z'))) {
-        // This is already a timestamp with timezone info, use it directly
-        const startMoment = moment(startDateStrForCheck);
-        const endMoment = moment(endDateStrForCheck);
-        
-        return {
-          start_date: startMoment.format('YYYY-MM-DD'),
-          end_date: endMoment.format('YYYY-MM-DD'),
-          start_time: startMoment.format('HH:mm:ss'),
-          end_time: endMoment.format('HH:mm:ss')
-        };
+        // Calendar date from the browser + client tz — do not parse bare ISO as server-local.
+        const startYmd = this.toCalendarYmd(startDateStrForCheck);
+        const endYmd = this.toCalendarYmd(endDateStrForCheck);
+        return this.convertToUTC(startYmd, endYmd, startTime, endTime, timezone);
       }
     }
     
@@ -300,6 +294,37 @@ class TimezoneService {
    */
   static getDefaultTimezone() {
     return 'UTC';
+  }
+
+  /**
+   * Inclusive client-calendar window as UTC bounds (00:00:00.000 first day → 23:59:59.999 last day in `tz`).
+   * Use for template analytics + any admin range that must match Generations list semantics.
+   */
+  static fullClientDayUtcFilters(startCal, endCal, tzRaw) {
+    const start = this.toCalendarYmd(startCal);
+    const end = this.toCalendarYmd(endCal);
+    const tz = this.normalizeTimezoneAlias(tzRaw || this.getDefaultTimezone());
+    const utc = this.convertToUTC(start, end, '00:00:00', '23:59:59', tz);
+    const { rangeStartUtc, rangeEndUtc } = this.utcRangeForClientCalendar(start, end, tz);
+    return {
+      ...utc,
+      client_calendar_start: start,
+      client_calendar_end: end,
+      tz,
+      rangeStartUtc,
+      rangeEndUtc
+    };
+  }
+
+  /**
+   * Parse template analytics query: calendar YYYY-MM-DD from raw HTTP params + full client days in `tz`.
+   */
+  static templateAnalyticsFiltersFromRequest(req) {
+    const queryParams = req.validatedQuery || {};
+    const tz = queryParams.tz || this.getDefaultTimezone();
+    const startCal = this.toCalendarYmdFromHttpParam(req.query.start_date);
+    const endCal = this.toCalendarYmdFromHttpParam(req.query.end_date);
+    return this.fullClientDayUtcFilters(startCal, endCal, tz);
   }
 }
 

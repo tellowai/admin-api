@@ -177,4 +177,46 @@ module.exports = {
     date_filter_example: "WHERE date = '2026-05-19'",
     pii_columns: [],
   },
+  ga4_property_daily: {
+    required_date_column: 'date',
+    description: 'GA4 property-level daily metrics. Use for DAU (active_users per day), WAU/MAU (sum active_users over days is approximate; prefer stating daily series). One row per date per property_id.',
+    columns: [
+      'date', 'property_id', 'sessions', 'active_users', 'new_users', 'engaged_sessions',
+      'engagement_rate', 'average_session_duration', 'conversions', 'total_revenue', 'fetched_at',
+    ],
+    date_filter_example: "WHERE date = '2026-05-19'",
+    pii_columns: [],
+  },
+  ga4_traffic_daily: {
+    required_date_column: 'date',
+    description: 'GA4 traffic and acquisition by channel/source (do not sum active_users across rows for DAU — use ga4_property_daily).',
+    columns: [
+      'date', 'property_id', 'session_default_channel_group', 'session_source', 'session_medium',
+      'session_campaign_name', 'country', 'platform', 'device_category', 'sessions', 'active_users',
+      'new_users', 'engaged_sessions', 'engagement_rate', 'average_session_duration', 'conversions',
+      'total_revenue', 'fetched_at',
+    ],
+    date_filter_example: "WHERE date = '2026-05-19'",
+    pii_columns: [],
+  },
+  ga4_events_daily: {
+    required_date_column: 'date',
+    description: 'GA4 event counts by event_name (web/app Firebase stream). Use for GA event trends and funnels; filter event_name.',
+    columns: [
+      'date', 'property_id', 'event_name', 'platform', 'country', 'event_count', 'active_users',
+      'event_value', 'fetched_at',
+    ],
+    date_filter_example: "WHERE date = '2026-05-19' AND event_name = 'screen_view'",
+    pii_columns: [],
+  },
+  ga4_pages_daily: {
+    required_date_column: 'date',
+    description: 'GA4 web page performance (page_path, page_title).',
+    columns: [
+      'date', 'property_id', 'page_path', 'page_title', 'host_name', 'screen_page_views',
+      'active_users', 'average_session_duration', 'fetched_at',
+    ],
+    date_filter_example: "WHERE date = '2026-05-19'",
+    pii_columns: [],
+  },
 };

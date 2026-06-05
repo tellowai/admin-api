@@ -79,7 +79,8 @@ exports.validateUpdateUserCharacter = async function(req, res, next) {
       character_gender: Joi.string().valid('Male', 'Female', 'Non-binary', 'Other').optional(),
       character_description: Joi.string().allow('').max(255).optional(),
       thumb_cf_r2_key: Joi.string().allow('').max(512).optional(),
-      thumb_cf_r2_url: Joi.string().allow('').uri().max(1000).optional()
+      thumb_cf_r2_url: Joi.string().allow('').uri().max(1000).optional(),
+      thumb_cf_r2_bucket: Joi.string().allow('').max(255).optional()
     }).min(1); // At least one field must be provided
 
     const { error, value } = schema.validate(req.body);

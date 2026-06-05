@@ -24,8 +24,13 @@ const RELATIONSHIPS = {
     },
     {
       topic: 'Ads spend vs downstream metrics',
-      tables: ['meta_ads_insights_daily', 'google_ads_insights_daily', 'attribution_daily_stats', 'revenue_daily_stats', 'auth_daily_stats'],
-      note: 'Compare spend to installs/signups/revenue over the same dates; names may not match exactly.',
+      tables: ['meta_ads_insights_daily', 'google_ads_insights_daily', 'ga4_traffic_daily', 'attribution_daily_stats', 'revenue_daily_stats', 'auth_daily_stats'],
+      note: 'Compare spend to installs/signups/revenue over the same dates; align meta/google date with ga4_traffic_daily.date; campaign names may not match exactly.',
+    },
+    {
+      topic: 'GA4 traffic vs events vs web pages',
+      tables: ['ga4_property_daily', 'ga4_traffic_daily', 'ga4_events_daily', 'ga4_pages_daily'],
+      note: 'Property daily for DAU/sessions; traffic for channel breakdowns; events for event_name; pages for page_path.',
     },
     {
       topic: 'Commerce health',

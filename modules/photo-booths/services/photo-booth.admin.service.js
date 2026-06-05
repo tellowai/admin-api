@@ -5,6 +5,11 @@ const config = require('../../../config/config');
 const BoothAdminModel = require('../models/photo-booth.admin.model');
 const TemplateModel = require('../../templates/models/template.model');
 const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
+const {
   generateHumanFriendlyBoothCode,
   normalizeBoothCode,
   isValidBoothCode
@@ -193,6 +198,12 @@ exports.getBoothDetail = async function (photoBoothId) {
 
 exports.updateBooth = async function (photoBoothId, body) {
   body = { ...body };
+  const existing = await BoothAdminModel.getBoothById(photoBoothId);
+  if (!existing) {
+    const err = new Error('Photo booth not found');
+    err.status = 404;
+    throw err;
+  }
   if (Object.prototype.hasOwnProperty.call(body, 'camera_pipeline')) {
     body.camera_pipeline = normalizeCameraPipeline(body.camera_pipeline);
   }
@@ -211,11 +222,31 @@ exports.updateBooth = async function (photoBoothId, body) {
     throw err;
   }
   await BoothAdminModel.updateBooth(photoBoothId, body);
+  await cleanupReplacedFields(existing, body, [
+    {
+      keyKey: 'booth_cover_image_key',
+      bucketKey: 'booth_cover_image_bucket',
+      label: 'booth_cover_image',
+    },
+    {
+      keyKey: 'booth_cover_lottie_key',
+      bucketKey: 'booth_cover_lottie_bucket',
+      label: 'booth_cover_lottie',
+    },
+  ]);
   return enrichBoothPublicUrls(await BoothAdminModel.getBoothById(photoBoothId));
 };
 
 exports.archiveBooth = async function (photoBoothId) {
+  const existing = await BoothAdminModel.getBoothById(photoBoothId);
   await BoothAdminModel.archiveBooth(photoBoothId);
+  if (existing) {
+    const refs = [
+      normalizedMediaRef(existing.booth_cover_image_bucket, existing.booth_cover_image_key),
+      normalizedMediaRef(existing.booth_cover_lottie_bucket, existing.booth_cover_lottie_key),
+    ].filter(Boolean);
+    if (refs.length) await deleteMediaRefs(refs, 'photo_booth_cover');
+  }
 };
 
 exports.addTemplate = async function (photoBoothId, body) {
@@ -364,6 +395,7 @@ exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId,
     throw err;
   }
   const slLanding = body.sl_landing === 'website_only' ? 'website_only' : 'app_install';
+  const slOpenMode = body.sl_open_mode === 'instant_redirect' ? 'instant_redirect' : 'landing_page';
   const link = await AttributionAdminService.createPhotoboothAdminShareLink(
     {
       photo_booth_id: booth.photo_booth_id,
@@ -371,7 +403,7 @@ exports.generatePhotoboothShareLink = async function (photoBoothId, adminUserId,
       booth_name: booth.booth_name
     },
     adminUserId,
-    { sl_landing: slLanding }
+    { sl_landing: slLanding, sl_open_mode: slOpenMode }
   );
   return { link };
 };
@@ -383,14 +415,17 @@ exports.patchPhotoboothShareLink = async function (photoBoothId, body = {}) {
     err.status = 404;
     throw err;
   }
-  if (body.sl_landing === undefined || body.sl_landing === null) {
-    const err = new Error('sl_landing is required');
+  if (
+    (body.sl_landing === undefined || body.sl_landing === null) &&
+    (body.sl_open_mode === undefined || body.sl_open_mode === null)
+  ) {
+    const err = new Error('sl_landing or sl_open_mode is required');
     err.status = 400;
     throw err;
   }
-  const link = await AttributionAdminService.updatePhotoboothShareLinkSlLanding(
-    photoBoothId,
-    body.sl_landing
-  );
+  const link = await AttributionAdminService.updatePhotoboothShareLinkSettings(photoBoothId, {
+    sl_landing: body.sl_landing,
+    sl_open_mode: body.sl_open_mode
+  });
   return { link };
 };

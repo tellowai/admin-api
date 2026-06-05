@@ -44,4 +44,14 @@ module.exports = {
     date: Joi.string().optional(),
     business_context: Joi.object().optional(),
   }),
+  upsertMemorySchema: Joi.object({
+    value: Joi.string().max(4000).required(),
+  }),
+  updateProfileSchema: Joi.object({
+    preferred_metrics: Joi.array().items(Joi.string()).optional(),
+    focus_channels: Joi.array().items(Joi.string()).optional(),
+    currency: Joi.string().max(16).allow(null).optional(),
+    default_date_range: Joi.string().max(64).allow(null).optional(),
+    reporting_notes: Joi.string().max(2000).allow(null).optional(),
+  }).unknown(false),
 };

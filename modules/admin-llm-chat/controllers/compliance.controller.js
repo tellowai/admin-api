@@ -5,6 +5,9 @@ const mysqlModel = require('../../core/models/mysql.promise.model');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const RbacModel = require('../../auth/models/rbac.model');
 const { ROLES } = require('../../auth/constants/permissions.constants');
+const MemoryModel = require('../models/memory.model');
+const EpisodicModel = require('../models/episodic.model');
+const ProfileModel = require('../models/profile.model');
 
 /** Hard-delete all LLM chat data for a user (GDPR). Owner-only. */
 exports.purgeUserLlmChat = async (req, res) => {
@@ -24,5 +27,10 @@ exports.purgeUserLlmChat = async (req, res) => {
     `UPDATE admin_llm_chat_conversations SET deleted_at = NOW() WHERE user_id = ? AND deleted_at IS NULL`,
     [targetUserId],
   );
+  await Promise.all([
+    MemoryModel.purgeForUser(targetUserId),
+    EpisodicModel.purgeForUser(targetUserId),
+    ProfileModel.purgeForUser(targetUserId),
+  ]);
   return res.status(HTTP.OK).json({ data: { user_id: targetUserId, scheduled: true } });
 };

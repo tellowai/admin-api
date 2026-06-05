@@ -3,6 +3,7 @@
 const moment = require('moment-timezone');
 const AnalyticsModel = require('../models/analytics.model');
 const TemplateModel = require('../../templates/models/template.model');
+const OrdersAnalyticsModel = require('../../orders/models/orders.analytics.model');
 const TimezoneService = require('./timezone.service');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
@@ -21,6 +22,33 @@ class AnalyticsService {
     const startDateFormatted = new Date(start_date).toISOString().split('T')[0];
     const endDateFormatted = new Date(end_date).toISOString().split('T')[0];
     return [`report_date >= '${startDateFormatted}'`, `report_date <= '${endDateFormatted}'`];
+  }
+
+  /**
+   * MV `report_date` is UTC (toDate(timestamp)). Expand client calendar range to UTC date bounds.
+   */
+  static buildMVDateConditionsFromClientCalendar(startCal, endCal, tzRaw) {
+    const start = TimezoneService.toCalendarYmd(startCal);
+    const end = TimezoneService.toCalendarYmd(endCal);
+    if (!start || !end) {
+      return this.buildMVDateConditions(startCal, endCal);
+    }
+    const { rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(start, end, tzRaw);
+    const startDateFormatted = moment.utc(rangeStartUtc).format('YYYY-MM-DD');
+    const endDateFormatted = moment.utc(rangeEndUtc).format('YYYY-MM-DD');
+    return [`report_date >= '${startDateFormatted}'`, `report_date <= '${endDateFormatted}'`];
+  }
+
+  static buildMVTemplateConditionsForClientCalendar(startCal, endCal, tzRaw, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditionsFromClientCalendar(startCal, endCal, tzRaw);
+    const allowed = ['template_id', 'output_type', 'generation_type'];
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    return conditions;
   }
 
   static buildMVAuthConditions(start_date, end_date, eventName, additionalFilters = {}) {
@@ -79,6 +107,80 @@ class AnalyticsService {
       }
     });
     return conditions.join(' AND ');
+  }
+
+  /** WHERE body for template hub rows on `analytics_events_raw` (client-calendar UTC window). */
+  static buildTemplateEventsRawWhereUtcRange(rangeStartUtc, rangeEndUtc, eventName, additionalFilters = {}) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(String(rangeStartUtc || '').trim());
+    const endEsc = esc(String(rangeEndUtc || '').trim());
+    const conditions = [
+      `timestamp >= toDateTime64('${startEsc}', 3, 'UTC')`,
+      `timestamp <= toDateTime64('${endEsc}', 3, 'UTC')`,
+      `object_type = 'template'`,
+      `event_name = '${esc(String(eventName || '').trim())}'`
+    ];
+    ['output_type', 'generation_type', 'aspect_ratio', 'orientation'].forEach((key) => {
+      const raw = additionalFilters[key];
+      if (raw == null || raw === '') return;
+      conditions.push(`properties['${key}'] = '${esc(String(raw))}'`);
+    });
+    if (additionalFilters.template_id != null && additionalFilters.template_id !== '') {
+      conditions.push(`object_id = '${esc(String(additionalFilters.template_id))}'`);
+    }
+    if (additionalFilters.user_id != null && additionalFilters.user_id !== '') {
+      conditions.push(`user_id = '${esc(String(additionalFilters.user_id))}'`);
+    }
+    return conditions.join(' AND ');
+  }
+
+  /** GROUP BY expression for template events on raw — maps MV column names to hub fields. */
+  static templateEventsRawGroupKeyExpr(groupByColumn) {
+    const g = typeof groupByColumn === 'string' ? groupByColumn.trim() : '';
+    if (g === 'output_type') return "ifNull(properties['output_type'], '')";
+    if (g === 'generation_type') return "ifNull(properties['generation_type'], '')";
+    if (g === 'aspect_ratio') return "ifNull(properties['aspect_ratio'], '')";
+    if (g === 'orientation') return "ifNull(properties['orientation'], '')";
+    return "''";
+  }
+
+  /**
+   * Template daily chart series: client-calendar window + `toDate(toTimeZone(timestamp, tz))`
+   * when `clientWindow` has calendar bounds; otherwise legacy MV + convertFromUTC in controller.
+   */
+  static async getTemplateMetricSeries(metricKey, utcFilters, additionalFilters, groupBy, clientWindow = null) {
+    const eventName = ANALYTICS_CONSTANTS.TEMPLATE_RAW_EVENT_NAMES[metricKey];
+    const calStart = clientWindow?.calendarStart && TimezoneService.toCalendarYmd(clientWindow.calendarStart);
+    const calEnd = clientWindow?.calendarEnd && TimezoneService.toCalendarYmd(clientWindow.calendarEnd);
+    if (eventName && calStart && calEnd && clientWindow?.clientTz) {
+      const tz = TimezoneService.normalizeTimezoneAlias(clientWindow.clientTz);
+      const { rangeStartUtc, rangeEndUtc } = utcFilters?.rangeStartUtc && utcFilters?.rangeEndUtc
+        ? { rangeStartUtc: utcFilters.rangeStartUtc, rangeEndUtc: utcFilters.rangeEndUtc }
+        : TimezoneService.utcRangeForClientCalendar(calStart, calEnd, tz);
+      const whereClause = this.buildTemplateEventsRawWhereUtcRange(
+        rangeStartUtc,
+        rangeEndUtc,
+        eventName,
+        additionalFilters
+      );
+      if (groupBy) {
+        const rawGroupCols = [
+          ...ANALYTICS_CONSTANTS.TEMPLATE_GROUP_BY_COLUMNS,
+          'aspect_ratio',
+          'orientation'
+        ];
+        if (rawGroupCols.includes(groupBy)) {
+          const expr = this.templateEventsRawGroupKeyExpr(groupBy);
+          return AnalyticsModel.queryTemplateEventsDailyGroupedClientTz(whereClause, expr, tz);
+        }
+        return [];
+      }
+      return AnalyticsModel.queryTemplateEventsDailyClientTz(whereClause, tz);
+    }
+    if (groupBy) {
+      return this.queryMixedDateRangeGrouped(metricKey, utcFilters, additionalFilters, groupBy);
+    }
+    return this.queryMixedDateRange(metricKey, utcFilters, additionalFilters);
   }
 
   /** GROUP BY expression for commerce purchases on raw — maps MV column names to `properties`. */
@@ -148,6 +250,34 @@ class AnalyticsService {
       }
     });
     return conditions;
+  }
+
+  /** Prefer client-calendar MV bounds when present on filters (from fullClientDayUtcFilters). */
+  static buildMVTemplateConditionsFromFilters(filters, additionalFilters = {}) {
+    if (filters?.client_calendar_start && filters?.client_calendar_end) {
+      return this.buildMVTemplateConditionsForClientCalendar(
+        filters.client_calendar_start,
+        filters.client_calendar_end,
+        filters.tz,
+        additionalFilters
+      );
+    }
+    return this.buildMVTemplateConditions(filters.start_date, filters.end_date, additionalFilters);
+  }
+
+  static buildRawTimestampConditionsFromFilters(filters) {
+    if (filters?.rangeStartUtc && filters?.rangeEndUtc) {
+      return [
+        `timestamp >= toDateTime64('${filters.rangeStartUtc}', 3, 'UTC')`,
+        `timestamp <= toDateTime64('${filters.rangeEndUtc}', 3, 'UTC')`
+      ];
+    }
+    return AnalyticsModel.buildRawUtcTimestampConditions(
+      filters.start_date,
+      filters.end_date,
+      filters.start_time,
+      filters.end_time
+    );
   }
 
   static buildMVCreditsConditions(start_date, end_date, additionalFilters = {}) {
@@ -493,23 +623,23 @@ class AnalyticsService {
       return await AnalyticsModel.queryRevenueDailyStats(whereConditions);
     }
     if (baseTableName === 'TEMPLATE_VIEWS') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.VIEWS);
     }
     if (baseTableName === 'TEMPLATE_TRIES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.TRIES);
     }
     if (baseTableName === 'TEMPLATE_DOWNLOADS') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS);
     }
     if (baseTableName === 'TEMPLATE_SUCCESSES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES);
     }
     if (baseTableName === 'TEMPLATE_FAILURES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES);
     }
 
@@ -541,23 +671,23 @@ class AnalyticsService {
       return await AnalyticsModel.queryRevenueDailyStatsGrouped(whereConditions, groupBy);
     }
     if (baseTableName === 'TEMPLATE_VIEWS' && templateAllowed.includes(groupBy)) {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.VIEWS, groupBy);
     }
     if (baseTableName === 'TEMPLATE_TRIES' && templateAllowed.includes(groupBy)) {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.TRIES, groupBy);
     }
     if (baseTableName === 'TEMPLATE_DOWNLOADS' && templateAllowed.includes(groupBy)) {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS, groupBy);
     }
     if (baseTableName === 'TEMPLATE_SUCCESSES' && templateAllowed.includes(groupBy)) {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES, groupBy);
     }
     if (baseTableName === 'TEMPLATE_FAILURES' && templateAllowed.includes(groupBy)) {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.queryTemplateDailyStatsGrouped(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES, groupBy);
     }
     // MV tables don't support other group_by dimensions (e.g. orientation, aspect_ratio for template)
@@ -589,23 +719,23 @@ class AnalyticsService {
       return await AnalyticsModel.getCountRevenueDailyStats(whereConditions);
     }
     if (baseTableName === 'TEMPLATE_VIEWS') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.VIEWS);
     }
     if (baseTableName === 'TEMPLATE_TRIES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.TRIES);
     }
     if (baseTableName === 'TEMPLATE_DOWNLOADS') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.DOWNLOADS);
     }
     if (baseTableName === 'TEMPLATE_SUCCESSES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.SUCCESSES);
     }
     if (baseTableName === 'TEMPLATE_FAILURES') {
-      const whereConditions = this.buildMVTemplateConditions(start_date, end_date, additionalFilters);
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, additionalFilters);
       return await AnalyticsModel.getCountTemplateDailyStats(whereConditions, ANALYTICS_CONSTANTS.TEMPLATE_MEASURES.FAILURES);
     }
 
@@ -630,30 +760,64 @@ class AnalyticsService {
     return this.queryMixedDateRange('LOGINS', filters, additionalFilters);
   }
 
+  static buildUtcRangeFromFilters(filters = {}) {
+    const { start_date, end_date, start_time, end_time } = filters;
+    const rangeStartUtc = moment
+      .utc(`${start_date} ${start_time || '00:00:00'}`, 'YYYY-MM-DD HH:mm:ss')
+      .format('YYYY-MM-DD HH:mm:ss');
+    const rangeEndUtc = moment
+      .utc(`${end_date} ${end_time || '23:59:59'}`, 'YYYY-MM-DD HH:mm:ss')
+      .format('YYYY-MM-DD HH:mm:ss');
+    return { rangeStartUtc, rangeEndUtc };
+  }
+
   static async getTopTemplatesByGeneration(filters) {
-    const { start_date, end_date, page = 1, limit = 20 } = filters;
-    const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
+    const { page = 1, limit = 20 } = filters;
     const offset = (Math.max(1, parseInt(page, 10)) - 1) * Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
+
+    let rows;
+    if (filters.rangeStartUtc && filters.rangeEndUtc) {
+      rows = await AnalyticsModel.getTopTemplatesByGenerationRaw(
+        filters.rangeStartUtc,
+        filters.rangeEndUtc,
+        safeLimit,
+        offset
+      );
+    } else {
+      const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, {});
+      rows = await AnalyticsModel.getTopTemplatesByGeneration(whereConditions, safeLimit, offset);
+    }
+
     if (!rows || rows.length === 0) {
       return [];
     }
     const templateIds = rows.map(r => r.template_id).filter(Boolean);
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
-    const [templates, orderCountRows] = await Promise.all([
+    const { rangeStartUtc, rangeEndUtc } = filters.rangeStartUtc && filters.rangeEndUtc
+      ? { rangeStartUtc: filters.rangeStartUtc, rangeEndUtc: filters.rangeEndUtc }
+      : this.buildUtcRangeFromFilters(filters);
+    const tsRaw = this.buildRawTimestampConditionsFromFilters(filters);
+    const [templates, mysqlOrderRows, chOrderRows] = await Promise.all([
       TemplateModel.getTemplatesByIdsForAnalytics(templateIds),
+      OrdersAnalyticsModel.getOrderCountsByTemplateIds({
+        rangeStartUtc,
+        rangeEndUtc,
+        templateIds
+      }),
       AnalyticsModel.getOrderCountsByTemplateIdsRaw(tsRaw, templateIds)
     ]);
     const ordersById = {};
-    (orderCountRows || []).forEach((r) => {
-      if (r.template_id) {
-        ordersById[r.template_id] = {
-          orders_created: Number(r.orders_created) || 0,
-          orders_completed: Number(r.orders_completed) || 0
-        };
-      }
-    });
+    const mergeOrderRow = (r) => {
+      if (!r?.template_id) return;
+      const tid = String(r.template_id);
+      const existing = ordersById[tid] || { orders_created: 0, orders_completed: 0 };
+      ordersById[tid] = {
+        orders_created: Math.max(existing.orders_created, Number(r.orders_created) || 0),
+        orders_completed: Math.max(existing.orders_completed, Number(r.orders_completed) || 0)
+      };
+    };
+    (mysqlOrderRows || []).forEach(mergeOrderRow);
+    (chOrderRows || []).forEach(mergeOrderRow);
     const byId = {};
     (templates || []).forEach(t => { byId[t.template_id] = t; });
     return rows.map(row => {
@@ -735,7 +899,7 @@ class AnalyticsService {
 
     const sortDir = String(sortDirRaw || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
-    const whereConditions = this.buildMVTemplateConditions(start_date, end_date, {});
+    const whereConditions = this.buildMVTemplateConditionsFromFilters(filters, {});
 
     const singleId =
       filters.template_id != null && String(filters.template_id).trim()
@@ -746,9 +910,11 @@ class AnalyticsService {
     if (singleId) {
       templateIds = [singleId];
     } else if (cohort === 'created_in_range') {
-      const startUtc = moment.utc(`${start_date} ${start_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
-      const endUtc = moment.utc(`${end_date} ${end_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
-      templateIds = await TemplateModel.listActiveTemplateIdsCreatedBetweenForAnalytics(startUtc, endUtc);
+      const rangeStartUtc = filters.rangeStartUtc
+        || moment.utc(`${start_date} ${start_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
+      const rangeEndUtc = filters.rangeEndUtc
+        || moment.utc(`${end_date} ${end_time}`, 'YYYY-MM-DD HH:mm:ss').format('YYYY-MM-DD HH:mm:ss');
+      templateIds = await TemplateModel.listActiveTemplateIdsCreatedBetweenForAnalytics(rangeStartUtc, rangeEndUtc);
     } else {
       templateIds = await TemplateModel.listActiveTemplateIdsForAnalytics();
     }
@@ -806,7 +972,7 @@ class AnalyticsService {
       });
     }
 
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const tsRaw = this.buildRawTimestampConditionsFromFilters(filters);
     const purchaseById = {};
     for (let i = 0; i < templateIds.length; i += BATCH) {
       const batch = templateIds.slice(i, i + BATCH);
@@ -925,9 +1091,9 @@ class AnalyticsService {
    * last-view-to-purchase attribution.
    */
   static async getTemplateConversionMetrics(filters) {
-    const { start_date, end_date, limit: limitRaw } = filters;
-    const whereTemplate = this.buildMVTemplateConditions(start_date, end_date, {});
-    const tsRaw = AnalyticsModel.buildRawUtcTimestampConditions(start_date, end_date);
+    const { limit: limitRaw } = filters;
+    const whereTemplate = this.buildMVTemplateConditionsFromFilters(filters, {});
+    const tsRaw = this.buildRawTimestampConditionsFromFilters(filters);
 
     const [viewRows, purchaseRows] = await Promise.all([
       AnalyticsModel.getTemplateViewsSumByTemplateId(whereTemplate),
@@ -2022,6 +2188,75 @@ class AnalyticsService {
           'Average order value: sum of amount on order_completed divided by count of order_completed that day (completed orders only; same filters as orders).'
       }
     };
+  }
+
+  static buildMVSearchConditions(start_date, end_date, additionalFilters = {}) {
+    const conditions = this.buildMVDateConditions(start_date, end_date);
+    const allowed = ANALYTICS_CONSTANTS.SEARCH_FILTER_COLUMNS;
+    Object.keys(additionalFilters).forEach(key => {
+      if (allowed.includes(key) && additionalFilters[key] != null && additionalFilters[key] !== '') {
+        const v = String(additionalFilters[key]).replace(/'/g, "''");
+        conditions.push(`${key} = '${v}'`);
+      }
+    });
+    if (additionalFilters.zero_results_only === true || additionalFilters.zero_results_only === 'true') {
+      conditions.push('zero_result_count > 0');
+    }
+    return conditions;
+  }
+
+  static async getSearchSummary(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    const summary = await AnalyticsModel.querySearchSummary(whereConditions);
+    const totalSearches = Number(summary.total_searches) || 0;
+    const totalZero = Number(summary.total_zero_results) || 0;
+    const totalClicks = Number(summary.total_clicks) || 0;
+    return {
+      total_searches: totalSearches,
+      total_zero_results: totalZero,
+      total_clicks: totalClicks,
+      unique_devices: Number(summary.unique_devices) || 0,
+      zero_result_rate: totalSearches > 0 ? totalZero / totalSearches : 0,
+      click_through_rate: totalSearches > 0 ? totalClicks / totalSearches : 0
+    };
+  }
+
+  static async getSearchDaily(filters) {
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchDailyStats(whereConditions);
+  }
+
+  static async getSearchTopQueries(filters) {
+    const { start_date, end_date, limit, offset } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    if (filters.zero_results_only) additionalFilters.zero_results_only = filters.zero_results_only;
+
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchTopQueries(whereConditions, limit, offset);
+  }
+
+  static async getSearchDailyGrouped(filters, groupBy) {
+    const allowed = ANALYTICS_CONSTANTS.SEARCH_GROUP_BY_COLUMNS;
+    if (!allowed.includes(groupBy)) return [];
+
+    const { start_date, end_date } = filters;
+    const additionalFilters = AnalyticsService._pickSearchFilters(filters);
+    const whereConditions = this.buildMVSearchConditions(start_date, end_date, additionalFilters);
+    return AnalyticsModel.querySearchDailyStatsGrouped(whereConditions, groupBy);
+  }
+
+  static _pickSearchFilters(filters = {}) {
+    const additionalFilters = {};
+    ANALYTICS_CONSTANTS.SEARCH_FILTER_COLUMNS.forEach((key) => {
+      if (filters[key] != null && filters[key] !== '') {
+        additionalFilters[key] = filters[key];
+      }
+    });
+    return additionalFilters;
   }
 }
 

@@ -19,8 +19,39 @@ const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
 const { purchaseCategoryFromOrder } = require('../../orders/utils/purchaseCategory.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
+const StorageFactory = require('../../os2/providers/storage.factory');
 
+async function resolveEndUserProfilePicUrl(userRow) {
+  if (!userRow) return null;
+  const storage = StorageFactory.getProvider();
+  let profilePicUrl = userRow.profile_pic || null;
+  const profilePicAssetKey = userRow.profile_pic_asset_key;
+  const profilePicBucket = userRow.profile_pic_bucket;
 
+  if (profilePicAssetKey) {
+    try {
+      if (profilePicBucket && profilePicBucket.includes('ephemeral')) {
+        profilePicUrl = await storage.generateEphemeralPresignedDownloadUrl(profilePicAssetKey, {
+          expiresIn: 3600
+        });
+      } else {
+        profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicAssetKey, {
+          expiresIn: 3600
+        });
+      }
+    } catch (e) {
+      console.error('consumer user profile presign failed:', e.message);
+    }
+  } else if (profilePicUrl && !String(profilePicUrl).startsWith('http')) {
+    try {
+      profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicUrl, { expiresIn: 3600 });
+    } catch (e) {
+      console.error('consumer user profile presign fallback failed:', e.message);
+    }
+  }
+
+  return profilePicUrl;
+}
 
 /**
  * @api {post} /admin/users Create a new admin user
@@ -581,6 +612,54 @@ exports.getUserEntitlements = async function (req, res) {
 };
 
 /**
+ * Lightweight end-user preview for admin hover panels.
+ * GET /admin/consumer-users/by-user-id/:userId/hover-card
+ */
+exports.getConsumerUserHoverCard = async function (req, res) {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'userId is required' });
+    }
+
+    const userRow = await ManageAdminUserDbo.getEndUserHoverCardByUserId(userId);
+    if (!userRow) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+    }
+
+    const [profilePicUrl, balanceMap, completedOrders] = await Promise.all([
+      resolveEndUserProfilePicUrl(userRow),
+      CreditsModel.getBalancesByUserIds([userId]),
+      ManageAdminUserDbo.countCompletedOrdersByUserId(userId)
+    ]);
+    const wallet = balanceMap.get(userId) || { balance: 0, reserved_balance: 0 };
+
+    const displayName = userRow.display_name && String(userRow.display_name).trim()
+      ? String(userRow.display_name).trim()
+      : `${userRow.first_name || ''} ${userRow.last_name || ''}`.trim() || null;
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        user_id: userRow.user_id,
+        display_name: displayName,
+        email: userRow.email || null,
+        mobile: userRow.mobile || null,
+        profile_pic_url: profilePicUrl,
+        credit_balance: wallet.balance,
+        credit_reserved_balance: wallet.reserved_balance,
+        completed_orders_count: completedOrders,
+        member_since: userRow.created_at || null
+      }
+    });
+  } catch (err) {
+    console.error('getConsumerUserHoverCard error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to load user preview'
+    });
+  }
+};
+
+/**
  * End-user profile snapshot by primary user id (same row shape as consumer lookup `user`).
  * GET /admin/consumer-users/by-user-id/:userId
  */
@@ -617,7 +696,7 @@ exports.getConsumerUserSnapshotByUserId = async function (req, res) {
 
 /**
  * Lookup an end-user by mobile (substring) or internal order_id for support tooling.
- * GET /admin/consumer-users/lookup?q=&type=mobile|order_id
+ * GET /admin/consumer-users/lookup?q=&type=mobile|order_id|user_id
  */
 exports.lookupConsumerUserForSupport = async function (req, res) {
   try {
@@ -629,7 +708,18 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
 
     let userRow = null;
 
-    if (type === 'order_id') {
+    if (type === 'user_id') {
+      const userId = rawQ;
+      if (userId.length < 3) {
+        return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+          message: 'Enter at least 3 characters of the user ID'
+        });
+      }
+      userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
+      if (!userRow) {
+        return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'User not found' });
+      }
+    } else if (type === 'order_id') {
       const digits = rawQ.replace(/\D/g, '') || rawQ;
       const orderId = parseInt(digits, 10);
       if (!Number.isFinite(orderId) || orderId <= 0) {
@@ -640,7 +730,7 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
         return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({ message: 'No order found for this ID' });
       }
       userRow = await ManageAdminUserDbo.getEndUserSnapshotByUserId(userId);
-    } else {
+    } else if (type === 'mobile') {
       const mobileDigits = rawQ.replace(/\D/g, '');
       if (!mobileDigits) {
         return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
@@ -658,6 +748,10 @@ exports.lookupConsumerUserForSupport = async function (req, res) {
         });
       }
       userRow = rows[0];
+    } else {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        message: 'type must be mobile, order_id, or user_id'
+      });
     }
 
     if (!userRow) {

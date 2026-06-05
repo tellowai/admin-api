@@ -3,26 +3,36 @@
 const fs = require('fs');
 const path = require('path');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
-const MemoryModel = require('../models/memory.model');
+const memoryRetrieval = require('./memory.retrieval.service');
 const schemaCache = require('./schema.cache.service');
 const { redactValue, truncatePreview } = require('./pii.redactor');
 
 const PROMPTS_DIR = path.join(__dirname, '../constants/system.prompts');
 const BUSINESS_CONTEXT_PATH = path.join(__dirname, '../constants/business_context.json');
 const { formatRelationshipsGuide } = require('../constants/table.relationships');
+const { buildWidgetPromptSection } = require('./widget.catalog.service');
 
 const VERBATIM_TAIL = 6;
 
+/** Default brand the prompts/context are authored with; swapped for COMPANY_NAME. */
+const DEFAULT_COMPANY_NAME = 'Tellow AI';
+
+function applyCompanyName(text) {
+  if (!text || CONSTANTS.COMPANY_NAME === DEFAULT_COMPANY_NAME) return text;
+  return text.split(DEFAULT_COMPANY_NAME).join(CONSTANTS.COMPANY_NAME);
+}
+
 function loadSystemPrompt(version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION) {
   const file = path.join(PROMPTS_DIR, `${version}.system.txt`);
-  return fs.readFileSync(file, 'utf8');
+  return applyCompanyName(fs.readFileSync(file, 'utf8'));
 }
 
 function loadBusinessContext() {
   try {
-    return JSON.parse(fs.readFileSync(BUSINESS_CONTEXT_PATH, 'utf8'));
+    const biz = JSON.parse(fs.readFileSync(BUSINESS_CONTEXT_PATH, 'utf8'));
+    return { ...biz, companyName: CONSTANTS.COMPANY_NAME };
   } catch (_e) {
-    return {};
+    return { companyName: CONSTANTS.COMPANY_NAME };
   }
 }
 
@@ -33,29 +43,55 @@ async function buildTableCatalog() {
     .join('\n');
 }
 
-async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION) {
+async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION, options = {}) {
   const base = loadSystemPrompt(version);
   const biz = loadBusinessContext();
   const tableCatalog = await buildTableCatalog();
-  const memories = await MemoryModel.listByUser(userId);
-  const memoryBlock = memories.length
-    ? `\nUser preferences:\n${memories.map((m) => `- ${m.memory_key}: ${m.memory_value}`).join('\n')}`
-    : '';
+  const retrieval = await memoryRetrieval.retrieveForTurn({
+    userId,
+    queryText: options.queryText || '',
+  });
+  const memoryBlock = retrieval.memories || '';
   const businessContext = `Business context:\n${JSON.stringify(biz, null, 2)}`;
   const tables = `Available ClickHouse tables:\n${tableCatalog}`;
   const crossTable = formatRelationshipsGuide();
+  const widgetSection = buildWidgetPromptSection();
+  const widgetBlock = widgetSection ? `\n\n${widgetSection}` : '';
+  const cacheablePrefix = `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${widgetBlock}`;
   return {
     base,
     businessContext,
     tableCatalog: tables,
     crossTable,
     memories: memoryBlock,
-    full: `${base}\n\n${businessContext}\n\n${tables}\n\n${crossTable}${memoryBlock}`,
+    widgetSection,
+    cacheablePrefix,
+    full: `${cacheablePrefix}${memoryBlock}`,
   };
 }
 
-async function buildSystemPrompt(userId, version) {
-  const parts = await buildSystemPromptParts(userId, version);
+/**
+ * Anthropic prompt caching: static catalog/tools prefix is cacheable; per-user memories are not.
+ * @returns {string | Array<{ type: string, text: string, cache_control?: object }>}
+ */
+function buildAnthropicSystemParam(parts) {
+  const cacheable = parts?.cacheablePrefix || parts?.full || '';
+  const memories = parts?.memories || '';
+  if (!memories?.trim()) {
+    return cacheable;
+  }
+  return [
+    {
+      type: 'text',
+      text: cacheable,
+      cache_control: { type: 'ephemeral' },
+    },
+    { type: 'text', text: memories.trim() },
+  ];
+}
+
+async function buildSystemPrompt(userId, version, options = {}) {
+  const parts = await buildSystemPromptParts(userId, version, options);
   return parts.full;
 }
 
@@ -326,6 +362,7 @@ module.exports = {
   loadBusinessContext,
   buildSystemPrompt,
   buildSystemPromptParts,
+  buildAnthropicSystemParam,
   buildMessagesForProvider,
   messageToApiRows,
   flattenToolCallsForProvider,

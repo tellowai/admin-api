@@ -4,6 +4,8 @@ const versionConfig = require('../../version');
 const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const TemplateCtrl = require('../controllers/template.controller');
 const TemplateMetadataInferenceCtrl = require('../controllers/template.metadata.inference.controller');
+const TemplateVariantCtrl = require('../controllers/template.variant.controller');
+const JourneyStageCtrl = require('../../journey-stages/controllers/journey.stage.controller');
 const TemplateValidator = require('../validators/template.validator');
 
 module.exports = function (app) {
@@ -51,6 +53,36 @@ module.exports = function (app) {
     AuthMiddleware.isAuthorizedJWT,
     TemplateValidator.validateInferTemplateMetadataData,
     TemplateMetadataInferenceCtrl.inferTemplateMetadata
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/variants'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateVariantCtrl.getTemplateVariants
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateVariantCtrl.linkVariants
+  ).delete(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateVariantCtrl.unlinkVariant
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/journey-stages'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    JourneyStageCtrl.getTemplateJourneyStages
+  ).put(
+    AuthMiddleware.isAuthorizedJWT,
+    JourneyStageCtrl.setTemplateJourneyStages
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/hover-card'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.getTemplateHoverCard
   );
 
   app.route(

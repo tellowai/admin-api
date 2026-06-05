@@ -50,11 +50,15 @@ class AnthropicProvider extends BaseLLMProvider {
     if (!this.client) await this.initialize();
 
     const anthropicMessages = this._toAnthropicMessages(messages);
+    const systemParam = Array.isArray(system)
+      ? system
+      : (system ? [{ type: 'text', text: system }] : undefined);
+
     const stream = this.client.messages.stream({
       model,
       max_tokens: maxTokens || 8192,
       temperature: temperature ?? 0.2,
-      system: system || undefined,
+      system: systemParam,
       messages: anthropicMessages,
       tools: tools && tools.length ? tools : undefined,
     });
@@ -98,6 +102,20 @@ class AnthropicProvider extends BaseLLMProvider {
         } else if (event.type === 'message_stop' || event.type === 'message_delta') {
           // handled after loop via finalMessage
         }
+      }
+
+      // Safety net: stream ended while a tool_use block was still open (e.g.
+      // disconnect before content_block_stop) — finalize with whatever arrived.
+      if (currentTool) {
+        let args = {};
+        try {
+          args = toolInputJson ? JSON.parse(toolInputJson) : {};
+        } catch (_e) {
+          args = {};
+        }
+        onToolCallEnd?.({ id: currentTool.id, name: currentTool.name, arguments: args, rawArguments: toolInputJson });
+        currentTool = null;
+        toolInputJson = '';
       }
 
       const finalMessage = await stream.finalMessage();

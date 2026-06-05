@@ -428,6 +428,28 @@ console.log({
       }, { signal });
 
       let usage = { prompt_tokens: 0, completion_tokens: 0 };
+      const endedToolIdx = new Set();
+
+      // Finalize a tool call exactly once, parsing accumulated argument JSON.
+      // Done at stream end (not tied to a specific finish_reason) so args are
+      // never silently dropped if the provider omits a `tool_calls` finish chunk.
+      const finalizeToolCall = (idx, tc) => {
+        if (endedToolIdx.has(idx)) return;
+        endedToolIdx.add(idx);
+        const raw = String(tc.arguments || '').trim();
+        if (!raw) {
+          // Args never arrived (stream cut or provider ended early) — leave
+          // orchestrator pending row at {} so it can treat as cancelled on abort.
+          return;
+        }
+        let args = {};
+        try {
+          args = JSON.parse(raw);
+        } catch (_e) {
+          args = {};
+        }
+        onToolCallEnd?.({ id: tc.id, name: tc.name, arguments: args, rawArguments: raw });
+      };
 
       for await (const chunk of stream) {
         if (chunk.usage) {
@@ -455,17 +477,13 @@ console.log({
           });
         }
         if (choice.finish_reason === 'tool_calls') {
-          Object.values(toolCallsMap).forEach((tc) => {
-            let args = {};
-            try {
-              args = tc.arguments ? JSON.parse(tc.arguments) : {};
-            } catch (_e) {
-              args = {};
-            }
-            onToolCallEnd?.({ id: tc.id, name: tc.name, arguments: args });
-          });
+          Object.entries(toolCallsMap).forEach(([idx, tc]) => finalizeToolCall(idx, tc));
         }
       }
+
+      // Safety net: finalize any tool calls the provider streamed without a
+      // matching `tool_calls` finish_reason chunk.
+      Object.entries(toolCallsMap).forEach(([idx, tc]) => finalizeToolCall(idx, tc));
 
       onFinish?.({
         finishReason: 'stop',

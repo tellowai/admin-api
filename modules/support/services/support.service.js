@@ -8,6 +8,7 @@ const CreditsModel = require('../../credits/models/credits.model');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
 const fcmSupportNotify = require('./fcm.support.notify.service');
 const config = require('../../../config/config');
+const { deleteMediaRefs, normalizedMediaRef } = require('../../os2/utils/r2-orphan-cleanup.util');
 
 const MAX_CHAT_ATTACHMENTS = 4;
 
@@ -691,6 +692,21 @@ exports.deleteMessage = async function(messageId, adminId) {
 
   const ageMs = Date.now() - new Date(msg.created_at).getTime();
   if (ageMs > 30 * 60 * 1000) throw new Error('TOO_OLD');
+
+  let media = msg.media;
+  if (typeof media === 'string') {
+    try {
+      media = JSON.parse(media);
+    } catch (_) {
+      media = null;
+    }
+  }
+  if (Array.isArray(media) && media.length) {
+    const refs = media
+      .map((item) => normalizedMediaRef(item.bucket, item.asset_key))
+      .filter(Boolean);
+    if (refs.length) await deleteMediaRefs(refs, 'support_attachment');
+  }
 
   await SupportModel.deleteMessage(messageId);
 };

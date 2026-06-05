@@ -15,6 +15,10 @@ const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
 const logger = require('../../../config/lib/logger');
 const TemplateRedisService = require('../../templates/services/template.redis.service');
+const {
+  collectWorkflowNodeAssetRefs,
+  deleteRemovedMediaRefSet,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 
 /**
  * List workflows with pagination
@@ -71,6 +75,18 @@ async function enrichNodesWithAssetUrls(nodes) {
         logger.warn('Workflow: failed to generate asset_url for node config', { nodeId: node.uuid, key, error: err.message });
       }
     }
+  }
+}
+
+/** Remove R2 objects dropped from workflow node config_values on save. */
+async function cleanupWorkflowNodeAssetChanges(workflowId, newNodes) {
+  try {
+    const oldNodes = await WorkflowNodeModel.getNodesByWorkflowIds([workflowId]);
+    const oldRefs = collectWorkflowNodeAssetRefs(oldNodes);
+    const newRefs = collectWorkflowNodeAssetRefs(newNodes);
+    await deleteRemovedMediaRefSet(oldRefs, newRefs, 'workflow_node_asset');
+  } catch (err) {
+    logger.warn('cleanupWorkflowNodeAssetChanges failed', { workflowId, error: err.message });
   }
 }
 
@@ -576,6 +592,7 @@ exports.saveWorkflowByTacId = async function (req, res) {
     }
 
     const newHash = uuidv4().substring(0, 16);
+    await cleanupWorkflowNodeAssetChanges(workflowId, nodes);
     await WorkflowModel.saveWorkflowData(workflowId, {
       nodes,
       edges,
@@ -757,6 +774,7 @@ exports.saveWorkflow = async function (req, res) {
     }
 
     const newHash = uuidv4().substring(0, 16);
+    await cleanupWorkflowNodeAssetChanges(workflowId, nodes);
     await WorkflowModel.saveWorkflowData(workflowId, {
       nodes,
       edges,

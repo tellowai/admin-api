@@ -5,6 +5,11 @@ const config = require('../../../config/config');
 const ScriptFontModel = require('../models/script.font.model');
 const { isValidScriptKey } = require('../constants/script-font-registry.constants');
 const ScriptFontManifestService = require('./script.font.manifest.service');
+const {
+  cleanupReplacedFields,
+  deleteMediaRefs,
+  normalizedMediaRef,
+} = require('../../os2/utils/r2-orphan-cleanup.util');
 const TemplateRedisService = require('../../templates/services/template.redis.service');
 const logger = require('../../../config/lib/logger');
 
@@ -118,6 +123,11 @@ exports.updateAsset = async function (id, body) {
 };
 
 exports.deleteAsset = async function (id) {
+  const sources = await ScriptFontModel.listSourcesByAssetId(id, { useMaster: true });
+  const refs = sources
+    .map((s) => normalizedMediaRef(s.asset_bucket, s.asset_key))
+    .filter(Boolean);
+  if (refs.length) await deleteMediaRefs(refs, 'script_font_source');
   await ScriptFontModel.clearDefaultsReferencingAsset(id);
   await ScriptFontModel.deleteAsset(id);
   await ScriptFontManifestService.invalidateManifest();
@@ -156,6 +166,13 @@ exports.addSource = async function (assetId, body) {
   if (body.source_kind === 'static_weight') {
     const clash = sources.find((s) => s.source_kind === 'static_weight' && Number(s.weight) === Number(body.weight));
     if (clash) {
+      await cleanupReplacedFields(clash, body, [
+        {
+          keyKey: 'asset_key',
+          bucketKey: 'asset_bucket',
+          label: 'script_font_source',
+        },
+      ]);
       await ScriptFontModel.updateSource(clash.id, {
         asset_bucket: body.asset_bucket,
         asset_key: body.asset_key
@@ -192,7 +209,10 @@ exports.addSource = async function (assetId, body) {
 
 exports.deleteSource = async function (assetId, sourceId) {
   const sources = await ScriptFontModel.listSourcesByAssetId(assetId, { useMaster: true });
-  if (!sources.find((s) => s.id === sourceId)) throw new Error('Source not found');
+  const source = sources.find((s) => s.id === sourceId);
+  if (!source) throw new Error('Source not found');
+  const ref = normalizedMediaRef(source.asset_bucket, source.asset_key);
+  if (ref) await deleteMediaRefs(ref, 'script_font_source');
   await ScriptFontModel.deleteSource(sourceId);
   await ScriptFontModel.touchAssetUpdatedAt(assetId);
   const asset = await ScriptFontModel.getAssetById(assetId, { useMaster: true });

@@ -1,6 +1,11 @@
 'use strict';
 
 const CONSTANTS = require('./admin-llm-chat.constants');
+const {
+  buildRenderWidgetToolDescription,
+  buildRenderWidgetParameters,
+} = require('../services/widget.catalog.service');
+const { getEnabledWidgets } = require('./widgets');
 
 const TOOL_DEFINITIONS = [
   {
@@ -38,6 +43,53 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_table_date_bounds',
+    description: 'Earliest and latest dates with row count for a table within a bounded lookback window. Use instead of min(date)/max(date) queries without WHERE.',
+    parameters: {
+      type: 'object',
+      properties: {
+        table: { type: 'string', description: 'Whitelisted table name' },
+        tz: { type: 'string', description: 'IANA timezone, default Asia/Kolkata' },
+      },
+      required: ['table'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_mysql_tables',
+    description: 'List all tables in the transactional MySQL database (app data: users, orders, templates, credits, subscriptions, etc.). Use first to discover MySQL tables, then get_mysql_table_schema.',
+    parameters: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_mysql_table_schema',
+    description: 'REQUIRED before query_mysql. Returns columns (name, type, key) for a MySQL table.',
+    parameters: {
+      type: 'object',
+      properties: {
+        table: { type: 'string', description: 'MySQL table name' },
+      },
+      required: ['table'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'query_mysql',
+    description: 'Run a read-only SELECT/SHOW/DESCRIBE/EXPLAIN on the MySQL app database. Use for transactional/relational data (users, orders, templates, credits). JOINs are allowed in MySQL. Call get_mysql_table_schema first; results cap at max_rows (default 1000).',
+    parameters: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'Read-only SQL (SELECT/SHOW/DESCRIBE/EXPLAIN)' },
+        max_rows: { type: 'integer', description: 'Max rows (default 1000)' },
+      },
+      required: ['sql'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'get_date_context',
     description: 'Get today, yesterday, and lookback dates in YYYY-MM-DD for the account timezone.',
     parameters: {
@@ -67,7 +119,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'remember',
-    description: 'Store a fact for this user across future conversations.',
+    description: 'Store an explicit user-stated preference or business definition for future conversations — not analysis results or metrics from this turn.',
     parameters: {
       type: 'object',
       properties: {
@@ -77,6 +129,11 @@ const TOOL_DEFINITIONS = [
       required: ['key', 'value'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'render_widget',
+    description: buildRenderWidgetToolDescription(),
+    parameters: buildRenderWidgetParameters(),
   },
 ];
 
@@ -99,11 +156,18 @@ function toAnthropicTools(definitions) {
   }));
 }
 
-function getEnabledToolDefinitions() {
+function getEnabledToolDefinitions({ includeRenderWidget = true } = {}) {
   return TOOL_DEFINITIONS.filter((d) => {
+    if (d.name === 'render_widget') {
+      return includeRenderWidget
+        && CONSTANTS.TOOL_RENDER_WIDGET_ENABLED
+        && getEnabledWidgets().length > 0;
+    }
     if (d.name === 'run_analysis_code' && !CONSTANTS.TOOL_RUN_ANALYSIS_CODE_ENABLED) return false;
-    if (['query_clickhouse', 'get_table_schema', 'list_clickhouse_tables'].includes(d.name)
+    if (['query_clickhouse', 'get_table_schema', 'get_table_date_bounds', 'list_clickhouse_tables'].includes(d.name)
       && !CONSTANTS.TOOL_QUERY_CLICKHOUSE_ENABLED) return false;
+    if (['query_mysql', 'get_mysql_table_schema', 'list_mysql_tables'].includes(d.name)
+      && !CONSTANTS.TOOL_QUERY_MYSQL_ENABLED) return false;
     return true;
   });
 }

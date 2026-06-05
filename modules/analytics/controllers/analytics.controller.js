@@ -10,6 +10,47 @@ const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.contr
 const AnalyticsErrorHandler = require('../middlewares/analytics.error.handler');
 const logger = require('../../../config/lib/logger');
 
+/** Full client-calendar days (00:00–23:59:59 in `tz`) for template analytics routes. */
+function templateAnalyticsUtcFilters(req) {
+  return TimezoneService.templateAnalyticsFiltersFromRequest(req);
+}
+
+function templateMetricAdditionalFilters(queryParams) {
+  const additionalFilters = {};
+  if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
+  if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
+  if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
+  if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
+  if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
+  if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
+  return additionalFilters;
+}
+
+function templateAnalyticsClientWindow(utcFilters, timezone) {
+  return {
+    clientTz: utcFilters.tz || timezone,
+    calendarStart: utcFilters.client_calendar_start,
+    calendarEnd: utcFilters.client_calendar_end
+  };
+}
+
+async function fetchTemplateMetricSeries(req, metricKey) {
+  const queryParams = req.validatedQuery;
+  const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+  const utcFilters = templateAnalyticsUtcFilters(req);
+  const additionalFilters = templateMetricAdditionalFilters(queryParams);
+  const clientWindow = templateAnalyticsClientWindow(utcFilters, timezone);
+  const rows = await AnalyticsService.getTemplateMetricSeries(
+    metricKey,
+    utcFilters,
+    additionalFilters,
+    queryParams.group_by || null,
+    clientWindow
+  );
+  const useClientTzSeries = Boolean(clientWindow.calendarStart && clientWindow.calendarEnd);
+  return useClientTzSeries ? rows : TimezoneService.convertFromUTC(rows, timezone);
+}
+
 class AnalyticsController {
   static async getCharacterCreations(req, res) {
     try {
@@ -97,35 +138,7 @@ class AnalyticsController {
 
   static async getTemplateViews(req, res) {
     try {
-      const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      // Convert client timezone dates to UTC for database queries
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
-
-      const additionalFilters = {};
-      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
-      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
-      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
-      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
-      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
-      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
-
-      let templateViews;
-      if (queryParams.group_by) {
-        templateViews = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_VIEWS', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        templateViews = await AnalyticsService.queryMixedDateRange('TEMPLATE_VIEWS', utcFilters, additionalFilters);
-      }
-
-      // Convert UTC results back to client timezone
-      const convertedResults = TimezoneService.convertFromUTC(templateViews, timezone);
+      const convertedResults = await fetchTemplateMetricSeries(req, 'TEMPLATE_VIEWS');
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -142,35 +155,7 @@ class AnalyticsController {
 
   static async getTemplateTries(req, res) {
     try {
-      const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      // Convert client timezone dates to UTC for database queries
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
-
-      const additionalFilters = {};
-      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
-      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
-      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
-      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
-      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
-      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
-
-      let templateTries;
-      if (queryParams.group_by) {
-        templateTries = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_TRIES', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        templateTries = await AnalyticsService.queryMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters);
-      }
-
-      // Convert UTC results back to client timezone
-      const convertedResults = TimezoneService.convertFromUTC(templateTries, timezone);
+      const convertedResults = await fetchTemplateMetricSeries(req, 'TEMPLATE_TRIES');
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -187,35 +172,7 @@ class AnalyticsController {
 
   static async getTemplateDownloads(req, res) {
     try {
-      const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      // Convert client timezone dates to UTC for database queries
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
-
-      const additionalFilters = {};
-      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
-      if (queryParams.aspect_ratio) additionalFilters.aspect_ratio = queryParams.aspect_ratio;
-      if (queryParams.orientation) additionalFilters.orientation = queryParams.orientation;
-      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
-      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
-      if (queryParams.user_id) additionalFilters.user_id = queryParams.user_id;
-
-      let templateDownloads;
-      if (queryParams.group_by) {
-        templateDownloads = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        templateDownloads = await AnalyticsService.queryMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters);
-      }
-
-      // Convert UTC results back to client timezone
-      const convertedResults = TimezoneService.convertFromUTC(templateDownloads, timezone);
+      const convertedResults = await fetchTemplateMetricSeries(req, 'TEMPLATE_DOWNLOADS');
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -232,30 +189,7 @@ class AnalyticsController {
 
   static async getTemplateSuccesses(req, res) {
     try {
-      const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
-
-      const additionalFilters = {};
-      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
-      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
-      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
-
-      let templateSuccesses;
-      if (queryParams.group_by) {
-        templateSuccesses = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_SUCCESSES', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        templateSuccesses = await AnalyticsService.queryMixedDateRange('TEMPLATE_SUCCESSES', utcFilters, additionalFilters);
-      }
-
-      const convertedResults = TimezoneService.convertFromUTC(templateSuccesses, timezone);
+      const convertedResults = await fetchTemplateMetricSeries(req, 'TEMPLATE_SUCCESSES');
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -268,30 +202,7 @@ class AnalyticsController {
 
   static async getTemplateFailures(req, res) {
     try {
-      const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
-
-      const additionalFilters = {};
-      if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
-      if (queryParams.generation_type) additionalFilters.generation_type = queryParams.generation_type;
-      if (queryParams.template_id) additionalFilters.template_id = queryParams.template_id;
-
-      let templateFailures;
-      if (queryParams.group_by) {
-        templateFailures = await AnalyticsService.queryMixedDateRangeGrouped('TEMPLATE_FAILURES', utcFilters, additionalFilters, queryParams.group_by);
-      } else {
-        templateFailures = await AnalyticsService.queryMixedDateRange('TEMPLATE_FAILURES', utcFilters, additionalFilters);
-      }
-
-      const convertedResults = TimezoneService.convertFromUTC(templateFailures, timezone);
+      const convertedResults = await fetchTemplateMetricSeries(req, 'TEMPLATE_FAILURES');
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: convertedResults
@@ -305,16 +216,8 @@ class AnalyticsController {
   static async getTopTemplatesByGeneration(req, res) {
     try {
       const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        null,
-        null,
-        timezone
-      );
       const filters = {
-        ...utcFilters,
+        ...templateAnalyticsUtcFilters(req),
         page: queryParams.page || 1,
         limit: queryParams.limit || 20
       };
@@ -351,14 +254,7 @@ class AnalyticsController {
   static async getTemplateConversionMetrics(req, res) {
     try {
       const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
+      const utcFilters = templateAnalyticsUtcFilters(req);
       const data = await AnalyticsService.getTemplateConversionMetrics({
         ...utcFilters,
         limit: queryParams.limit
@@ -378,14 +274,7 @@ class AnalyticsController {
   static async getTemplatePerformance(req, res) {
     try {
       const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
+      const utcFilters = templateAnalyticsUtcFilters(req);
       const result = await AnalyticsService.getTemplatePerformanceTable({
         ...utcFilters,
         cohort: queryParams.cohort,
@@ -461,16 +350,7 @@ class AnalyticsController {
   static async getTemplateAnalyticsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      // Convert client timezone dates to UTC for database queries
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
+      const utcFilters = templateAnalyticsUtcFilters(req);
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -485,12 +365,10 @@ class AnalyticsController {
         AnalyticsService.getCountMixedDateRange('TEMPLATE_TRIES', utcFilters, additionalFilters)
       ]);
 
-      // Convert date range back to client timezone for response
-      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        timezone
-      );
+      const convertedDateRange = {
+        start_date: utcFilters.client_calendar_start,
+        end_date: utcFilters.client_calendar_end
+      };
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -516,16 +394,7 @@ class AnalyticsController {
   static async getTemplateDownloadsSummary(req, res) {
     try {
       const queryParams = req.validatedQuery;
-      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
-
-      // Convert client timezone dates to UTC for database queries
-      const utcFilters = TimezoneService.convertToUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        queryParams.start_time,
-        queryParams.end_time,
-        timezone
-      );
+      const utcFilters = templateAnalyticsUtcFilters(req);
 
       const additionalFilters = {};
       if (queryParams.output_type) additionalFilters.output_type = queryParams.output_type;
@@ -541,12 +410,10 @@ class AnalyticsController {
         AnalyticsService.getCountMixedDateRange('TEMPLATE_DOWNLOADS', utcFilters, additionalFilters)
       ]);
 
-      // Convert date range back to client timezone for response
-      const convertedDateRange = TimezoneService.convertDateRangeFromUTC(
-        queryParams.start_date,
-        queryParams.end_date,
-        timezone
-      );
+      const convertedDateRange = {
+        start_date: utcFilters.client_calendar_start,
+        end_date: utcFilters.client_calendar_end
+      };
 
       return res.status(HTTP_STATUS_CODES.OK).json({
         data: {
@@ -1860,6 +1727,102 @@ class AnalyticsController {
       return res.status(HTTP_STATUS_CODES.OK).json({ data: { daily } });
     } catch (error) {
       logger.error('Error fetching active subscriptions daily:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSearchSummary(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const summary = await AnalyticsService.getSearchSummary({
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date
+      });
+
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: summary });
+    } catch (error) {
+      logger.error('Error fetching search analytics summary:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSearchDaily(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      let daily;
+      const filterPayload = {
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date
+      };
+      if (queryParams.group_by) {
+        daily = await AnalyticsService.getSearchDailyGrouped(filterPayload, queryParams.group_by);
+      } else {
+        daily = await AnalyticsService.getSearchDaily(filterPayload);
+      }
+
+      const convertedResults = TimezoneService.convertFromUTC(daily, timezone);
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: convertedResults });
+    } catch (error) {
+      logger.error('Error fetching search analytics daily:', {
+        error: error.message,
+        stack: error.stack,
+        query: req.validatedQuery
+      });
+      AnalyticsErrorHandler.handleAnalyticsErrors(error, res);
+    }
+  }
+
+  static async getSearchTopQueries(req, res) {
+    try {
+      const queryParams = req.validatedQuery;
+      const timezone = queryParams.tz || TimezoneService.getDefaultTimezone();
+      const utcFilters = TimezoneService.convertToUTC(
+        queryParams.start_date,
+        queryParams.end_date,
+        queryParams.start_time,
+        queryParams.end_time,
+        timezone
+      );
+
+      const rows = await AnalyticsService.getSearchTopQueries({
+        ...queryParams,
+        start_date: utcFilters.start_date,
+        end_date: utcFilters.end_date,
+        limit: queryParams.limit || 50,
+        offset: queryParams.offset || 0
+      });
+
+      return res.status(HTTP_STATUS_CODES.OK).json({ data: rows });
+    } catch (error) {
+      logger.error('Error fetching search top queries:', {
         error: error.message,
         stack: error.stack,
         query: req.validatedQuery

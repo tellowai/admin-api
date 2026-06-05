@@ -32,6 +32,8 @@ const ANALYTICS_CONSTANTS = {
     AE_RENDERING_DAILY_STATS: "ae_rendering_daily_stats",
     TECH_HEALTH_DAILY_STATS: "tech_health_daily_stats",
     PAYMENT_FAILURES_DAILY_STATS: "payment_failures_daily_stats",
+    CLOUD_INFRA_COST_DAILY_STATS: "cloud_infra_cost_daily_stats",
+    SEARCH_QUERY_DAILY_STATS: "search_query_daily_stats",
   },
   // Allow-lists for payment_failures_daily_stats WHERE / GROUP BY (must be LowCardinality cols on the table).
   PAYMENT_FAILURES_FILTER_COLUMNS: [
@@ -80,10 +82,44 @@ const ANALYTICS_CONSTANTS = {
     SUCCESSES: "successes",
     FAILURES: "failures",
   },
+  /** Hub event_name for each template daily chart metric (client-TZ bucketing on raw). */
+  TEMPLATE_RAW_EVENT_NAMES: {
+    TEMPLATE_VIEWS: "template_view",
+    TEMPLATE_TRIES: "template_generation_queue",
+    TEMPLATE_DOWNLOADS: "template_download",
+    TEMPLATE_SUCCESSES: "template_generation_success",
+    TEMPLATE_FAILURES: "template_generation_fail",
+  },
   // Allowed group_by columns per domain (for MV tables)
   AUTH_GROUP_BY_COLUMNS: ["provider"],
   REVENUE_GROUP_BY_COLUMNS: ["currency", "payment_provider", "plan_name"],
   TEMPLATE_GROUP_BY_COLUMNS: ["output_type", "generation_type"],
+  SEARCH_GROUP_BY_COLUMNS: [
+    'language_code',
+    'app_version',
+    'os_name',
+    'os_version',
+    'device_brand',
+    'device_model',
+    'network_type',
+    'store_country',
+    'ip_country',
+    'timezone',
+    'device_type'
+  ],
+  SEARCH_FILTER_COLUMNS: [
+    'language_code',
+    'app_version',
+    'os_name',
+    'os_version',
+    'device_brand',
+    'device_model',
+    'network_type',
+    'store_country',
+    'ip_country',
+    'timezone',
+    'device_type'
+  ],
   CREDITS_GROUP_BY_COLUMNS: ["reason", "country"],
   GENDER_ENUMS: {
     MALE: "male",

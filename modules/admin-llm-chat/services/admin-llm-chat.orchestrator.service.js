@@ -17,6 +17,7 @@ const contextBreakdown = require('./context.breakdown.service');
 const attachmentResolver = require('./attachment.resolver.service');
 const AttachmentModel = require('../models/attachment.model');
 const titleService = require('./conversation.title.service');
+const memoryExtraction = require('./memory.extraction.service');
 const { formatProviderError } = require('./provider-error.util');
 const messageScope = require('./message-scope.util');
 const { redactValue, redactString, truncatePreview } = require('./pii.redactor');
@@ -26,6 +27,41 @@ const kafkaCtrl = require('../../core/controllers/kafka.controller');
 
 function estimateCost(modelMeta, tokensIn, tokensOut) {
   return ((tokensIn / 1e6) * modelMeta.inputCostPer1M + (tokensOut / 1e6) * modelMeta.outputCostPer1M);
+}
+
+/** True when the model supplied enough arguments to run the tool (not just {}). */
+function toolCallArgsReady(name, args) {
+  const a = args && typeof args === 'object' ? args : {};
+  switch (name) {
+    case 'query_mysql':
+    case 'query_clickhouse':
+      return Boolean(String(a.sql || '').trim());
+    case 'run_analysis_code':
+      return Boolean(String(a.code || '').trim());
+    case 'get_table_schema':
+    case 'get_table_date_bounds':
+    case 'get_mysql_table_schema':
+      return Boolean(String(a.table || '').trim());
+    case 'remember':
+      return Boolean(String(a.key || '').trim());
+    case 'render_widget':
+      return Boolean(String(args?.widget_type || '').trim() && args?.data && typeof args.data === 'object');
+    default:
+      return true;
+  }
+}
+
+function cancelledToolResult(name, reason = 'STREAM_ABORTED') {
+  const result = {
+    success: false,
+    error: reason,
+    message: 'Tool call cancelled because the stream was interrupted.',
+    retryable: true,
+  };
+  return {
+    ...result,
+    envelope: `<tool_result tool="${name}">\n${JSON.stringify(result)}\n</tool_result>`,
+  };
 }
 
 /** Human-readable tool output for UI trace (not LLM envelope XML). */
@@ -151,6 +187,44 @@ class TurnTraceBuilder {
     this.currentKind = null;
   }
 
+  onWidget(widgetSpec) {
+    if (this.currentKind === 'text' && this.textBuffer) {
+      this.trace[this.segmentIndex].text = this.textBuffer;
+      this.sendEvent('segment_end', {
+        kind: 'text',
+        index: this.segmentIndex,
+        text: this.textBuffer,
+      });
+      this.textBuffer = '';
+      this.currentKind = null;
+    }
+    this.segmentIndex += 1;
+    const seg = {
+      type: 'widget',
+      source: widgetSpec.source || 'static_widget',
+      widget: widgetSpec.widget,
+      version: widgetSpec.version,
+      data: widgetSpec.data,
+      exportable: Boolean(widgetSpec.exportable),
+      status: 'completed',
+    };
+    this.trace.push(seg);
+    this.sendEvent('widget', {
+      index: this.segmentIndex,
+      source: seg.source,
+      widget: seg.widget,
+      version: seg.version,
+      data: seg.data,
+      exportable: seg.exportable,
+    });
+    this.sendEvent('segment_end', {
+      kind: 'widget',
+      index: this.segmentIndex,
+      widget: seg.widget,
+    });
+    this.currentKind = null;
+  }
+
   finalize() {
     if (this.currentKind === 'text' && this.textBuffer) {
       this.trace[this.segmentIndex].text = this.textBuffer;
@@ -209,6 +283,8 @@ async function runRefusalTurn({
       finish_reason: 'in_progress',
     },
   ]);
+
+  await ConversationModel.touchUpdatedAt(conversation.conversation_id);
 
   sendEvent('meta', {
     conversationId: conversation.conversation_id,
@@ -360,10 +436,14 @@ async function runStreamingTurn({
     throw err;
   }
 
-  const [systemText, historyPayload] = await Promise.all([
-    promptService.buildSystemPrompt(userId, conversation.system_prompt_version),
+  const [systemParts, historyPayload] = await Promise.all([
+    promptService.buildSystemPromptParts(userId, conversation.system_prompt_version, {
+      queryText: userMessage.content,
+    }),
     conversationData.loadMessagesWithTools(conversation.conversation_id),
   ]);
+  const systemText = systemParts.full;
+  const anthropicSystem = promptService.buildAnthropicSystemParam(systemParts);
   const history = historyPayload.messages;
 
   const seq = await MessageModel.nextSequenceNo(conversation.conversation_id);
@@ -371,6 +451,11 @@ async function runStreamingTurn({
   const userMsgId = uuidv4();
   const assistantMsgId = uuidv4();
   const assistantSeq = seq + 1;
+
+  // Close any orphaned in_progress rows from a previously abandoned turn before
+  // starting this one. The controller already blocks concurrent streams, so this
+  // can only match stale rows, never a live one.
+  await MessageModel.finalizeStaleInProgress(conversation.conversation_id);
 
   await MessageModel.createMany([
     {
@@ -403,6 +488,8 @@ async function runStreamingTurn({
     await AttachmentModel.linkToMessage(attachmentIds, userMsgId);
   }
 
+  await ConversationModel.touchUpdatedAt(conversation.conversation_id);
+
   const userTurnMessage = {
     role: 'user',
     content: resolvedUser.content,
@@ -433,22 +520,26 @@ async function runStreamingTurn({
   });
 
   const provider = await LLMProviderFactory.createProvider(modelMeta.provider);
-  const toolDefs = getEnabledToolDefinitions();
-  const tools = modelMeta.provider === 'anthropic' ? toAnthropicTools(toolDefs) : toOpenAITools(toolDefs);
   const traceBuilder = new TurnTraceBuilder(sendEvent);
   let toolCallCount = 0;
+  let rememberToolUsed = false;
   const maxTools = CONSTANTS.MAX_TOOL_CALLS_PER_TURN;
   let turnTokensIn = 0;
   let turnTokensOut = 0;
   let sawToolThisRound = false;
   let budgetExhausted = false;
+  let hadQueryRowsThisTurn = false;
   const turnExtraMessages = [];
 
   const runLoop = async ({ allowTools = true, summaryNudge = false } = {}) => {
-    const activeTools = allowTools ? tools : undefined;
+    const includeRenderWidget = !allowTools || hadQueryRowsThisTurn || summaryNudge;
+    const toolDefs = getEnabledToolDefinitions({ includeRenderWidget });
+    const activeTools = allowTools
+      ? (modelMeta.provider === 'anthropic' ? toAnthropicTools(toolDefs) : toOpenAITools(toolDefs))
+      : undefined;
     const summaryNudgeContent = userId === CONSTANTS.DIGEST_SYSTEM_USER_ID
       ? CONSTANTS.DIGEST_SUMMARY_NUDGE
-      : 'Based on the tool results above, answer the user now. Do not call more tools. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.';
+      : 'Based on the tool results above, answer the user now. Do not call more tools. If you had numeric/time-series data and did not call render_widget yet, you should have — do not paste chart JSON in text; summarize in prose only for this round. Direct answer first, then **Analysis** with period-over-period comparison (e.g. vs prior week). Business language only — no table names, schemas, or tool narration. Call out anomalies and what worked best. **Recommendations** only if off-track or clear levers; omit if on par/growing. If blocked, say what is missing in data, not how many queries you ran.';
     const nudge = summaryNudge
       ? [{
         role: 'user',
@@ -476,14 +567,29 @@ async function runStreamingTurn({
       traceBuilder.markFinalSegment();
     }
 
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      throw err;
+    }
+
+    const roundAbort = new AbortController();
+    const onParentAbort = () => roundAbort.abort();
+    if (signal) {
+      signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+
+    try {
     await new Promise((resolve, reject) => {
       provider.streamChatCompletion({
         model: modelMeta.id,
         messages: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role !== 'system') : messages,
-        system: modelMeta.provider === 'anthropic' ? messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n') : undefined,
+        system: modelMeta.provider === 'anthropic'
+          ? anthropicSystem
+          : undefined,
         tools: activeTools,
         maxTokens: modelMeta.maxOutputTokens,
-        signal,
+        signal: roundAbort.signal,
         onDelta: ({ text }) => {
           sendEvent('thinking', {});
           traceBuilder.appendText(text);
@@ -496,8 +602,10 @@ async function runStreamingTurn({
         onToolCallStart: ({ id, name }) => {
           sawToolThisRound = true;
           pendingToolCalls.push({ id, name, arguments: {} });
-          traceBuilder.onToolStart({ id, name });
-          sendEvent('tool_start', { toolCallId: id, name });
+          if (name !== 'render_widget') {
+            traceBuilder.onToolStart({ id, name });
+            sendEvent('tool_start', { toolCallId: id, name });
+          }
         },
         onToolCallEnd: ({ id, name, arguments: args }) => {
           const tc = pendingToolCalls.find((t) => t.id === id) || { id, name, arguments: args };
@@ -511,9 +619,20 @@ async function runStreamingTurn({
         onError: (err) => reject(err),
       });
     });
+    } finally {
+      if (signal) {
+        signal.removeEventListener('abort', onParentAbort);
+      }
+    }
 
     turnTokensIn += roundTokensIn;
     turnTokensOut += roundTokensOut;
+
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      throw err;
+    }
 
     if (pendingToolCalls.length && toolCallCount < maxTools) {
       if (!sawToolThisRound) traceBuilder.markFinalSegment();
@@ -522,10 +641,27 @@ async function runStreamingTurn({
       const toolResults = [];
       const toolRowsToInsert = [];
       for (const tc of callsForRound) {
+        if (signal?.aborted) {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          throw err;
+        }
         toolCallCount += 1;
+        if (tc.name === 'remember') rememberToolUsed = true;
         const start = Date.now();
-        const result = await executeTool(tc.name, tc.arguments, { userId });
+        const argsReady = toolCallArgsReady(tc.name, tc.arguments);
+        const result = (!argsReady && signal?.aborted)
+          ? cancelledToolResult(tc.name)
+          : await executeTool(tc.name, tc.arguments, {
+            userId,
+            conversationId: conversation.conversation_id,
+          });
         const durationMs = Date.now() - start;
+        if (['query_clickhouse', 'query_mysql'].includes(tc.name)
+          && result.success !== false
+          && (result.rows?.length > 0 || result.row_count > 0)) {
+          hadQueryRowsThisTurn = true;
+        }
         toolRowsToInsert.push({
           tool_call_id: tc.id,
           message_id: assistantMsgId,
@@ -537,22 +673,37 @@ async function runStreamingTurn({
           rows_returned: result.rows?.length,
           error_code: result.error || null,
         });
-        traceBuilder.onToolEnd({
-          id: tc.id,
-          name: tc.name,
-          arguments: tc.arguments,
-          durationMs,
-          result,
-        });
-        sendEvent('tool_end', {
-          toolCallId: tc.id,
-          name: tc.name,
-          durationMs,
-          args: redactValue(tc.arguments || {}),
-          status: result.success === false ? 'failed' : 'completed',
-          resultPreview: truncatePreview(redactValue(formatToolResultPreview(result)), 2048),
-          rowsReturned: result.rows?.length ?? null,
-        });
+        if (tc.name === 'render_widget' && result.widgetSpec) {
+          traceBuilder.onWidget(result.widgetSpec);
+          sendEvent('tool_end', {
+            toolCallId: tc.id,
+            name: tc.name,
+            durationMs,
+            status: 'completed',
+            resultPreview: { rendered: result.widgetSpec.widget },
+          });
+        } else {
+          if (tc.name === 'render_widget' && result.success === false) {
+            traceBuilder.onToolStart({ id: tc.id, name: tc.name });
+            sendEvent('tool_start', { toolCallId: tc.id, name: tc.name });
+          }
+          traceBuilder.onToolEnd({
+            id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+            durationMs,
+            result,
+          });
+          sendEvent('tool_end', {
+            toolCallId: tc.id,
+            name: tc.name,
+            durationMs,
+            args: redactValue(tc.arguments || {}),
+            status: result.success === false ? 'failed' : 'completed',
+            resultPreview: truncatePreview(redactValue(formatToolResultPreview(result)), 2048),
+            rowsReturned: result.rows?.length ?? null,
+          });
+        }
         const toolContent = typeof result.envelope === 'string'
           ? result.envelope
           : JSON.stringify(result.envelope || {});
@@ -714,6 +865,16 @@ async function runStreamingTurn({
       ).catch(() => {});
     }
 
+    memoryExtraction.schedulePostTurnExtraction({
+      userId,
+      conversationId: conversation.conversation_id,
+      userContent: typeof userMessage.content === 'string' ? userMessage.content : '',
+      assistantContent: content,
+      throughMessageId: assistantMsgId,
+      toolCallCount,
+      rememberToolUsed,
+    });
+
     if (turnContextUsage) sendEvent('context_usage', turnContextUsage);
 
     sendEvent('done', {
@@ -771,7 +932,7 @@ async function runStreamingTurn({
       await MessageModel.finalize(assistantMsgId, {
         content: partial.content || '',
         content_parts: partial.content_parts,
-        finish_reason: 'stop',
+        finish_reason: partialText.length || hasPartial ? 'aborted' : 'interrupted',
         tokens_in: turnTokensIn,
         tokens_out: turnTokensOut,
         cost_usd: estimateCost(modelMeta, turnTokensIn, turnTokensOut),
@@ -828,6 +989,10 @@ async function runStreamingTurn({
     });
     sendEvent('error', formatted);
     sendEvent('done', { finishReason: 'error', trace: partial.trace });
+  } finally {
+    // Safety net: if no handler finalized this row (unexpected throw/early exit),
+    // close it atomically. Conditional on master so a completed row is never clobbered.
+    await MessageModel.finalizeIfInProgress(assistantMsgId).catch(() => {});
   }
 }
 

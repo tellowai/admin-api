@@ -222,6 +222,39 @@ class AnalyticsModel {
     return result.data || [];
   }
 
+  /** Template hub events by client-local calendar day (replaces UTC `report_date` MV buckets). */
+  static async queryTemplateEventsDailyClientTz(whereClause, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Template hub events grouped by dimension, bucketed in client TZ. */
+  static async queryTemplateEventsDailyGroupedClientTz(whereClause, groupKeyExpr, clientTz) {
+    const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        ${groupKeyExpr} AS group_key,
+        count() AS count
+      FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
+      WHERE ${whereClause}
+      GROUP BY date, group_key
+      ORDER BY date ASC, group_key ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
   /** Commerce purchase counts by client-local calendar day (`revenue_mv` semantics on raw). */
   static async queryPurchasesCommerceDailyClientTz(whereClause, clientTz) {
     const tzEsc = String(clientTz || 'UTC').replace(/'/g, "''");
@@ -519,6 +552,67 @@ class AnalyticsModel {
       ORDER BY successes DESC, tries DESC
       LIMIT ${safeLimit}
       OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Top templates from hub events with precise UTC timestamp window (client-calendar semantics).
+   * Aligns with template_generation_queue / template_generation_success chart totals.
+   */
+  static async getTopTemplatesByGenerationRaw(rangeStartUtc, rangeEndUtc, limit, offset) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const startEsc = esc(String(rangeStartUtc || '').trim());
+    const endEsc = esc(String(rangeEndUtc || '').trim());
+    const safeLimit = Math.min(Math.max(1, parseInt(limit, 10) || 20), 100);
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        object_id AS template_id,
+        countIf(event_name = 'template_generation_queue') AS tries,
+        countIf(event_name = 'template_generation_success') AS successes
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${startEsc}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')
+        AND object_type = 'template'
+        AND event_name IN ('template_generation_queue', 'template_generation_success')
+      WHERE object_id != '' AND trimBoth(object_id) != ''
+      GROUP BY template_id
+      HAVING tries > 0 OR successes > 0
+      ORDER BY successes DESC, tries DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Per-user template_generation_queue counts for template analytics drill-down.
+   */
+  static async getTemplateQueueUserSummaryRaw(templateId, rangeStartUtc, rangeEndUtc) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tid = esc(String(templateId || '').trim());
+    if (!tid) return [];
+    const startEsc = esc(String(rangeStartUtc || '').trim());
+    const endEsc = esc(String(rangeEndUtc || '').trim());
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        user_id,
+        count() AS generation_count,
+        argMax(properties['generationId'], timestamp) AS latest_generation_id,
+        max(timestamp) AS last_created_at
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${startEsc}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')
+        AND object_type = 'template'
+        AND event_name = 'template_generation_queue'
+        AND object_id = '${tid}'
+      WHERE user_id != '' AND trimBoth(user_id) != ''
+      GROUP BY user_id
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
@@ -1165,15 +1259,29 @@ error_category,
    * UTC timestamp predicates on analytics_events_raw.timestamp (DateTime64).
    * Matches the pattern used for payment-failure raw queries.
    */
-  static buildRawUtcTimestampConditions(startDate, endDate) {
-    const startMs = new Date(startDate).getTime();
-    const endMs = new Date(endDate).getTime();
-    const startStr = new Date(startMs).toISOString().slice(0, 19).replace('T', ' ');
-    const endStr = new Date(endMs).toISOString().slice(0, 19).replace('T', ' ');
+  static buildRawUtcTimestampConditions(startDate, endDate, startTime, endTime) {
+    const startYmd =
+      startDate instanceof Date
+        ? startDate.toISOString().split('T')[0]
+        : String(startDate || '').split('T')[0];
+    const endYmd =
+      endDate instanceof Date ? endDate.toISOString().split('T')[0] : String(endDate || '').split('T')[0];
+    const st = startTime && String(startTime).trim() ? String(startTime).trim() : '00:00:00';
+    const et = endTime && String(endTime).trim() ? String(endTime).trim() : '23:59:59';
+    const startStr = `${startYmd} ${st.length === 5 ? `${st}:00` : st}`;
+    const endStr = `${endYmd} ${et.length === 5 ? `${et}:59` : et}`;
     return [
       `timestamp >= toDateTime64('${startStr}', 3, 'UTC')`,
-      `timestamp <= toDateTime64('${endStr}.999', 3, 'UTC')`
+      `timestamp <= toDateTime64('${endStr}${endStr.includes('.') ? '' : '.999'}', 3, 'UTC')`
     ];
+  }
+
+  /** template_id on order lifecycle events (à la carte stores template_resource_id too). */
+  static orderEventTemplateIdExpr() {
+    return `coalesce(
+      nullIf(trim(properties['template_id']), ''),
+      nullIf(trim(properties['template_resource_id']), '')
+    )`;
   }
 
   /**
@@ -1228,7 +1336,7 @@ error_category,
     const ts = (timestampConditions || []).join(' AND ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
         count() AS purchases,
         sum(toFloat64OrZero(properties['amount'])) AS revenue
@@ -1236,8 +1344,8 @@ error_category,
       PREWHERE event_name = 'order_completed'
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-      GROUP BY properties['template_id'], currency
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+      GROUP BY template_id, currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
@@ -1254,7 +1362,7 @@ error_category,
       .join(', ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         upper(coalesce(nullIf(properties['currency'], ''), 'INR')) AS currency,
         count() AS purchases,
         sum(toFloat64OrZero(properties['amount'])) AS revenue
@@ -1262,9 +1370,9 @@ error_category,
       PREWHERE event_name = 'order_completed'
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-        AND properties['template_id'] IN (${safeIds})
-      GROUP BY properties['template_id'], currency
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+        AND ${AnalyticsModel.orderEventTemplateIdExpr()} IN (${safeIds})
+      GROUP BY template_id, currency
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
@@ -1281,16 +1389,16 @@ error_category,
       .join(', ');
     const query = `
       SELECT
-        properties['template_id'] AS template_id,
+        ${AnalyticsModel.orderEventTemplateIdExpr()} AS template_id,
         countIf(event_name = 'order_created') AS orders_created,
         countIf(event_name = 'order_completed') AS orders_completed
       FROM ${ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW}
       PREWHERE event_name IN ('order_created', 'order_completed')
         AND object_type = 'order'
         AND ${ts}
-      WHERE properties['template_id'] != ''
-        AND properties['template_id'] IN (${safeIds})
-      GROUP BY properties['template_id']
+      WHERE ${AnalyticsModel.orderEventTemplateIdExpr()} != ''
+        AND ${AnalyticsModel.orderEventTemplateIdExpr()} IN (${safeIds})
+      GROUP BY template_id
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];
@@ -1485,6 +1593,200 @@ error_category,
         )
       GROUP BY date
       ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /**
+   * Cloud infra cost spoke (from Hub MV). One row per provider per day after FINAL merge.
+   */
+  static async queryCloudInfraCostDailyByDateRange(startCal, endCal) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.CLOUD_INFRA_COST_DAILY_STATS;
+    const query = `
+      SELECT
+        toString(report_date) AS cost_date,
+        provider,
+        currency,
+        status,
+        estimated_total_net,
+        estimated_total_gross,
+        resource_count,
+        error_message
+      FROM ${table} FINAL
+      WHERE report_date >= toDate('${esc(startCal)}')
+        AND report_date <= toDate('${esc(endCal)}')
+      ORDER BY report_date ASC, provider ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct users with any event per calendar day (infra unit economics denominator). */
+  static async queryInfraCostDailyActiveUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        uniqIf(user_id, user_id IS NOT NULL AND trimBoth(user_id) != '') AS active_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct commerce purchasers per calendar day (infra unit economics). */
+  static async queryInfraCostDailyPayingUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
+        uniqIf(
+          user_id,
+          event_name = 'purchase'
+            AND object_type = 'commerce'
+            AND revenue > 0
+            AND user_id IS NOT NULL
+            AND trimBoth(user_id) != ''
+        ) AS paying_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+        AND event_name = 'purchase'
+        AND object_type = 'commerce'
+      GROUP BY date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct active users per calendar month in client TZ. */
+  static async queryInfraCostMonthlyActiveUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        formatDateTime(toDate(toTimeZone(timestamp, '${tzEsc}')), '%Y-%m') AS month,
+        uniqIf(user_id, user_id IS NOT NULL AND trimBoth(user_id) != '') AS active_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+      GROUP BY month
+      ORDER BY month ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  /** Distinct commerce purchasers per calendar month in client TZ. */
+  static async queryInfraCostMonthlyPayingUsers(rangeStartUtc, rangeEndUtc, clientTz) {
+    const esc = (s) => String(s).replace(/'/g, "''");
+    const tzEsc = (String(clientTz || 'UTC').trim() || 'UTC').replace(/'/g, "''");
+    const table = ANALYTICS_CONSTANTS.TABLES.ANALYTICS_EVENTS_RAW;
+    const query = `
+      SELECT
+        formatDateTime(toDate(toTimeZone(timestamp, '${tzEsc}')), '%Y-%m') AS month,
+        uniqIf(
+          user_id,
+          revenue > 0 AND user_id IS NOT NULL AND trimBoth(user_id) != ''
+        ) AS paying_users
+      FROM ${table}
+      PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
+        AND timestamp <= toDateTime64('${esc(rangeEndUtc)}', 3, 'UTC')
+        AND event_name = 'purchase'
+        AND object_type = 'commerce'
+      GROUP BY month
+      ORDER BY month ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async querySearchDailyStats(whereConditions) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        report_date AS date,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date
+      ORDER BY date ASC
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async querySearchSummary(whereConditions) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        sum(search_count) AS total_searches,
+        sum(zero_result_count) AS total_zero_results,
+        sum(click_count) AS total_clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data?.[0] || {
+      total_searches: 0,
+      total_zero_results: 0,
+      total_clicks: 0,
+      unique_devices: 0
+    };
+  }
+
+  static async querySearchTopQueries(whereConditions, limit, offset) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
+    const query = `
+      SELECT
+        any(query_normalized) AS query,
+        query_hash,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks,
+        uniqMerge(unique_devices) AS unique_devices
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY query_hash
+      ORDER BY searches DESC
+      LIMIT ${safeLimit}
+      OFFSET ${safeOffset}
+    `;
+    const result = await slaveClickhouse.querying(query, { dataObjects: true });
+    return result.data || [];
+  }
+
+  static async querySearchDailyStatsGrouped(whereConditions, groupByColumn) {
+    const table = ANALYTICS_CONSTANTS.TABLES.SEARCH_QUERY_DAILY_STATS;
+    const query = `
+      SELECT
+        report_date AS date,
+        ${groupByColumn} AS group_key,
+        sum(search_count) AS searches,
+        sum(zero_result_count) AS zero_results,
+        sum(click_count) AS clicks
+      FROM ${table}
+      WHERE ${whereConditions.join(' AND ')}
+      GROUP BY report_date, ${groupByColumn}
+      ORDER BY date ASC, group_key ASC
     `;
     const result = await slaveClickhouse.querying(query, { dataObjects: true });
     return result.data || [];

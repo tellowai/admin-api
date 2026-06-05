@@ -108,6 +108,7 @@ async function computeBreakdown({
   const systemParts = await promptService.buildSystemPromptParts(
     userId,
     conversation.system_prompt_version,
+    { queryText: pendingUserContent || '' },
   );
 
   const baseHistory = [...(history || [])];

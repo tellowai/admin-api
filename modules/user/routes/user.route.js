@@ -98,6 +98,14 @@ module.exports = function (app) {
 
   app.route(
     versionConfig.routePrefix +
+    "/admin/consumer-users/by-user-id/:userId/hover-card"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getConsumerUserHoverCard
+  );
+
+  app.route(
+    versionConfig.routePrefix +
     "/admin/consumer-users/by-user-id/:userId"
   ).get(
     AuthMiddleware.isAdminUser,

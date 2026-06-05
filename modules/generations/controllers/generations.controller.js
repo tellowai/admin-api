@@ -2,6 +2,9 @@
 
 const generationsModel = require('../models/generations.model');
 const generationNodeExecutionsModel = require('../models/generation-node-executions.model');
+const {
+  filterGenerationCustomTextFieldsForDisplay
+} = require('../../templates/utils/customTextInputFields.public');
 const workflowNodeModel = require('../../workflow-builder/models/workflow.node.model');
 const AiModelRegistryModel = require('../../workflow-builder/models/ai-model-registry.model');
 const BoothAdminModel = require('../../photo-booths/models/photo-booth.admin.model');
@@ -9,6 +12,11 @@ const SupportModel = require('../../support/models/support.model');
 const moment = require('moment');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const TimezoneService = require('../../analytics/services/timezone.service');
+const {
+  mapGenerationAccessMethod,
+  buildTemplateUserGenerationTimelineItems,
+  applyTemplateAnalyticsAccessToGenerations
+} = require('../services/generation-access-method.service');
 
 const BOOTH_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -17,6 +25,231 @@ const PER_PAGE = 10;
 
 /** Max IDs per batch-status request (single poll round-trip). */
 const BATCH_STATUS_MAX_IDS = 50;
+
+const TEMPLATE_USER_SUMMARY_PER_PAGE = 20;
+
+/** Client-calendar bounds for template analytics drill-down (matches Analytics > Templates). */
+function buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime }) {
+  if (allTime) {
+    return { startDate: null, endDate: null, summaryOptions: { allTime: true } };
+  }
+
+  let utcFilters;
+  let rangeStartUtc;
+  let rangeEndUtc;
+
+  if (!start_date || !end_date) {
+    const endDay = moment.tz(timezone);
+    const startDay = endDay.clone().subtract(6, 'days');
+    const calStart = startDay.format('YYYY-MM-DD');
+    const calEnd = endDay.format('YYYY-MM-DD');
+    ({ rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(calStart, calEnd, timezone));
+    utcFilters = TimezoneService.convertToUTC(calStart, calEnd, '00:00:00', '23:59:59', timezone);
+  } else {
+    const calStart = TimezoneService.toCalendarYmd(start_date);
+    const calEnd = TimezoneService.toCalendarYmd(end_date);
+    ({ rangeStartUtc, rangeEndUtc } = TimezoneService.utcRangeForClientCalendar(calStart, calEnd, timezone));
+    utcFilters = TimezoneService.convertToUTC(calStart, calEnd, '00:00:00', '23:59:59', timezone);
+  }
+
+  const startDate = moment.utc(`${utcFilters.start_date} ${utcFilters.start_time}`).toDate();
+  const endDate = moment.utc(`${utcFilters.end_date} ${utcFilters.end_time}`).toDate();
+
+  return {
+    startDate,
+    endDate,
+    summaryOptions: {
+      allTime: false,
+      utcDateTimeStart: `${utcFilters.start_date} ${utcFilters.start_time}`,
+      utcDateTimeEnd: `${utcFilters.end_date} ${utcFilters.end_time}`,
+      rangeStartUtc,
+      rangeEndUtc
+    }
+  };
+}
+
+exports.listTemplateGenerationUsers = async function (req, res) {
+  try {
+    const templateId = req.query.template_id ? String(req.query.template_id).trim() : '';
+    if (!templateId) {
+      return res.status(400).send({ message: 'template_id is required' });
+    }
+
+    const { start_date, end_date, tz, all_time } = req.query;
+    const timezone = tz || TimezoneService.getDefaultTimezone();
+    const allTime = all_time === 'true' || all_time === '1';
+
+    let startDate = null;
+    let endDate = null;
+    let summaryOptions = { allTime };
+
+    if (!allTime) {
+      const window = buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime });
+      startDate = window.startDate;
+      endDate = window.endDate;
+      summaryOptions = window.summaryOptions;
+
+      if (moment(startDate).isAfter(moment(endDate))) {
+        return res.status(400).send({ message: 'Start date cannot be after end date.' });
+      }
+    }
+
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+    const { rows, total, template_type: templateType } = await generationsModel.getTemplateGenerationUserSummary(
+      templateId,
+      startDate,
+      endDate,
+      page,
+      TEMPLATE_USER_SUMMARY_PER_PAGE,
+      summaryOptions
+    );
+
+    const storage = StorageFactory.getProvider();
+    const userIds = [...new Set((rows || []).map((r) => r.user_id).filter(Boolean))];
+    const fetchedUsers = userIds.length ? await generationsModel.getUsersByIds(userIds) : [];
+    const userMap = {};
+    fetchedUsers.forEach((u) => {
+      userMap[u.user_id] = u;
+    });
+
+    for (const row of rows || []) {
+      const u = row.user_id ? userMap[row.user_id] : null;
+      if (!u) continue;
+
+      let profilePicUrl = u.profile_pic;
+      const profilePicAssetKey = u.profile_pic_asset_key;
+      const profilePicBucket = u.profile_pic_bucket;
+
+      if (profilePicAssetKey) {
+        try {
+          if (profilePicBucket && profilePicBucket.includes('ephemeral')) {
+            profilePicUrl = await storage.generateEphemeralPresignedDownloadUrl(profilePicAssetKey, {
+              expiresIn: 3600
+            });
+          } else {
+            profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicAssetKey, {
+              expiresIn: 3600
+            });
+          }
+        } catch (e) {
+          console.error('template-users profile presign failed:', e.message);
+        }
+      } else if (profilePicUrl && !profilePicUrl.startsWith('http')) {
+        try {
+          profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicUrl, { expiresIn: 3600 });
+        } catch (e) {
+          console.error('template-users profile presign fallback failed:', e.message);
+        }
+      }
+
+      row.user_details = {
+        display_name: u.display_name,
+        email: u.email,
+        mobile: u.mobile,
+        profile_pic: profilePicUrl
+      };
+    }
+
+    return res.json({
+      data: rows,
+      meta: {
+        page,
+        per_page: TEMPLATE_USER_SUMMARY_PER_PAGE,
+        total,
+        has_more: page * TEMPLATE_USER_SUMMARY_PER_PAGE < total,
+        template_type: templateType || null
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching template generation users:', err);
+    return res.status(500).send({
+      message: 'Internal server error while fetching template generation users'
+    });
+  }
+};
+
+exports.listTemplateUserGenerations = async function (req, res) {
+  try {
+    const templateId = req.query.template_id ? String(req.query.template_id).trim() : '';
+    const userId = req.query.user_id ? String(req.query.user_id).trim() : '';
+    if (!templateId) {
+      return res.status(400).send({ message: 'template_id is required' });
+    }
+    if (!userId) {
+      return res.status(400).send({ message: 'user_id is required' });
+    }
+
+    const { start_date, end_date, tz, all_time } = req.query;
+    const timezone = tz || TimezoneService.getDefaultTimezone();
+    const allTime = all_time === 'true' || all_time === '1';
+
+    let startDate = null;
+    let endDate = null;
+    let summaryOptions = { allTime };
+
+    if (!allTime) {
+      const window = buildTemplateAnalyticsDateWindow({ start_date, end_date, timezone, allTime });
+      startDate = window.startDate;
+      endDate = window.endDate;
+      summaryOptions = window.summaryOptions;
+
+      if (moment(startDate).isAfter(moment(endDate))) {
+        return res.status(400).send({ message: 'Start date cannot be after end date.' });
+      }
+    }
+
+    const allTimeFlag = !!summaryOptions.allTime;
+    const startDb = allTimeFlag ? null : summaryOptions.utcDateTimeStart;
+    const endDb = allTimeFlag ? null : summaryOptions.utcDateTimeEnd;
+
+    const [templateRows, generationRows] = await Promise.all([
+      generationsModel.getTemplatesByIds([templateId]),
+      generationsModel.getTemplateUserGenerationTimelineRows(
+        templateId,
+        userId,
+        startDb,
+        endDb,
+        allTimeFlag
+      )
+    ]);
+
+    const templateMeta = templateRows[0] || {};
+    const analyticsContext = await generationsModel.fetchTemplateAnalyticsAccessContext(
+      templateId,
+      generationRows
+    );
+    const timeline = buildTemplateUserGenerationTimelineItems(
+      generationRows,
+      analyticsContext.entitlementsByUserId[userId] || [],
+      {
+        templateType: templateMeta.template_type,
+        credits: templateMeta.credits
+      },
+      analyticsContext
+    );
+
+    const data = timeline.map((item) => ({
+      ...item,
+      job_status: generationsModel.mapMysqlJobStatusToUi(item.job_status)
+    }));
+
+    return res.json({
+      data,
+      meta: {
+        template_id: templateId,
+        user_id: userId,
+        total: data.length,
+        template_type: templateMeta.template_type || null
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching template user generations:', err);
+    return res.status(500).send({
+      message: 'Internal server error while fetching template user generations'
+    });
+  }
+};
 
 exports.batchGenerationStatus = async function (req, res) {
   try {
@@ -214,14 +447,51 @@ exports.listGenerations = async function (req, res) {
       }
     });
 
+    const entitlementIds = [
+      ...new Set(
+        generations
+          .map((g) => g.entitlement_id)
+          .filter((id) => id != null && id !== '')
+          .map((id) => Number(id))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      )
+    ];
+    const entitlementRows = entitlementIds.length
+      ? await generationsModel.getEntitlementsByIds(entitlementIds)
+      : [];
+    const entitlementMap = {};
+    (entitlementRows || []).forEach((row) => {
+      if (row.entitlement_id != null) {
+        entitlementMap[row.entitlement_id] = row;
+      }
+    });
+
     // Process presigned URLs & map related properties
     for (let gen of generations) {
       // Map basic names
       if (gen.template_id && templateMap[gen.template_id]) {
         gen.template_name = templateMap[gen.template_id].template_name;
         gen.template_type = templateMap[gen.template_id].template_type;
+        gen.template_credits = templateMap[gen.template_id].credits;
       }
-      
+
+      const eidNum =
+        gen.entitlement_id != null && gen.entitlement_id !== ''
+          ? Number(gen.entitlement_id)
+          : null;
+      const entitlementRow =
+        eidNum != null && Number.isFinite(eidNum) ? entitlementMap[eidNum] : null;
+      const access = mapGenerationAccessMethod({
+        entitlement: entitlementRow,
+        templateType: gen.template_type,
+        credits: gen.template_credits
+      });
+      gen.generation_access_method = access.generation_access_method;
+      gen.generation_access_label = access.generation_access_label;
+      if (access.tier_plan_type) {
+        gen.tier_plan_type = access.tier_plan_type;
+      }
+
       if (gen.user_id && userMap[gen.user_id]) {
         let profilePicUrl = userMap[gen.user_id].profile_pic;
         const profilePicAssetKey = userMap[gen.user_id].profile_pic_asset_key;
@@ -268,6 +538,49 @@ exports.listGenerations = async function (req, res) {
           gen.media_url = null;
         }
       }
+    }
+
+    const templateIdFilter = template_id ? String(template_id).trim() : '';
+    if (templateIdFilter && generations.length > 0) {
+      const userIdsForTemplateAccess = [
+        ...new Set(generations.map((g) => g.user_id).filter(Boolean))
+      ];
+      const startDb = allTime ? null : moment.utc(startDate).format('YYYY-MM-DD HH:mm:ss');
+      const endDb = allTime ? null : moment.utc(endDate).format('YYYY-MM-DD HH:mm:ss');
+      const templateMetaRow = templateMap[templateIdFilter] || null;
+      const accessGenerationRows = await generationsModel.getTemplateGenerationAccessRows(
+        templateIdFilter,
+        userIdsForTemplateAccess,
+        startDb,
+        endDb,
+        allTime
+      );
+      const accessRowIds = new Set(
+        (accessGenerationRows || []).map((r) => String(r.media_generation_id).trim()).filter(Boolean)
+      );
+      const rowsForContext = [...(accessGenerationRows || [])];
+      for (const gen of generations) {
+        const id = gen.media_generation_id != null ? String(gen.media_generation_id).trim() : '';
+        if (!id || accessRowIds.has(id)) continue;
+        rowsForContext.push({
+          media_generation_id: id,
+          user_id: gen.user_id,
+          activity_at: gen.created_at || gen.completed_at
+        });
+      }
+      const analyticsContext = await generationsModel.fetchTemplateAnalyticsAccessContext(
+        templateIdFilter,
+        rowsForContext
+      );
+      applyTemplateAnalyticsAccessToGenerations(
+        generations,
+        accessGenerationRows,
+        {
+          templateType: templateMetaRow?.template_type,
+          credits: templateMetaRow?.credits
+        },
+        analyticsContext
+      );
     }
 
     res.json({
@@ -340,6 +653,32 @@ function collectAssetRefsForPresign(rows) {
     }
   }
   return refs;
+}
+
+function collectAssetRefsFromObjects(objects) {
+  const refs = new Map();
+  if (!Array.isArray(objects)) return refs;
+  for (const obj of objects) {
+    visitAssetRefs(obj, (target, bucket, key) => {
+      if (typeof target.url === 'string' && target.url.startsWith('http')) return;
+      const refKey = `${bucket}:${key}`;
+      if (!refs.has(refKey)) refs.set(refKey, { bucket, key });
+    });
+  }
+  return refs;
+}
+
+function enrichObjectsWithPresignedUrls(objects, urlByRefKey) {
+  if (!Array.isArray(objects) || !urlByRefKey || urlByRefKey.size === 0) return objects;
+  return objects.map((obj) => {
+    if (!obj || typeof obj !== 'object') return obj;
+    const clone = Array.isArray(obj) ? [...obj] : { ...obj };
+    visitAssetRefs(clone, (target, bucket, key) => {
+      const url = urlByRefKey.get(`${bucket}:${key}`);
+      if (url) target.url = url;
+    });
+    return clone;
+  });
 }
 
 /**
@@ -493,7 +832,46 @@ exports.getNodeExecutions = async function (req, res) {
       generationNodeExecutionsModel.getMediaGenerationTimestamps(mediaGenerationId)
     ]);
 
+    let templateAiClips = [];
+    let templateInputFields = null;
+    let generationCustomTextFields = [];
+    let generationUploadedAssets = [];
+    const templateId = mediaGeneration && mediaGeneration.template_id;
+    if (templateId) {
+      try {
+        templateAiClips = await generationNodeExecutionsModel.listTemplateAiClipsByTemplateId(templateId);
+      } catch (e) {
+        console.error('listTemplateAiClipsByTemplateId failed:', e.message);
+      }
+      try {
+        templateInputFields = await generationNodeExecutionsModel.getTemplateUserInputFields(templateId);
+      } catch (e) {
+        console.error('getTemplateUserInputFields failed:', e.message);
+      }
+    }
+    try {
+      generationCustomTextFields = await generationNodeExecutionsModel.getGenerationCustomTextInputFields(
+        mediaGenerationId
+      );
+      generationCustomTextFields = filterGenerationCustomTextFieldsForDisplay(
+        generationCustomTextFields,
+        templateInputFields
+      );
+    } catch (e) {
+      console.error('getGenerationCustomTextInputFields failed:', e.message);
+    }
+    try {
+      generationUploadedAssets = await generationNodeExecutionsModel.getGenerationUploadedAssets(
+        mediaGenerationId
+      );
+    } catch (e) {
+      console.error('getGenerationUploadedAssets failed:', e.message);
+    }
+
     const refs = collectAssetRefsForPresign(rows);
+    for (const [refKey, ref] of collectAssetRefsFromObjects(generationUploadedAssets)) {
+      if (!refs.has(refKey)) refs.set(refKey, ref);
+    }
     if (refs.size > 0) {
       const storage = StorageFactory.getProvider();
       const opts = { expiresIn: 3600 };
@@ -510,6 +888,7 @@ exports.getNodeExecutions = async function (req, res) {
       );
       enrichOutputPayloadsWithUrls(rows, urlByRefKey);
       enrichInputPayloadsWithUrls(rows, urlByRefKey);
+      generationUploadedAssets = enrichObjectsWithPresignedUrls(generationUploadedAssets, urlByRefKey);
     }
 
     // Ensure payloads are parsed objects in the JSON response (MySQL may return JSON columns as strings).
@@ -521,16 +900,6 @@ exports.getNodeExecutions = async function (req, res) {
     }
 
     // Keep DB order (created_at ASC): matches worker insertion order (per-clip DAG execution order, then AE).
-
-    let templateAiClips = [];
-    const templateId = mediaGeneration && mediaGeneration.template_id;
-    if (templateId) {
-      try {
-        templateAiClips = await generationNodeExecutionsModel.listTemplateAiClipsByTemplateId(templateId);
-      } catch (e) {
-        console.error('listTemplateAiClipsByTemplateId failed:', e.message);
-      }
-    }
 
     const wfnIds = [];
     for (const row of rows) {
@@ -591,7 +960,10 @@ exports.getNodeExecutions = async function (req, res) {
     res.json({
       data: rows,
       mediaGeneration: mediaGeneration || null,
-      templateAiClips
+      templateAiClips,
+      templateInputFields: templateInputFields || null,
+      generationCustomTextFields: generationCustomTextFields || [],
+      generationUploadedAssets: generationUploadedAssets || []
     });
   } catch (err) {
     console.error('Error fetching generation node executions:', err);

@@ -39,6 +39,17 @@ module.exports = {
         pass: "",
       },
       debug: true
+    },
+    /** Read-only MySQL user for the admin LLM chat. Falls back to slave creds if unset. */
+    adminLlmChatReadonly: {
+      url: "localhost",
+      port: "3306",
+      databaseName: "",
+      options: {
+        user: "",
+        pass: "",
+      },
+      debug: false
     }
   },
   mongodb: {
@@ -135,6 +146,47 @@ module.exports = {
     modelsPath: "",
     /** Max tool calls per assistant turn. Override with ADMIN_LLM_CHAT_MAX_TOOL_CALLS. */
     maxToolCallsPerTurn: 24,
+    /** Brand name for the chat (system prompt, business context). Override with ADMIN_LLM_CHAT_COMPANY_NAME, e.g. "Kriya AI". Defaults to "Tellow AI". */
+    companyName: "",
+    /** render_widget tool. Override with ADMIN_LLM_CHAT_TOOL_RENDER_WIDGET_ENABLED. */
+    toolRenderWidgetEnabled: true,
+    /** Per-widget flags (widget type id → boolean). Override with ADMIN_LLM_CHAT_WIDGET_<TYPE>. */
+    widgets: {
+      kpi_cards: true,
+      data_table: true,
+      line_chart: true,
+      bar_chart: true,
+      pie_chart: true,
+      callout: true,
+      vega_lite_chart: false,
+    },
+    /**
+     * Long-term memory (query-conditioned retrieval, embeddings, background extraction).
+     * Override in config/env/local.js — env ADMIN_LLM_CHAT_MEMORY_* still wins when set.
+     */
+    memory: {
+      retrievalEnabled: true,
+      embeddingEnabled: true,
+      embeddingModel: 'text-embedding-3-small',
+      backgroundEnabled: true,
+      /** Off by default — use the remember tool for explicit facts; opt in for background LLM extraction. */
+      extractionEnabled: false,
+      episodicEnabled: true,
+      profileAutoUpdate: true,
+      extractWhenRememberUsed: false,
+      retrievalTopK: 8,
+      episodicTopK: 3,
+      episodicCandidateLimit: 30,
+      retrievalMinScore: 0.12,
+      retrievalSemanticWeight: 0.7,
+      retrievalKeywordWeight: 0.3,
+      fullDumpThreshold: 12,
+      fullDumpMax: 20,
+      extractionPerUserPerMin: 8,
+      episodicPerUserPerMin: 4,
+      extractionMaxPerTurn: 2,
+      defaultTtlDays: 0,
+    },
   },
   llmProviders: {
     openai: { apiKey: "" },

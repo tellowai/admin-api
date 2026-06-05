@@ -366,29 +366,60 @@ exports.getMappingMetadataByAmrId = async function (amrId) {
     try { parameterSchema = JSON.parse(parameterSchema); } catch (e) { parameterSchema = {}; }
   }
   const properties = (parameterSchema && parameterSchema.properties) || {};
-  const parametersList = Object.keys(properties).map(name => {
-    const def = properties[name] || {};
-    let type = 'string';
-    let values = undefined;
 
-    if (Array.isArray(def.oneOf) && def.oneOf.length > 0) {
-      type = 'oneOf';
+  function inferParamType(def) {
+    if (!def || typeof def !== 'object') return 'string';
+    if (def.type === 'array') return 'array';
+    if (Array.isArray(def.oneOf) && def.oneOf.length > 0) return 'oneOf';
+    if (def.type === 'object' && def.properties) return 'object';
+    if (Array.isArray(def.enum) && def.enum.length) return 'enum';
+    return def.type || 'string';
+  }
+
+  function collectEnumValues(def) {
+    if (!def || typeof def !== 'object') return undefined;
+    if (Array.isArray(def.enum) && def.enum.length) return [...def.enum];
+    if (Array.isArray(def.oneOf)) {
       const v = [];
-      for (const branch of def.oneOf) { if (Array.isArray(branch.enum)) v.push(...branch.enum); }
-      if (v.length > 0) values = v;
-    } else if (def.type === 'array') {
-      type = 'array';
-    } else if (def.type === 'object' && def.properties) {
-      type = 'object';
-    } else if (Array.isArray(def.enum) && def.enum.length) {
-      type = 'enum';
-      values = [...def.enum];
-    } else if (def.type) {
-      type = def.type;
+      for (const branch of def.oneOf) {
+        if (Array.isArray(branch.enum)) v.push(...branch.enum);
+      }
+      if (v.length) return v;
     }
+    return undefined;
+  }
 
-    return { name, title: def.title || name, type, values };
-  });
+  function collectParameterPathMetadata(props, prefix = '') {
+    if (!props || typeof props !== 'object') return [];
+    const out = [];
+    for (const key of Object.keys(props)) {
+      const def = props[key] || {};
+      const path = prefix ? `${prefix}.${key}` : key;
+      out.push({
+        name: path,
+        title: def.title || key,
+        type: inferParamType(def),
+        values: collectEnumValues(def)
+      });
+      if (def.type === 'object' && def.properties && typeof def.properties === 'object') {
+        out.push(...collectParameterPathMetadata(def.properties, path));
+      }
+    }
+    return out;
+  }
 
-  return { inputs, parameters: parametersList, outputs };
+  const parameterPaths = collectParameterPathMetadata(properties);
+  const parametersList = parameterPaths.length > 0
+    ? parameterPaths
+    : Object.keys(properties).map(name => {
+      const def = properties[name] || {};
+      return {
+        name,
+        title: def.title || name,
+        type: inferParamType(def),
+        values: collectEnumValues(def)
+      };
+    });
+
+  return { inputs, parameters: parametersList, outputs, parameter_paths: parameterPaths };
 };

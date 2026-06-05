@@ -67,4 +67,5 @@ module.exports = {
   hasAnthropicKey,
   resolveAuxiliaryModel,
   completeShortText,
+  createOpenaiChatClient,
 };

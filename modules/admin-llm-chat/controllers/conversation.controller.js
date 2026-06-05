@@ -3,6 +3,8 @@
 const { v4: uuidv4 } = require('uuid');
 const HTTP = require('../../core/controllers/httpcodes.server.controller').CODES;
 const ConversationModel = require('../models/conversation.model');
+const MessageModel = require('../models/message.model');
+const streamRegistry = require('../services/stream.registry');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const modelsRegistry = require('../services/models.registry.service');
 const contextBreakdown = require('../services/context.breakdown.service');
@@ -60,6 +62,9 @@ exports.getConversation = async (req, res) => {
   const beforeSequenceNo = beforeRaw != null && beforeRaw !== ''
     ? parseInt(beforeRaw, 10)
     : null;
+  if (!streamRegistry.hasActive(req.user.userId, req.params.conversationId)) {
+    await MessageModel.finalizeStaleInProgress(req.params.conversationId);
+  }
   const pagePayload = await conversationData.loadConversationPage(req.params.conversationId, {
     limit: pageSize,
     beforeSequenceNo: Number.isFinite(beforeSequenceNo) ? beforeSequenceNo : null,

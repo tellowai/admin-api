@@ -21,18 +21,19 @@ function sendEvent(res, event, data, id) {
   return eid;
 }
 
-function startHeartbeat(res, onClose) {
+/** @param {Function} [onClientDisconnect] — fired when the SSE socket closes; must not abort the turn. */
+function startHeartbeat(res, onClientDisconnect) {
   const interval = setInterval(() => {
     try {
       res.write(': ping\n\n');
     } catch (_e) {
       clearInterval(interval);
-      onClose?.();
+      onClientDisconnect?.();
     }
   }, CONSTANTS.SSE_HEARTBEAT_MS);
   res.on('close', () => {
     clearInterval(interval);
-    onClose?.();
+    onClientDisconnect?.();
   });
   return interval;
 }
