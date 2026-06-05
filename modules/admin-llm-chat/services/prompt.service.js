@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const CONSTANTS = require('../constants/admin-llm-chat.constants');
-const MemoryModel = require('../models/memory.model');
+const memoryRetrieval = require('./memory.retrieval.service');
 const schemaCache = require('./schema.cache.service');
 const { redactValue, truncatePreview } = require('./pii.redactor');
 
@@ -43,14 +43,15 @@ async function buildTableCatalog() {
     .join('\n');
 }
 
-async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION) {
+async function buildSystemPromptParts(userId, version = CONSTANTS.DEFAULT_SYSTEM_PROMPT_VERSION, options = {}) {
   const base = loadSystemPrompt(version);
   const biz = loadBusinessContext();
   const tableCatalog = await buildTableCatalog();
-  const memories = await MemoryModel.listByUser(userId);
-  const memoryBlock = memories.length
-    ? `\nUser preferences:\n${memories.map((m) => `- ${m.memory_key}: ${m.memory_value}`).join('\n')}`
-    : '';
+  const retrieval = await memoryRetrieval.retrieveForTurn({
+    userId,
+    queryText: options.queryText || '',
+  });
+  const memoryBlock = retrieval.memories || '';
   const businessContext = `Business context:\n${JSON.stringify(biz, null, 2)}`;
   const tables = `Available ClickHouse tables:\n${tableCatalog}`;
   const crossTable = formatRelationshipsGuide();
@@ -89,8 +90,8 @@ function buildAnthropicSystemParam(parts) {
   ];
 }
 
-async function buildSystemPrompt(userId, version) {
-  const parts = await buildSystemPromptParts(userId, version);
+async function buildSystemPrompt(userId, version, options = {}) {
+  const parts = await buildSystemPromptParts(userId, version, options);
   return parts.full;
 }
 

@@ -25,3 +25,5 @@ exports.validatePresignAttachment = makeValidator(schema.presignAttachmentSchema
 exports.validateRegisterAttachment = makeValidator(schema.registerAttachmentSchema);
 exports.validateBusinessContext = makeValidator(schema.businessContextSchema);
 exports.validateDigest = makeValidator(schema.digestSchema);
+exports.validateUpsertMemory = makeValidator(schema.upsertMemorySchema);
+exports.validateUpdateProfile = makeValidator(schema.updateProfileSchema);

@@ -33,6 +33,39 @@ function widgetTypeFlag(widgetType, envKey, fallback) {
   return flagFromConfig(envKey, cfg, fallback);
 }
 
+function memoryCfg() {
+  return config.adminLlmChat?.memory || {};
+}
+
+/** Env overrides adminLlmChat.memory in local.js / env.js when set. */
+function memoryBool(envKey, configKey, fallback) {
+  return flagFromConfig(envKey, memoryCfg()[configKey], fallback);
+}
+
+function memoryInt(envKey, configKey, fallback) {
+  const v = process.env[envKey];
+  if (v !== undefined && v !== '') return parseInt(v, 10);
+  const cfg = memoryCfg()[configKey];
+  if (cfg !== undefined && cfg !== null && cfg !== '') return parseInt(cfg, 10);
+  return fallback;
+}
+
+function memoryFloat(envKey, configKey, fallback) {
+  const v = process.env[envKey];
+  if (v !== undefined && v !== '') return parseFloat(v);
+  const cfg = memoryCfg()[configKey];
+  if (cfg !== undefined && cfg !== null && cfg !== '') return parseFloat(cfg);
+  return fallback;
+}
+
+function memoryString(envKey, configKey, fallback) {
+  const v = process.env[envKey];
+  if (v !== undefined && v !== '') return v;
+  const cfg = memoryCfg()[configKey];
+  if (cfg !== undefined && cfg !== null && cfg !== '') return String(cfg);
+  return fallback;
+}
+
 function defaultEnabled() {
   if (config.adminLlmChat?.enabled === true) return true;
   if (config.adminLlmChat?.enabled === false) return false;
@@ -145,4 +178,29 @@ module.exports = {
 
   /** Public R2 prefix: admin-llm-chat/attachments/{conversationId}/{attachmentId}.{ext} */
   ATTACHMENT_STORAGE_PREFIX: 'admin-llm-chat/attachments/',
+
+  /**
+   * Long-term memory — set in config/env/local.js under adminLlmChat.memory.
+   * Env vars (ADMIN_LLM_CHAT_MEMORY_*) still override when set.
+   */
+  MEMORY_RETRIEVAL_ENABLED: memoryBool('ADMIN_LLM_CHAT_MEMORY_RETRIEVAL_ENABLED', 'retrievalEnabled', true),
+  MEMORY_EMBEDDING_ENABLED: memoryBool('ADMIN_LLM_CHAT_MEMORY_EMBEDDING_ENABLED', 'embeddingEnabled', true),
+  MEMORY_EMBEDDING_MODEL: memoryString('ADMIN_LLM_CHAT_MEMORY_EMBEDDING_MODEL', 'embeddingModel', 'text-embedding-3-small'),
+  MEMORY_BACKGROUND_ENABLED: memoryBool('ADMIN_LLM_CHAT_MEMORY_BACKGROUND_ENABLED', 'backgroundEnabled', true),
+  MEMORY_EXTRACTION_ENABLED: memoryBool('ADMIN_LLM_CHAT_MEMORY_EXTRACTION_ENABLED', 'extractionEnabled', true),
+  MEMORY_EPISODIC_ENABLED: memoryBool('ADMIN_LLM_CHAT_MEMORY_EPISODIC_ENABLED', 'episodicEnabled', true),
+  MEMORY_PROFILE_AUTO_UPDATE: memoryBool('ADMIN_LLM_CHAT_MEMORY_PROFILE_AUTO_UPDATE', 'profileAutoUpdate', true),
+  MEMORY_EXTRACT_WHEN_REMEMBER_USED: memoryBool('ADMIN_LLM_CHAT_MEMORY_EXTRACT_WHEN_REMEMBER_USED', 'extractWhenRememberUsed', false),
+  MEMORY_RETRIEVAL_TOP_K: memoryInt('ADMIN_LLM_CHAT_MEMORY_TOP_K', 'retrievalTopK', 8),
+  MEMORY_EPISODIC_TOP_K: memoryInt('ADMIN_LLM_CHAT_MEMORY_EPISODIC_TOP_K', 'episodicTopK', 3),
+  MEMORY_EPISODIC_CANDIDATE_LIMIT: memoryInt('ADMIN_LLM_CHAT_MEMORY_EPISODIC_CANDIDATES', 'episodicCandidateLimit', 30),
+  MEMORY_RETRIEVAL_MIN_SCORE: memoryFloat('ADMIN_LLM_CHAT_MEMORY_MIN_SCORE', 'retrievalMinScore', 0.12),
+  MEMORY_RETRIEVAL_SEMANTIC_WEIGHT: memoryFloat('ADMIN_LLM_CHAT_MEMORY_SEMANTIC_WEIGHT', 'retrievalSemanticWeight', 0.7),
+  MEMORY_RETRIEVAL_KEYWORD_WEIGHT: memoryFloat('ADMIN_LLM_CHAT_MEMORY_KEYWORD_WEIGHT', 'retrievalKeywordWeight', 0.3),
+  MEMORY_FULL_DUMP_THRESHOLD: memoryInt('ADMIN_LLM_CHAT_MEMORY_FULL_DUMP_THRESHOLD', 'fullDumpThreshold', 12),
+  MEMORY_FULL_DUMP_MAX: memoryInt('ADMIN_LLM_CHAT_MEMORY_FULL_DUMP_MAX', 'fullDumpMax', 20),
+  MEMORY_EXTRACTION_PER_USER_PER_MIN: memoryInt('ADMIN_LLM_CHAT_MEMORY_EXTRACT_RPM', 'extractionPerUserPerMin', 8),
+  MEMORY_EPISODIC_PER_USER_PER_MIN: memoryInt('ADMIN_LLM_CHAT_MEMORY_EPISODIC_RPM', 'episodicPerUserPerMin', 4),
+  MEMORY_EXTRACTION_MAX_PER_TURN: memoryInt('ADMIN_LLM_CHAT_MEMORY_EXTRACT_MAX', 'extractionMaxPerTurn', 5),
+  MEMORY_DEFAULT_TTL_DAYS: memoryInt('ADMIN_LLM_CHAT_MEMORY_TTL_DAYS', 'defaultTtlDays', 0),
 };

@@ -160,6 +160,32 @@ module.exports = {
       callout: true,
       vega_lite_chart: false,
     },
+    /**
+     * Long-term memory (query-conditioned retrieval, embeddings, background extraction).
+     * Override in config/env/local.js — env ADMIN_LLM_CHAT_MEMORY_* still wins when set.
+     */
+    memory: {
+      retrievalEnabled: true,
+      embeddingEnabled: true,
+      embeddingModel: 'text-embedding-3-small',
+      backgroundEnabled: true,
+      extractionEnabled: true,
+      episodicEnabled: true,
+      profileAutoUpdate: true,
+      extractWhenRememberUsed: false,
+      retrievalTopK: 8,
+      episodicTopK: 3,
+      episodicCandidateLimit: 30,
+      retrievalMinScore: 0.12,
+      retrievalSemanticWeight: 0.7,
+      retrievalKeywordWeight: 0.3,
+      fullDumpThreshold: 12,
+      fullDumpMax: 20,
+      extractionPerUserPerMin: 8,
+      episodicPerUserPerMin: 4,
+      extractionMaxPerTurn: 5,
+      defaultTtlDays: 0,
+    },
   },
   llmProviders: {
     openai: { apiKey: "" },

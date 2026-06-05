@@ -17,6 +17,7 @@ const contextBreakdown = require('./context.breakdown.service');
 const attachmentResolver = require('./attachment.resolver.service');
 const AttachmentModel = require('../models/attachment.model');
 const titleService = require('./conversation.title.service');
+const memoryExtraction = require('./memory.extraction.service');
 const { formatProviderError } = require('./provider-error.util');
 const messageScope = require('./message-scope.util');
 const { redactValue, redactString, truncatePreview } = require('./pii.redactor');
@@ -436,7 +437,9 @@ async function runStreamingTurn({
   }
 
   const [systemParts, historyPayload] = await Promise.all([
-    promptService.buildSystemPromptParts(userId, conversation.system_prompt_version),
+    promptService.buildSystemPromptParts(userId, conversation.system_prompt_version, {
+      queryText: userMessage.content,
+    }),
     conversationData.loadMessagesWithTools(conversation.conversation_id),
   ]);
   const systemText = systemParts.full;
@@ -519,6 +522,7 @@ async function runStreamingTurn({
   const provider = await LLMProviderFactory.createProvider(modelMeta.provider);
   const traceBuilder = new TurnTraceBuilder(sendEvent);
   let toolCallCount = 0;
+  let rememberToolUsed = false;
   const maxTools = CONSTANTS.MAX_TOOL_CALLS_PER_TURN;
   let turnTokensIn = 0;
   let turnTokensOut = 0;
@@ -643,11 +647,15 @@ async function runStreamingTurn({
           throw err;
         }
         toolCallCount += 1;
+        if (tc.name === 'remember') rememberToolUsed = true;
         const start = Date.now();
         const argsReady = toolCallArgsReady(tc.name, tc.arguments);
         const result = (!argsReady && signal?.aborted)
           ? cancelledToolResult(tc.name)
-          : await executeTool(tc.name, tc.arguments, { userId });
+          : await executeTool(tc.name, tc.arguments, {
+            userId,
+            conversationId: conversation.conversation_id,
+          });
         const durationMs = Date.now() - start;
         if (['query_clickhouse', 'query_mysql'].includes(tc.name)
           && result.success !== false
@@ -856,6 +864,16 @@ async function runStreamingTurn({
         'admin_llm_chat_message_sent',
       ).catch(() => {});
     }
+
+    memoryExtraction.schedulePostTurnExtraction({
+      userId,
+      conversationId: conversation.conversation_id,
+      userContent: typeof userMessage.content === 'string' ? userMessage.content : '',
+      assistantContent: content,
+      throughMessageId: assistantMsgId,
+      toolCallCount,
+      rememberToolUsed,
+    });
 
     if (turnContextUsage) sendEvent('context_usage', turnContextUsage);
 
