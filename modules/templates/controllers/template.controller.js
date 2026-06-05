@@ -3871,7 +3871,6 @@ exports.updateTemplate = async function (req, res) {
 
     const platformPricingPayload = templateData.platform_pricing;
     delete templateData.platform_pricing;
-
     const r2CleanupSnapshot = await snapshotTemplateR2MediaForUpdate(templateId, templateData);
 
     let updated;
