@@ -12,6 +12,7 @@ describe('memory.service batch upsert', () => {
 
   beforeEach(() => {
     sandbox = sinon.createSandbox();
+    sandbox.stub(MemoryModel, 'listByUser').resolves([]);
     sandbox.stub(embeddingService, 'embedTexts').resolves([[0.1, 0.2], [0.3, 0.4]]);
     sandbox.stub(MemoryModel, 'upsertMany').resolves([]);
     sandbox.stub(profileService, 'mergeFactsIntoProfile').resolves({});

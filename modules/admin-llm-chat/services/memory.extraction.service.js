@@ -18,6 +18,38 @@ const CB_EPISODIC = 'admin_llm_chat_episodic_extract';
 const EXTRACT_PROMPT_PATH = path.join(__dirname, '../constants/system.prompts/v1.memory-extract.txt');
 const EPISODIC_PROMPT_PATH = path.join(__dirname, '../constants/system.prompts/v1.episodic-extract.txt');
 
+/** User explicitly asks to persist something for future chats / personalization. */
+const DURABLE_USER_HINTS = /\b(?:remember|keep in mind|don't forget|do not forget|going forward|for future|from now on|for next time|next time use|always use|default to|my preference|we prefer|our preference|we always|our default|we define|our definition|reporting habit|standard currency|save this|store this|treat .{2,60} as)\b/i;
+
+const PERSONALIZATION_CATEGORIES = new Set(['preferences', 'workflow', 'domain', 'product', 'finance']);
+
+const ALLOWED_CATEGORIES = PERSONALIZATION_CATEGORIES;
+
+/** Values that look like one-off analysis output, not durable prefs. */
+const TRANSIENT_VALUE = /\b(?:last|prior)\s+\d+\s+(?:days|weeks|months)|(?:ROAS|spend|revenue|installs?) (?:was|were|is|are)\b|yesterday|this (?:week|month)|\d+(?:\.\d+)?\s*%|(?:₹|\$|€)\s*\d+|meta_ads|clickhouse|report_date|query result|declined|increased|decreased|compared to|week over week\b/i;
+
+const TRANSIENT_KEY = /^(?:show|query|last_|this_|temp_|analysis_|metric_)/i;
+
+function shouldAttemptSemanticExtraction(userContent, { rememberToolUsed } = {}) {
+  if (rememberToolUsed) return false;
+  const user = String(userContent || '').trim();
+  if (user.length < 12) return false;
+  return DURABLE_USER_HINTS.test(user);
+}
+
+function filterDurableMemoryBatch(items) {
+  return items.filter((item) => {
+    const key = String(item?.key || '').trim();
+    const value = String(item?.value || '').trim();
+    const category = String(item?.category || 'preferences').trim().toLowerCase();
+    if (!key || !value || key.length > 255 || value.length > 4000) return false;
+    if (!ALLOWED_CATEGORIES.has(category)) return false;
+    if (TRANSIENT_KEY.test(key)) return false;
+    if (TRANSIENT_VALUE.test(value)) return false;
+    return true;
+  });
+}
+
 function loadPrompt(filePath, fallback) {
   try {
     return fs.readFileSync(filePath, 'utf8');
@@ -53,6 +85,7 @@ async function extractSemanticMemories({ userId, conversationId, userContent, as
   if (!CONSTANTS.MEMORY_EXTRACTION_ENABLED) return [];
   if (circuitBreaker.isOpen(CB_EXTRACT)) return [];
   if (userId === CONSTANTS.DIGEST_SYSTEM_USER_ID) return [];
+  if (!shouldAttemptSemanticExtraction(userContent)) return [];
 
   try {
     await rateLimit.assertUserRpm(userId, 'memory_extract', CONSTANTS.MEMORY_EXTRACTION_PER_USER_PER_MIN);
@@ -84,7 +117,9 @@ async function extractSemanticMemories({ userId, conversationId, userContent, as
     return [];
   }
 
-  const items = parseJsonArray(text).slice(0, CONSTANTS.MEMORY_EXTRACTION_MAX_PER_TURN);
+  const items = filterDurableMemoryBatch(
+    parseJsonArray(text).slice(0, CONSTANTS.MEMORY_EXTRACTION_MAX_PER_TURN),
+  );
   const batch = items
     .map((item) => ({
       key: String(item?.key || '').trim(),
@@ -176,23 +211,31 @@ function schedulePostTurnExtraction({
   rememberToolUsed,
 }) {
   if (!CONSTANTS.MEMORY_BACKGROUND_ENABLED) return;
-  if (rememberToolUsed && !CONSTANTS.MEMORY_EXTRACT_WHEN_REMEMBER_USED) return;
 
-  const substanceLen = String(userContent || '').length + String(assistantContent || '').length;
-  if (!toolCallCount && !rememberToolUsed && substanceLen < 40) return;
+  const skipSemanticBecauseRemember = rememberToolUsed && !CONSTANTS.MEMORY_EXTRACT_WHEN_REMEMBER_USED;
+  const runSemantic = !skipSemanticBecauseRemember
+    && shouldAttemptSemanticExtraction(userContent, { rememberToolUsed });
+  const runEpisodic = toolCallCount >= 1;
+
+  if (!runSemantic && !runEpisodic) return;
 
   setImmediate(() => {
-    Promise.all([
-      extractSemanticMemories({ userId, conversationId, userContent, assistantContent }),
-      extractEpisodicMemory({
+    const jobs = [];
+    if (runSemantic) {
+      jobs.push(extractSemanticMemories({ userId, conversationId, userContent, assistantContent }));
+    }
+    if (runEpisodic) {
+      jobs.push(extractEpisodicMemory({
         userId,
         conversationId,
         userContent,
         assistantContent,
         throughMessageId,
         toolCallCount,
-      }),
-    ]).catch((err) => {
+      }));
+    }
+    if (!jobs.length) return;
+    Promise.all(jobs).catch((err) => {
       logger.warn('admin_llm_chat post-turn memory failed', { err: err.message, userId, conversationId });
     });
   });
@@ -202,4 +245,6 @@ module.exports = {
   extractSemanticMemories,
   extractEpisodicMemory,
   schedulePostTurnExtraction,
+  shouldAttemptSemanticExtraction,
+  filterDurableMemoryBatch,
 };

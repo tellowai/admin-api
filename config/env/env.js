@@ -169,7 +169,8 @@ module.exports = {
       embeddingEnabled: true,
       embeddingModel: 'text-embedding-3-small',
       backgroundEnabled: true,
-      extractionEnabled: true,
+      /** Off by default — use the remember tool for explicit facts; opt in for background LLM extraction. */
+      extractionEnabled: false,
       episodicEnabled: true,
       profileAutoUpdate: true,
       extractWhenRememberUsed: false,
@@ -183,7 +184,7 @@ module.exports = {
       fullDumpMax: 20,
       extractionPerUserPerMin: 8,
       episodicPerUserPerMin: 4,
-      extractionMaxPerTurn: 5,
+      extractionMaxPerTurn: 2,
       defaultTtlDays: 0,
     },
   },

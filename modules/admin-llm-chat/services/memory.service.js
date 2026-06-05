@@ -4,6 +4,7 @@ const CONSTANTS = require('../constants/admin-llm-chat.constants');
 const MemoryModel = require('../models/memory.model');
 const embeddingService = require('./memory.embedding.service');
 const profileService = require('./memory.profile.service');
+const { dedupeIncomingMemories } = require('../utils/memory.dedup.util');
 
 function buildUpsertRow(userId, key, value, extras = {}, embedding = null) {
   const embeddingModel = embedding ? CONSTANTS.MEMORY_EMBEDDING_MODEL : (extras.embeddingModel || null);
@@ -42,13 +43,17 @@ async function upsertSemanticMemoriesBatch(userId, items) {
 
   if (!normalized.length) return [];
 
+  const existing = await MemoryModel.listByUser(userId);
+  const { items: deduped, retireKeys } = dedupeIncomingMemories(normalized, existing);
+  if (!deduped.length) return [];
+
   let embeddings = [];
   if (CONSTANTS.MEMORY_EMBEDDING_ENABLED) {
-    const texts = normalized.map((item) => `${item.key}: ${item.value}`);
+    const texts = deduped.map((item) => `${item.key}: ${item.value}`);
     embeddings = await embeddingService.embedTexts(texts);
   }
 
-  const rows = normalized.map((item, idx) => buildUpsertRow(
+  const rows = deduped.map((item, idx) => buildUpsertRow(
     userId,
     item.key,
     item.value,
@@ -58,14 +63,18 @@ async function upsertSemanticMemoriesBatch(userId, items) {
 
   await MemoryModel.upsertMany(rows);
 
+  if (retireKeys.length) {
+    await Promise.all(retireKeys.map((key) => MemoryModel.softDeleteMemory(userId, key).catch(() => {})));
+  }
+
   if (CONSTANTS.MEMORY_PROFILE_AUTO_UPDATE) {
     profileService.mergeFactsIntoProfile(
       userId,
-      normalized.map((item) => ({ key: item.key, value: item.value })),
+      deduped.map((item) => ({ key: item.key, value: item.value })),
     ).catch(() => {});
   }
 
-  return normalized.map((item) => ({ key: item.key, value: item.value }));
+  return deduped.map((item) => ({ key: item.key, value: item.value }));
 }
 
 module.exports = {

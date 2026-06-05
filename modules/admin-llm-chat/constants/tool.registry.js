@@ -119,7 +119,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'remember',
-    description: 'Store a fact for this user across future conversations.',
+    description: 'Store an explicit user-stated preference or business definition for future conversations — not analysis results or metrics from this turn.',
     parameters: {
       type: 'object',
       properties: {
