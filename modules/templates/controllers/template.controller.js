@@ -1185,6 +1185,62 @@ exports.getTemplate = async function (req, res) {
 };
 
 /**
+ * @api {get} /templates/:templateId/hover-card Lightweight template preview for admin hover panels
+ */
+exports.getTemplateHoverCard = async function (req, res) {
+  try {
+    const { templateId } = req.params;
+
+    if (!templateId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({
+        error: 'Template ID is required'
+      });
+    }
+
+    const template = await TemplateModel.getTemplateHoverCardById(templateId);
+
+    if (!template) {
+      return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
+        error: 'Template not found'
+      });
+    }
+
+    await enrichTemplateListCardUrls(template);
+
+    let nicheName = null;
+    if (template.niche_id) {
+      const niche = await NicheModel.getNicheById(template.niche_id);
+      nicheName = niche?.niche_name ?? null;
+    }
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        template_id: template.template_id,
+        template_name: template.template_name,
+        template_code: template.template_code,
+        template_output_type: template.template_output_type,
+        template_type: template.template_type,
+        template_workflow_type: template.template_workflow_type,
+        status: template.status,
+        credits: template.credits,
+        alacarte_price: template.alacarte_price,
+        niche_name: nicheName,
+        is_archived: template.archived_at != null,
+        thumb_frame_url: template.thumb_frame_url || null,
+        r2_url: template.r2_url || null
+      }
+    });
+  } catch (error) {
+    logger.error('Error getting template hover card:', {
+      error: error.message,
+      stack: error.stack,
+      templateId: req.params.templateId
+    });
+    TemplateErrorHandler.handleTemplateErrors(error, res);
+  }
+};
+
+/**
  * @api {post} /templates/:templateId/refresh-generation-meta Re-read template from DB (master) and refresh Redis cache
  * Used after admin UI "Update" so workers/API always see latest template meta (e.g. field configs) even when PATCH is skipped.
  */

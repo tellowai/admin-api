@@ -221,6 +221,25 @@ exports.getEndUserSnapshotByUserId = async function (userId) {
     return rows && rows[0] ? rows[0] : null;
 };
 
+/** Lightweight row for admin user hover previews. */
+exports.getEndUserHoverCardByUserId = async function (userId) {
+    const rows = await mysqlQueryRunner.runQueryInSlave(
+        `SELECT user_id, email, first_name, last_name, mobile, display_name,
+                profile_pic, profile_pic_bucket, profile_pic_asset_key, created_at
+         FROM user WHERE user_id = ? AND deleted_at IS NULL LIMIT 1`,
+        [userId]
+    );
+    return rows && rows[0] ? rows[0] : null;
+};
+
+exports.countCompletedOrdersByUserId = async function (userId) {
+    const rows = await mysqlQueryRunner.runQueryInSlave(
+        `SELECT COUNT(*) AS cnt FROM orders WHERE user_id = ? AND status = 'completed'`,
+        [userId]
+    );
+    return rows && rows[0] ? Number(rows[0].cnt) || 0 : 0;
+};
+
 /**
  * Support mobile lookup: compares digits-only form (handles +91 / spaces), substring on raw mobile,
  * exact trailing digit match, and national number match after a leading 91 country code.

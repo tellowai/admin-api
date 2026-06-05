@@ -79,6 +79,13 @@ module.exports = function (app) {
   );
 
   app.route(
+    versionConfig.routePrefix + '/templates/:templateId/hover-card'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    TemplateCtrl.getTemplateHoverCard
+  );
+
+  app.route(
     versionConfig.routePrefix + '/templates/:templateId'
   ).get(
     AuthMiddleware.isAuthorizedJWT,

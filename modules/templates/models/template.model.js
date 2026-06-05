@@ -851,6 +851,36 @@ exports.getTemplateById = async function (templateId) {
 };
 
 /**
+ * Lightweight row for admin hover-card previews (no scenes/clips/tags).
+ */
+exports.getTemplateHoverCardById = async function (templateId) {
+  const query = `
+    SELECT
+      template_id,
+      template_name,
+      template_code,
+      template_output_type,
+      template_type,
+      template_workflow_type,
+      status,
+      credits,
+      alacarte_price,
+      niche_id,
+      cf_r2_key,
+      cf_r2_url,
+      cf_r2_bucket,
+      thumb_frame_asset_key,
+      thumb_frame_bucket,
+      archived_at
+    FROM templates
+    WHERE template_id = ?
+  `;
+
+  const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
+  return template || null;
+};
+
+/**
  * Get template by code
  */
 exports.getTemplateByCode = async function (templateCode) {
