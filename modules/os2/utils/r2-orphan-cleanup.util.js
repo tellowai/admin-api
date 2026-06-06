@@ -5,6 +5,9 @@ const axios = require('axios');
 const StorageFactory = require('../providers/storage.factory');
 const config = require('../../../config/config');
 const logger = require('../../../config/lib/logger');
+const {
+  isMediaAssetKeyUsedByOtherTemplates,
+} = require('../../templates/utils/template.media.ref.usage');
 
 const R2_CLEANUP_LOG_TAG = 'R2 asset cleanup';
 const r2CleanupEventStorage = new AsyncLocalStorage();
@@ -48,9 +51,13 @@ function logR2AssetCleanup(event) {
   logger.info(`${R2_CLEANUP_LOG_TAG}: skipped`, payload);
 }
 
-/** Run orphan cleanup and collect per-asset log events for the API response / admin UI console. */
-async function runWithR2CleanupLog(fn) {
-  return r2CleanupEventStorage.run({ events: [] }, async () => {
+/**
+ * Run orphan cleanup and collect per-asset log events for the API response / admin UI console.
+ * @param {() => Promise<void>} fn
+ * @param {{ excludeTemplateId?: string }} [options] - skip deletes when key is still referenced by another template (e.g. after copy)
+ */
+async function runWithR2CleanupLog(fn, options = {}) {
+  return r2CleanupEventStorage.run({ events: [], ...options }, async () => {
     await fn();
     return r2CleanupEventStorage.getStore()?.events || [];
   });
@@ -143,6 +150,38 @@ async function deleteR2RefOnce(storage, dedupe, ref, label, neverDeleteSigs = nu
     return;
   }
   dedupe.add(sig);
+
+  const cleanupCtx = r2CleanupEventStorage.getStore();
+  if (cleanupCtx?.excludeTemplateId) {
+    try {
+      const sharedElsewhere = await isMediaAssetKeyUsedByOtherTemplates(
+        ref.key,
+        cleanupCtx.excludeTemplateId
+      );
+      if (sharedElsewhere) {
+        logR2AssetCleanup({
+          status: 'skipped',
+          label,
+          bucket: ref.bucket,
+          key: ref.key,
+          reason: 'shared_with_other_template',
+          exclude_template_id: cleanupCtx.excludeTemplateId,
+        });
+        return;
+      }
+    } catch (err) {
+      logR2AssetCleanup({
+        status: 'skipped',
+        label,
+        bucket: ref.bucket,
+        key: ref.key,
+        reason: 'shared_ref_check_failed',
+        error: err.message,
+        exclude_template_id: cleanupCtx.excludeTemplateId,
+      });
+      return;
+    }
+  }
 
   let exists = true;
   try {

@@ -245,7 +245,6 @@ async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
   }
 
   if (templateData.clips !== undefined) {
-    snapshot.patchClips = templateData.clips;
     const oldClips = (await TemplateModel.getTemplateAiClips(templateId)) || [];
     const visualClips = oldClips.filter((c) => c.asset_type === 'image' || c.asset_type === 'video');
     snapshot.oldClipWorkflowRefs = collectClipWorkflowAssetRefs(visualClips);
@@ -300,7 +299,11 @@ async function cleanupExtendedTemplateR2MediaAfterUpdate(
       );
     }
     if (snapshot.oldClipWorkflowRefs || snapshot.oldWorkflowNodeRefs) {
-      const newClipRefs = collectClipWorkflowAssetRefs(snapshot.patchClips || []);
+      const clipsAfterUpdate = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      const visualClipsAfter = clipsAfterUpdate.filter(
+        (c) => c.asset_type === 'image' || c.asset_type === 'video'
+      );
+      const newClipRefs = collectClipWorkflowAssetRefs(visualClipsAfter);
       await deleteRemovedMediaRefSet(
         snapshot.oldClipWorkflowRefs || [],
         newClipRefs,
@@ -308,7 +311,6 @@ async function cleanupExtendedTemplateR2MediaAfterUpdate(
         neverDeleteSigs
       );
 
-      const clipsAfterUpdate = (await TemplateModel.getTemplateAiClips(templateId)) || [];
       const wfIds = clipsAfterUpdate.map((c) => c.wf_id).filter(Boolean);
       const newWorkflowNodeRefs = wfIds.length
         ? collectWorkflowNodeAssetRefs(await WorkflowNodeModel.getNodesByWorkflowIds(wfIds))
@@ -3948,16 +3950,19 @@ exports.updateTemplate = async function (req, res) {
       });
     }
 
-    const r2AssetCleanup = await runWithR2CleanupLog(async () => {
-      await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs);
-      await cleanupExtendedTemplateR2MediaAfterUpdate(
-        existingTemplate,
-        templateData,
-        r2CleanupSnapshot,
-        neverDeleteSigs,
-        templateId
-      );
-    });
+    const r2AssetCleanup = await runWithR2CleanupLog(
+      async () => {
+        await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs);
+        await cleanupExtendedTemplateR2MediaAfterUpdate(
+          existingTemplate,
+          templateData,
+          r2CleanupSnapshot,
+          neverDeleteSigs,
+          templateId
+        );
+      },
+      { excludeTemplateId: templateId }
+    );
 
     if (surfaceToArchiveAfterIsEffectsChange) {
       try {
