@@ -217,6 +217,12 @@ const TEMPLATE_ROW_MEDIA_FIELDS = [
     defaultBucket: 'public',
     label: 'bodymovin_json',
   },
+  {
+    keyKey: 'hero_preview_png_key',
+    bucketKey: 'hero_preview_png_bucket',
+    defaultBucket: 'public',
+    label: 'hero_preview_png',
+  },
 ];
 
 /**
@@ -743,6 +749,27 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
   }
   if (template.bodymovin_json_key && template.bodymovin_json_bucket) {
     template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
+  }
+
+  if (template.hero_preview_png_key && template.hero_preview_png_bucket) {
+    const isPublicHero =
+      template.hero_preview_png_bucket === 'public' ||
+      template.hero_preview_png_bucket === storage.publicBucket ||
+      template.hero_preview_png_bucket === config.os2?.r2?.public?.bucket;
+    if (isPublicHero) {
+      template.hero_preview_png_url = `${config.os2.r2.public.bucketUrl}/${template.hero_preview_png_key}`;
+    } else {
+      try {
+        template.hero_preview_png_url = await storage.generatePresignedDownloadUrlFromBucket(
+          template.hero_preview_png_bucket,
+          template.hero_preview_png_key,
+          { expiresIn: 3600 }
+        );
+      } catch (error) {
+        logger.error('Error generating hero_preview_png URL:', { error: error.message, template_id: template.template_id });
+        template.hero_preview_png_url = null;
+      }
+    }
   }
 
   if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {

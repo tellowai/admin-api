@@ -730,6 +730,7 @@ const TEMPLATE_ROW_MEDIA_FIELD_DEFS = [
     defaultBucket: 'public',
   },
   { keyKey: 'bodymovin_json_key', bucketKey: 'bodymovin_json_bucket', defaultBucket: 'public' },
+  { keyKey: 'hero_preview_png_key', bucketKey: 'hero_preview_png_bucket', defaultBucket: 'public' },
 ];
 
 /**

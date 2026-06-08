@@ -640,6 +640,23 @@ class R2StorageProvider extends StorageProvider {
     }
   }
 
+  async uploadBufferToPublicBucket(buffer, key, options = {}) {
+    const command = new PutObjectCommand({
+      Bucket: this.publicBucket,
+      Key: key,
+      Body: buffer,
+      ContentType: options.contentType || 'application/octet-stream',
+      ACL: 'public-read',
+    });
+    await this.client.send(command);
+    return {
+      key,
+      bucket: 'public',
+      url: `${this.publicBucketUrl}/${key}`,
+      size: buffer.length,
+    };
+  }
+
   async uploadBufferToEphemeral(buffer, key, options = {}) {
     try {
       const command = new PutObjectCommand({

@@ -2,6 +2,11 @@
 
 const Joi = require('@hapi/joi');
 
+const paywallTitleTemplatesField = Joi.alternatives().try(
+  Joi.array().items(Joi.string().max(255)).max(20),
+  Joi.string().max(255).allow('', null)
+).optional();
+
 const createNicheSchema = Joi.object().keys({
   niche_name: Joi.string().max(100).required(),
   thumb_image_object_key: Joi.string().max(255).required(),
@@ -9,7 +14,9 @@ const createNicheSchema = Joi.object().keys({
   slug: Joi.string().max(50).required(),
   display_order: Joi.number().integer().allow(null).optional(),
   is_active: Joi.boolean().optional(),
-  profile_title_template: Joi.string().max(255).allow('', null).optional()
+  profile_title_template: Joi.string().max(255).allow('', null).optional(),
+  paywall_title_template: paywallTitleTemplatesField,
+  ai_paywall_title_template: paywallTitleTemplatesField
 });
 
 const updateNicheSchema = Joi.object().keys({
@@ -19,7 +26,9 @@ const updateNicheSchema = Joi.object().keys({
   // slug is not updatable - removed from update schema
   display_order: Joi.number().integer().allow(null).optional(),
   is_active: Joi.boolean().optional(),
-  profile_title_template: Joi.string().max(255).allow('', null).optional()
+  profile_title_template: Joi.string().max(255).allow('', null).optional(),
+  paywall_title_template: paywallTitleTemplatesField,
+  ai_paywall_title_template: paywallTitleTemplatesField
 });
 
 const additionalDataSchema = Joi.object({
