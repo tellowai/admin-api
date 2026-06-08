@@ -14,6 +14,30 @@ const {
 } = require('../../os2/utils/r2-orphan-cleanup.util');
 const StorageFactory = require('../../os2/providers/storage.factory');
 const config = require('../../../config/config');
+const {
+  normalizePaywallTitleTemplates,
+  serializePaywallTitleTemplatesForDb,
+} = require('../utils/paywallTitleTemplates.util');
+
+function formatNichePaywallTemplates(niche) {
+  if (!niche) return niche;
+  return {
+    ...niche,
+    paywall_title_template: normalizePaywallTitleTemplates(niche.paywall_title_template),
+    ai_paywall_title_template: normalizePaywallTitleTemplates(niche.ai_paywall_title_template),
+  };
+}
+
+function prepareNichePaywallTemplatesForDb(nicheData) {
+  const next = { ...nicheData };
+  if (Object.prototype.hasOwnProperty.call(next, 'paywall_title_template')) {
+    next.paywall_title_template = serializePaywallTitleTemplatesForDb(next.paywall_title_template);
+  }
+  if (Object.prototype.hasOwnProperty.call(next, 'ai_paywall_title_template')) {
+    next.ai_paywall_title_template = serializePaywallTitleTemplatesForDb(next.ai_paywall_title_template);
+  }
+  return next;
+}
 
 /**
  * Resolve full GET URL for niche thumbnail (public CDN, ephemeral presign, or private presign).
@@ -71,7 +95,7 @@ exports.listNiches = async function(req, res) {
           row.thumb_image_storage_bucket,
           row.thumb_image_object_key
         );
-        return { ...row, thumb_image_url };
+        return formatNichePaywallTemplates({ ...row, thumb_image_url });
       })
     );
 
@@ -101,7 +125,7 @@ exports.listNiches = async function(req, res) {
  */
 exports.createNiche = async function(req, res) {
   try {
-    const nicheData = req.validatedBody;
+    const nicheData = prepareNichePaywallTemplatesForDb(req.validatedBody);
 
     // Check if slug already exists
     const existingNiche = await NicheModel.getNicheBySlug(nicheData.slug);
@@ -164,7 +188,7 @@ exports.getNicheById = async function(req, res) {
     );
 
     return res.status(HTTP_STATUS_CODES.OK).json({
-      data: { ...niche, thumb_image_url }
+      data: formatNichePaywallTemplates({ ...niche, thumb_image_url })
     });
 
   } catch (error) {
@@ -191,7 +215,7 @@ exports.getNicheById = async function(req, res) {
 exports.updateNiche = async function(req, res) {
   try {
     const { nicheId } = req.params;
-    const nicheData = req.validatedBody;
+    const nicheData = prepareNichePaywallTemplatesForDb(req.validatedBody);
 
     // Check if niche exists
     const existingNiche = await NicheModel.getNicheById(nicheId);

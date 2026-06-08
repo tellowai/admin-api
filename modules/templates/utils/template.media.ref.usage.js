@@ -11,6 +11,7 @@ const TEMPLATE_ROW_KEY_COLUMNS = [
   'mask_video_key',
   'transparent_webm_video_key',
   'bodymovin_json_key',
+  'hero_preview_png_key',
 ];
 
 const TEMPLATE_JSON_KEY_COLUMNS = [
