@@ -333,6 +333,26 @@ exports.queryClickCountForLinkIds = async function (linkIds, startTs, endTs) {
 };
 
 /**
+ * Attribution funnel counts per object_id (tracking link) for list stitching.
+ */
+exports.queryAttributionEventCountsByObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+  const ids = objectIdsClause(objectIds);
+  if (!ids) return [];
+  const os = osFilterClause(osFilter);
+  const q = `
+    SELECT object_id, event_name, count() AS cnt
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND event_name IN ('app_open', 'attributed_install', 'attributed_signup', 'attributed_add_to_cart', 'attributed_purchase')
+      AND ${dateRangeClause(startDate, endDate)}
+      AND object_id IN (${ids}) ${os}
+    GROUP BY object_id, event_name
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Attribution events by event_name for object_ids.
  */
 exports.queryAttributionEventsForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
