@@ -486,11 +486,7 @@ function emptyAttributionFunnelMetrics() {
   return { link_clicks: 0, app_opens: 0, installs: 0, signups: 0, add_to_cart: 0, purchases: 0 };
 }
 
-function dateRangeTimestamps(startDate, endDate) {
-  return { startTs: `${startDate} 00:00:00`, endTs: `${endDate} 23:59:59` };
-}
-
-function stitchLinkClicks(rows, targetMap, keyForRow) {
+function stitchLinkClickCounts(rows, targetMap, keyForRow) {
   for (const row of rows) {
     const key = keyForRow(row);
     if (!key || !targetMap[key]) continue;
@@ -521,13 +517,14 @@ async function queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate,
 async function buildLinkListMetrics(linkIds, startDate, endDate, deviceOs) {
   const byLink = Object.fromEntries(linkIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
   if (!linkIds.length) return byLink;
-  const { startTs, endTs } = dateRangeTimestamps(startDate, endDate);
-  const [attrRows, clickRows] = await Promise.all([
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
     queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
-    AttributionChModel.queryClicksCountByLinkIds(linkIds, startTs, endTs)
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
   ]);
-  stitchAttributionEventCounts(attrRows, byLink, (row) => row.object_id);
-  stitchLinkClicks(clickRows, byLink, (row) => row.link_id);
+  stitchAttributionEventCounts(eventRows, byLink, (row) => row.object_id);
+  stitchLinkClickCounts(clickRows, byLink, (row) => row.link_id);
   return byLink;
 }
 
@@ -538,13 +535,14 @@ async function buildProfileListMetrics(profileIds, startDate, endDate, deviceOs)
   if (!links.length) return byProfile;
   const linkToProfile = new Map(links.map((l) => [l.id, l.influencer_profile_id]));
   const linkIds = links.map((l) => l.id);
-  const { startTs, endTs } = dateRangeTimestamps(startDate, endDate);
-  const [attrRows, clickRows] = await Promise.all([
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
     queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
-    AttributionChModel.queryClicksCountByLinkIds(linkIds, startTs, endTs)
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
   ]);
-  stitchAttributionEventCounts(attrRows, byProfile, (row) => linkToProfile.get(row.object_id));
-  stitchLinkClicks(clickRows, byProfile, (row) => linkToProfile.get(row.link_id));
+  stitchAttributionEventCounts(eventRows, byProfile, (row) => linkToProfile.get(row.object_id));
+  stitchLinkClickCounts(clickRows, byProfile, (row) => linkToProfile.get(row.link_id));
   return byProfile;
 }
 

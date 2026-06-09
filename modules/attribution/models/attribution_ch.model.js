@@ -315,9 +315,9 @@ exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, star
 };
 
 /**
- * Link clicks per link_id (for list metrics stitching).
+ * Link clicks per link_id in time range (not filtered by device OS).
  */
-exports.queryClicksCountByLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClickCountsByLinkIds = async function (linkIds, startTs, endTs) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const q = `
