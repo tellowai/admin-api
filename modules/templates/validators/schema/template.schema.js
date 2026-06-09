@@ -6,6 +6,20 @@ const Joi = require('@hapi/joi');
 /** 9, 19, 29, …, 999 (₹10 steps) */
 const ALACARTE_INR_PRICE_TIERS = Array.from({ length: 100 }, (_, i) => 9 + i * 10);
 
+const platformPricingRowSchema = Joi.object({
+  credits: Joi.number().integer().min(0).allow(null).optional(),
+  member_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
+  member_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
+  alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional(),
+  alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).allow(null).optional()
+});
+
+const platformPricingSchema = Joi.object({
+  android: platformPricingRowSchema.optional(),
+  ios: platformPricingRowSchema.optional(),
+  web: platformPricingRowSchema.optional()
+}).optional();
+
 // Custom validation for word count
 const wordCountValidation = (value, helpers) => {
   if (!value || value.trim() === '') {
@@ -131,7 +145,7 @@ const createTemplateSchema = Joi.object().keys({
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').required(),
   template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
   is_effects: Joi.boolean().optional(),
-  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive').optional(),
+  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive', 'cinematic').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation),
   prompt: Joi.string().allow('').when('template_output_type', {
@@ -162,6 +176,9 @@ const createTemplateSchema = Joi.object().keys({
   credits: Joi.number().integer().min(1).default(1),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
   alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  member_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  member_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  platform_pricing: platformPricingSchema,
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   additional_data: Joi.object().allow(null),
@@ -232,7 +249,7 @@ const updateTemplateSchema = Joi.object().keys({
   template_clips_assets_type: Joi.string().valid('ai', 'non-ai').optional(),
   template_workflow_type: Joi.string().valid('AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE').optional(),
   is_effects: Joi.boolean().optional(),
-  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive').optional(),
+  template_type: Joi.string().valid('free', 'premium', 'ai', 'standard', 'exclusive', 'cinematic').optional(),
   template_gender: Joi.string().valid('male', 'female', 'unisex', 'couple').optional(),
   description: Joi.string().allow(null, '').custom(wordCountValidation).optional(),
   prompt: Joi.string().allow('').optional(),
@@ -267,6 +284,9 @@ const updateTemplateSchema = Joi.object().keys({
   max_free_generations: Joi.number().integer().min(1).allow(null).optional(),
   alacarte_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
   alacarte_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  member_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  member_original_price: Joi.number().integer().valid(...ALACARTE_INR_PRICE_TIERS).optional().allow(null),
+  platform_pricing: platformPricingSchema,
   aspect_ratio: Joi.string().valid('9:16', '16:9', '3:4', '4:3', '1:1').allow(null).optional(),
   orientation: Joi.string().valid('horizontal', 'vertical').allow(null).optional(),
   niche_slug: Joi.string().max(50).allow(null, '').optional(), // Niche slug for field matching (not stored in template)

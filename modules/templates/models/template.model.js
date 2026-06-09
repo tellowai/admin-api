@@ -13,7 +13,7 @@ const { buildPublicAssetUrl } = require('../utils/public.asset.url');
 const TEMPLATE_STATUS_ENUM = ['draft', 'review', 'active', 'inactive', 'unlisted', 'suspended', 'archived'];
 const TEMPLATE_WORKFLOW_TYPE_ENUM = ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'];
 /** List/search: exact `templates.template_type` match */
-const TEMPLATE_TYPE_FILTER_ENUM = ['free', 'standard', 'premium', 'exclusive', 'ai'];
+const TEMPLATE_TYPE_FILTER_ENUM = ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'];
 
 function applyTemplateTypeFilter(conditions, params, filter) {
   if (!filter || !TEMPLATE_TYPE_FILTER_ENUM.includes(filter)) {
@@ -811,6 +811,8 @@ exports.getTemplateById = async function (templateId) {
       hero_preview_png_bucket,
       custom_text_input_fields,
       credits,
+      member_price,
+      member_original_price,
       alacarte_price,
       alacarte_original_price,
       aspect_ratio,
