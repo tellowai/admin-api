@@ -4,18 +4,29 @@ var {
 } = require('../../core/models/clickhouse.promise.model');
 
 
-exports.getAllLogs = async function(offset, limit, options, filterBy) {
+exports.getAllLogs = async function(offset, limit, options, filters = {}) {
     const selectColumns = "aa_log_id, admin_user_id, entity_type, action_name, entity_id, additional_data, action_description, created_at";
     let query = `SELECT ${selectColumns} FROM admin_activity_log`;
-    const values = [offset, limit];
+    const values = [];
+    const conditions = [];
 
-    if (filterBy) {
-        query += ` AND entity_type = ?`;
-        values.push(filterBy);
+    if (filters.entityType) {
+        conditions.push('entity_type = ?');
+        values.push(filters.entityType);
+    }
+
+    if (filters.entityId) {
+        conditions.push('entity_id = ?');
+        values.push(filters.entityId);
+    }
+
+    if (conditions.length) {
+        query += ` WHERE ${conditions.join(' AND ')}`;
     }
 
     if (options && options.order) {
         query += ` ORDER BY ${options.order[0]} ${options.order[1]} LIMIT ?, ?`;
+        values.push(offset, limit);
     }
 
     return await mysqlQueryRunner.runQueryInSlave(query, values);

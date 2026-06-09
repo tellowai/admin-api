@@ -45,7 +45,10 @@ exports.listInfluencers = async function (req, res) {
     const out = await AttributionAdminService.listInfluencers({
       limit: req.query.limit,
       offset: req.query.offset,
-      admin_list_only: adminOnly
+      admin_list_only: adminOnly,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      device_os: req.query.device_os
     });
     return res.status(HTTP_STATUS_CODES.OK).json(out);
   } catch (err) {

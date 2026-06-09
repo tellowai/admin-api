@@ -20,7 +20,7 @@ const JourneyStageModel = require('../../journey-stages/models/journey.stage.mod
 const VALID_GENDERS = ['male', 'female', 'couple', 'unisex'];
 const VALID_WORKFLOW_TYPES = ['AI_ONLY', 'AI_PLUS_AE', 'AE_ONLY'];
 const VALID_CLIPS_TYPES = ['ai', 'non-ai'];
-const VALID_TEMPLATE_TYPES = ['free', 'premium', 'standard', 'exclusive', 'ai'];
+const VALID_TEMPLATE_TYPES = ['free', 'premium', 'standard', 'exclusive', 'ai', 'cinematic'];
 
 const GENERIC_NAME_PATTERNS = [
   /^first\s+birthday\s+template/i,
@@ -119,7 +119,7 @@ Other fields:
 - template_gender: male | female | couple | unisex — from image + text layers.
 - template_workflow_type: AE_ONLY for motion templates with user slots; AI_PLUS_AE / AI_ONLY only when clearly AI-generation-first.
 - template_clips_assets_type: non-ai for AE-only; ai when AI clips needed.
-- template_type: free | premium | standard | exclusive | ai — default premium for celebration cards.
+- template_type: free | premium | standard | exclusive | ai | cinematic — default premium for celebration cards.
 - niche_slug: MUST be one of the provided niche slugs, or null.
 - language_code: MUST be one of the provided language codes from visible script + JSON.
 - credits: 0 if template_type is free, else 1–5.

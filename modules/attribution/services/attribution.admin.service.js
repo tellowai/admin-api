@@ -482,13 +482,92 @@ exports.updateTrackingLink = async function (id, patch) {
   return TrackingLinkModel.getById(id);
 };
 
+function emptyAttributionFunnelMetrics() {
+  return { link_clicks: 0, app_opens: 0, installs: 0, signups: 0, add_to_cart: 0, purchases: 0 };
+}
+
+function stitchLinkClickCounts(rows, targetMap, keyForRow) {
+  for (const row of rows) {
+    const key = keyForRow(row);
+    if (!key || !targetMap[key]) continue;
+    targetMap[key].link_clicks += Number(row.clicks) || 0;
+  }
+}
+
+function stitchAttributionEventCounts(rows, targetMap, keyForRow) {
+  for (const row of rows) {
+    const key = keyForRow(row);
+    if (!key || !targetMap[key]) continue;
+    const n = Number(row.cnt) || 0;
+    const ev = row.event_name;
+    if (ev === 'app_open') targetMap[key].app_opens += n;
+    else if (ev === 'attributed_install') targetMap[key].installs += n;
+    else if (ev === 'attributed_signup') targetMap[key].signups += n;
+    else if (ev === 'attributed_add_to_cart') targetMap[key].add_to_cart += n;
+    else if (ev === 'attributed_purchase') targetMap[key].purchases += n;
+  }
+}
+
+async function queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs) {
+  if (!linkIds.length) return [];
+  const os = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  return AttributionChModel.queryAttributionEventCountsByObjectIds(linkIds, startDate, endDate, os);
+}
+
+async function buildLinkListMetrics(linkIds, startDate, endDate, deviceOs) {
+  const byLink = Object.fromEntries(linkIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
+  if (!linkIds.length) return byLink;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+  ]);
+  stitchAttributionEventCounts(eventRows, byLink, (row) => row.object_id);
+  stitchLinkClickCounts(clickRows, byLink, (row) => row.link_id);
+  return byLink;
+}
+
+async function buildProfileListMetrics(profileIds, startDate, endDate, deviceOs) {
+  if (!profileIds.length) return {};
+  const byProfile = Object.fromEntries(profileIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
+  const links = await TrackingLinkModel.listByInfluencerProfileIds(profileIds);
+  if (!links.length) return byProfile;
+  const linkToProfile = new Map(links.map((l) => [l.id, l.influencer_profile_id]));
+  const linkIds = links.map((l) => l.id);
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+  ]);
+  stitchAttributionEventCounts(eventRows, byProfile, (row) => linkToProfile.get(row.object_id));
+  stitchLinkClickCounts(clickRows, byProfile, (row) => linkToProfile.get(row.link_id));
+  return byProfile;
+}
+
 exports.listInfluencers = async function (pagination) {
   const limit = Math.min(Number(pagination.limit) || 50, 200);
   const offset = Number(pagination.offset) || 0;
   const rows = await InfluencerModel.list(limit, offset, {
     list_in_admin_only: !!pagination.admin_list_only
   });
-  const data = rows.map((r) => serializeInfluencer(r));
+  let data = rows.map((r) => serializeInfluencer(r));
+  const startDate = pagination.start_date || pagination.startDate;
+  const endDate = pagination.end_date || pagination.endDate;
+  if (startDate && endDate) {
+    const deviceOs = normalizeDeviceOs(pagination);
+    const metricsByProfile = await buildProfileListMetrics(
+      data.map((r) => r.id),
+      startDate,
+      endDate,
+      deviceOs
+    );
+    data = data.map((r) => ({
+      ...r,
+      metrics: metricsByProfile[r.id] || emptyAttributionFunnelMetrics()
+    }));
+  }
   return { data };
 };
 
@@ -639,8 +718,15 @@ exports.getProfileStats = async function (profileId, query) {
   const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
   const linkIds = links.map((l) => l.id);
   const deviceOs = normalizeDeviceOs(query);
-  const analytics = await buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs);
-  return { profile: serializeInfluencer(profile), links, analytics };
+  const [analytics, metricsByLink] = await Promise.all([
+    buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs),
+    buildLinkListMetrics(linkIds, startDate, endDate, deviceOs)
+  ]);
+  const linksWithMetrics = links.map((l) => ({
+    ...l,
+    metrics: metricsByLink[l.id] || emptyAttributionFunnelMetrics()
+  }));
+  return { profile: serializeInfluencer(profile), links: linksWithMetrics, analytics };
 };
 
 const MAGIC_PHOTOBOOTH_PROFILE_KEY = 'tellow_magic_photobooth';

@@ -104,7 +104,7 @@ module.exports = {
     'ADMIN_LLM_CHAT_MAX_TOOL_CALLS',
     Number.isFinite(config.adminLlmChat?.maxToolCallsPerTurn)
       ? config.adminLlmChat.maxToolCallsPerTurn
-      : 24,
+      : 30,
   ),
   MAX_TOOL_RESULT_TOKENS: envInt('ADMIN_LLM_CHAT_MAX_TOOL_RESULT_TOKENS', 4000),
   STREAM_IDLE_TIMEOUT_MS: envInt('ADMIN_LLM_CHAT_STREAM_IDLE_TIMEOUT_MS', 30000),

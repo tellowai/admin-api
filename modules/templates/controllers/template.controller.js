@@ -2,6 +2,7 @@
 
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const TemplateModel = require('../models/template.model');
+const TemplatePlatformPricingModel = require('../models/templatePlatformPricing.model');
 const TemplateTagDefinitionModel = require('../models/template.tag.definition.model');
 const TemplateTagFacetModel = require('../models/template.tag.facet.model');
 const TemplateTagsModel = require('../models/template.tags.model');
@@ -59,6 +60,27 @@ const BODYMOVIN_FETCH_TIMEOUT_MS = 10000;
  * @param {number} credits
  * @returns {number|null} Computed price in INR, or null if credits invalid
  */
+async function persistTemplatePlatformPricing(templateId, templateData) {
+  const catalog = {
+    credits: templateData.credits,
+    member_price: templateData.member_price,
+    member_original_price: templateData.member_original_price,
+    alacarte_price: templateData.alacarte_price,
+    alacarte_original_price: templateData.alacarte_original_price
+  };
+  if (templateData.platform_pricing && typeof templateData.platform_pricing === 'object') {
+    await TemplatePlatformPricingModel.upsertPlatformPricingFromPayload(templateId, templateData.platform_pricing);
+    const hasAnyPlatform = ['android', 'ios', 'web'].some(
+      (p) => templateData.platform_pricing[p] && typeof templateData.platform_pricing[p] === 'object'
+    );
+    if (!hasAnyPlatform) {
+      await TemplatePlatformPricingModel.syncAllPlatformsFromCatalog(templateId, catalog);
+    }
+  } else {
+    await TemplatePlatformPricingModel.syncAllPlatformsFromCatalog(templateId, catalog);
+  }
+}
+
 function computeAlacartePriceFromCredits(credits) {
   if (!credits || credits < 1) return null;
   const rawInr = Math.floor((credits / 50) * 83.33);
@@ -195,6 +217,12 @@ const TEMPLATE_ROW_MEDIA_FIELDS = [
     defaultBucket: 'public',
     label: 'bodymovin_json',
   },
+  {
+    keyKey: 'hero_preview_png_key',
+    bucketKey: 'hero_preview_png_bucket',
+    defaultBucket: 'public',
+    label: 'hero_preview_png',
+  },
 ];
 
 /**
@@ -245,7 +273,6 @@ async function snapshotTemplateR2MediaForUpdate(templateId, templateData) {
   }
 
   if (templateData.clips !== undefined) {
-    snapshot.patchClips = templateData.clips;
     const oldClips = (await TemplateModel.getTemplateAiClips(templateId)) || [];
     const visualClips = oldClips.filter((c) => c.asset_type === 'image' || c.asset_type === 'video');
     snapshot.oldClipWorkflowRefs = collectClipWorkflowAssetRefs(visualClips);
@@ -300,7 +327,11 @@ async function cleanupExtendedTemplateR2MediaAfterUpdate(
       );
     }
     if (snapshot.oldClipWorkflowRefs || snapshot.oldWorkflowNodeRefs) {
-      const newClipRefs = collectClipWorkflowAssetRefs(snapshot.patchClips || []);
+      const clipsAfterUpdate = (await TemplateModel.getTemplateAiClips(templateId)) || [];
+      const visualClipsAfter = clipsAfterUpdate.filter(
+        (c) => c.asset_type === 'image' || c.asset_type === 'video'
+      );
+      const newClipRefs = collectClipWorkflowAssetRefs(visualClipsAfter);
       await deleteRemovedMediaRefSet(
         snapshot.oldClipWorkflowRefs || [],
         newClipRefs,
@@ -308,7 +339,6 @@ async function cleanupExtendedTemplateR2MediaAfterUpdate(
         neverDeleteSigs
       );
 
-      const clipsAfterUpdate = (await TemplateModel.getTemplateAiClips(templateId)) || [];
       const wfIds = clipsAfterUpdate.map((c) => c.wf_id).filter(Boolean);
       const newWorkflowNodeRefs = wfIds.length
         ? collectWorkflowNodeAssetRefs(await WorkflowNodeModel.getNodesByWorkflowIds(wfIds))
@@ -721,6 +751,27 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
     template.bodymovin_json_r2_url = `${config.os2.r2.public.bucketUrl}/${template.bodymovin_json_key}`;
   }
 
+  if (template.hero_preview_png_key && template.hero_preview_png_bucket) {
+    const isPublicHero =
+      template.hero_preview_png_bucket === 'public' ||
+      template.hero_preview_png_bucket === storage.publicBucket ||
+      template.hero_preview_png_bucket === config.os2?.r2?.public?.bucket;
+    if (isPublicHero) {
+      template.hero_preview_png_url = `${config.os2.r2.public.bucketUrl}/${template.hero_preview_png_key}`;
+    } else {
+      try {
+        template.hero_preview_png_url = await storage.generatePresignedDownloadUrlFromBucket(
+          template.hero_preview_png_bucket,
+          template.hero_preview_png_key,
+          { expiresIn: 3600 }
+        );
+      } catch (error) {
+        logger.error('Error generating hero_preview_png URL:', { error: error.message, template_id: template.template_id });
+        template.hero_preview_png_url = null;
+      }
+    }
+  }
+
   if (template.thumb_frame_asset_key && template.thumb_frame_bucket) {
     try {
       const isPublic = template.thumb_frame_bucket === 'public' ||
@@ -873,6 +924,17 @@ async function enrichAdminTemplateDetailForGetResponse(template) {
       }
     ];
   }
+
+  try {
+    const pricingRows = await TemplatePlatformPricingModel.getPlatformPricingByTemplateIds([template.template_id]);
+    template.platform_pricing = TemplatePlatformPricingModel.buildPlatformPricingMapFromRows(pricingRows);
+  } catch (err) {
+    logger.warn('Failed to load template platform pricing', {
+      template_id: template.template_id,
+      message: err.message
+    });
+    template.platform_pricing = { android: {}, ios: {}, web: {} };
+  }
 }
 
 
@@ -916,7 +978,7 @@ exports.listTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : undefined;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : undefined;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : undefined;
 
     const ie = req.query.is_effects;
     let isEffectsFilter;
@@ -1653,7 +1715,7 @@ exports.searchTemplates = async function (req, res) {
       wf && ['AE_ONLY', 'AI_ONLY', 'AI_PLUS_AE'].includes(wf) ? wf : null;
     const ttf = req.query.template_type_filter;
     const templateTypeFilter =
-      ['free', 'standard', 'premium', 'exclusive', 'ai'].includes(ttf) ? ttf : null;
+      ['free', 'standard', 'premium', 'exclusive', 'ai', 'cinematic'].includes(ttf) ? ttf : null;
     const listSort = parseTemplateListSort(req.query);
     const nameOnly =
       req.query.name_only === 'true' ||
@@ -2227,7 +2289,14 @@ exports.createTemplate = async function (req, res) {
       delete templateData.audio_workflow_timeline;
     }
 
+    const platformPricingPayload = templateData.platform_pricing;
+    delete templateData.platform_pricing;
+
     await TemplateModel.createTemplate(templateData, clips);
+    await persistTemplatePlatformPricing(templateData.template_id, {
+      ...templateData,
+      platform_pricing: platformPricingPayload
+    });
 
     // Create template tags if provided
     if (templateTagIds && templateTagIds.length > 0) {
@@ -3924,6 +3993,8 @@ exports.updateTemplate = async function (req, res) {
       delete templateData.audio_workflow_timeline;
     }
 
+    const platformPricingPayload = templateData.platform_pricing;
+    delete templateData.platform_pricing;
     const r2CleanupSnapshot = await snapshotTemplateR2MediaForUpdate(templateId, templateData);
     // Build before updateTemplate — model deletes templateData.scenes / .clips for SQL.
     const neverDeleteSigs = buildNeverDeleteSigsFromPatch(templateData, existingTemplate);
@@ -3937,6 +4008,20 @@ exports.updateTemplate = async function (req, res) {
       updated = await TemplateModel.updateTemplate(templateId, templateData);
     }
 
+    if (platformPricingPayload !== undefined) {
+      await persistTemplatePlatformPricing(templateId, {
+        ...templateData,
+        ...existingTemplate,
+        platform_pricing: platformPricingPayload
+      });
+    } else if (
+      templateData.credits !== undefined ||
+      templateData.member_price !== undefined ||
+      templateData.alacarte_price !== undefined
+    ) {
+      await persistTemplatePlatformPricing(templateId, { ...existingTemplate, ...templateData });
+    }
+
     // Update template tags if provided
     if (templateTagIds !== undefined) {
       await TemplateModel.updateTemplateTags(templateId, templateTagIds);
@@ -3948,16 +4033,19 @@ exports.updateTemplate = async function (req, res) {
       });
     }
 
-    const r2AssetCleanup = await runWithR2CleanupLog(async () => {
-      await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs);
-      await cleanupExtendedTemplateR2MediaAfterUpdate(
-        existingTemplate,
-        templateData,
-        r2CleanupSnapshot,
-        neverDeleteSigs,
-        templateId
-      );
-    });
+    const r2AssetCleanup = await runWithR2CleanupLog(
+      async () => {
+        await deleteOrphanedTemplateR2MediaAfterUpdate(existingTemplate, templateData, neverDeleteSigs);
+        await cleanupExtendedTemplateR2MediaAfterUpdate(
+          existingTemplate,
+          templateData,
+          r2CleanupSnapshot,
+          neverDeleteSigs,
+          templateId
+        );
+      },
+      { excludeTemplateId: templateId }
+    );
 
     if (surfaceToArchiveAfterIsEffectsChange) {
       try {

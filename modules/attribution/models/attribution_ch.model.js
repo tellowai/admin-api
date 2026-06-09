@@ -315,6 +315,24 @@ exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, star
 };
 
 /**
+ * Link clicks per link_id in time range (not filtered by device OS).
+ */
+exports.queryClickCountsByLinkIds = async function (linkIds, startTs, endTs) {
+  const ids = objectIdsClause(linkIds);
+  if (!ids) return [];
+  const q = `
+    SELECT link_id, count() AS clicks
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    GROUP BY link_id
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Total link clicks for one or more link_ids.
  */
 exports.queryClickCountForLinkIds = async function (linkIds, startTs, endTs) {
@@ -330,6 +348,26 @@ exports.queryClickCountForLinkIds = async function (linkIds, startTs, endTs) {
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
   return { total: row ? Number(row.total) : 0 };
+};
+
+/**
+ * Attribution funnel counts per object_id (tracking link) for list stitching.
+ */
+exports.queryAttributionEventCountsByObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+  const ids = objectIdsClause(objectIds);
+  if (!ids) return [];
+  const os = osFilterClause(osFilter);
+  const q = `
+    SELECT object_id, event_name, count() AS cnt
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND event_name IN ('app_open', 'attributed_install', 'attributed_signup', 'attributed_add_to_cart', 'attributed_purchase')
+      AND ${dateRangeClause(startDate, endDate)}
+      AND object_id IN (${ids}) ${os}
+    GROUP BY object_id, event_name
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
 };
 
 /**

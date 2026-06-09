@@ -145,7 +145,7 @@ module.exports = {
     /** Optional absolute path to models.json — or set ADMIN_LLM_CHAT_MODELS_PATH */
     modelsPath: "",
     /** Max tool calls per assistant turn. Override with ADMIN_LLM_CHAT_MAX_TOOL_CALLS. */
-    maxToolCallsPerTurn: 24,
+    maxToolCallsPerTurn: 30,
     /** Brand name for the chat (system prompt, business context). Override with ADMIN_LLM_CHAT_COMPANY_NAME, e.g. "Kriya AI". Defaults to "Tellow AI". */
     companyName: "",
     /** render_widget tool. Override with ADMIN_LLM_CHAT_TOOL_RENDER_WIDGET_ENABLED. */

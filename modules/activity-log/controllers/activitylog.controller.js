@@ -11,10 +11,16 @@ exports.getAllLogs = async function (req, res) {
   const offset = (page - 1) * limit;
   const orderby = req.query.orderby ? req.query.orderby : 'DESC';
 
-  const filterBy = req.query.module ? req.query.module : null;
+  const filters = {};
+  if (req.query.module) {
+    filters.entityType = req.query.module;
+  }
+  if (req.query.entity_id) {
+    filters.entityId = req.query.entity_id;
+  }
 
   try {
-    const allLogs = await ActivitylogDbo.getAllLogs(offset, limit, { order: ['created_at', orderby] }, filterBy);
+    const allLogs = await ActivitylogDbo.getAllLogs(offset, limit, { order: ['created_at', orderby] }, filters);
 
     if (allLogs.length) {
       const userIds = allLogs.map(log => log.admin_user_id);
