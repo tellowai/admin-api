@@ -119,6 +119,48 @@ async function getUserCreditsTransactions(userId, page, limit, options = {}) {
   };
 }
 
+async function getDeviceCreditsTransactions(deviceId, page, limit, options = {}) {
+  const useMaster = options.useMaster === true;
+  const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+  const offset = (page - 1) * limit;
+  const did = String(deviceId || '').trim();
+  if (!did) {
+    return { transactions: [], balance: 0, reserved_balance: 0 };
+  }
+
+  const transactionsQuery = `
+    SELECT * FROM credits_transactions
+    WHERE device_id = ? AND user_id IS NULL
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  const balanceQuery = `
+    SELECT balance, reserved_balance FROM user_credits
+    WHERE device_id = ? AND user_id IS NULL
+    LIMIT 1
+  `;
+
+  const [transactions, balanceResult] = await Promise.all([
+    runQuery(transactionsQuery, [did, limit, offset]),
+    runQuery(balanceQuery, [did])
+  ]);
+
+  const balance = balanceResult[0] ? Number(balanceResult[0].balance) || 0 : 0;
+  const reserved_balance = balanceResult[0] ? Number(balanceResult[0].reserved_balance) || 0 : 0;
+
+  const enriched = (Array.isArray(transactions) ? transactions : []).map((row) => {
+    const admin_activation = adminActivationMetaForTransaction(row);
+    return admin_activation ? { ...row, admin_activation } : row;
+  });
+
+  return {
+    transactions: enriched,
+    balance,
+    reserved_balance
+  };
+}
+
 /** Wallet balances for many users (admin tables). Keys are string user_id. */
 async function getBalancesByUserIds(userIds, options = {}) {
   const useMaster = options.useMaster === true;
@@ -142,8 +184,33 @@ async function getBalancesByUserIds(userIds, options = {}) {
   return map;
 }
 
+/** Wallet balances for guest device anchors (admin tables). Keys are string device_id. */
+async function getBalancesByDeviceIds(deviceIds, options = {}) {
+  const useMaster = options.useMaster === true;
+  const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
+  const ids = [...new Set((deviceIds || []).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id)))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const rows = await runQuery(
+    'SELECT device_id, balance, reserved_balance FROM user_credits WHERE device_id IN (?) AND user_id IS NULL',
+    [ids]
+  );
+
+  for (const r of rows || []) {
+    const did = String(r.device_id);
+    map.set(did, {
+      balance: Number(r.balance) || 0,
+      reserved_balance: Number(r.reserved_balance) || 0
+    });
+  }
+  return map;
+}
+
 module.exports = {
   refundCreditsTransaction,
   getUserCreditsTransactions,
-  getBalancesByUserIds
+  getDeviceCreditsTransactions,
+  getBalancesByUserIds,
+  getBalancesByDeviceIds
 };

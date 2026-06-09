@@ -23,7 +23,7 @@ function formatDateForMySQL(date) {
  * @param {Date|string|null} endDate
  * @param {number} page
  * @param {number} limit
- * @param {object} filters { template_id, job_status, user_id, allTime }
+ * @param {object} filters { template_id, job_status, user_id, device_id, allTime }
  * @returns {Promise<Array>}
  */
 exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1, limit = 20, filters = {}) {
@@ -36,8 +36,8 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
     endFormatted = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
   }
 
-  /** Optional filters on resource_generations (template and/or user), merge terminal CH + MySQL in-flight. */
-  if (filters.template_id || filters.user_id) {
+  /** Optional filters on resource_generations (template, user, and/or guest device), merge terminal CH + MySQL in-flight. */
+  if (filters.template_id || filters.user_id || filters.device_id) {
     const idRows = await exports.listResourceGenerationIdsByCreatedRangeFilters(
       startDate,
       endDate,
@@ -46,6 +46,7 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
       {
         template_id: filters.template_id || null,
         user_id: filters.user_id || null,
+        device_id: filters.device_id || null,
         allTime
       }
     );
@@ -281,6 +282,7 @@ exports.getResourceGenerationsByIds = async function (generationIds) {
     SELECT 
       resource_generation_id,
       user_id,
+      device_id,
       template_id,
       media_type,
       created_at,
@@ -432,7 +434,7 @@ function chStringLiteral(value) {
 }
 
 /**
- * resource_generation rows in created_at range, optionally filtered by template_id and/or user_id.
+ * resource_generation rows in created_at range, optionally filtered by template_id, user_id, and/or device_id.
  */
 exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
   startDate,
@@ -443,7 +445,8 @@ exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
 ) {
   const templateId = filters.template_id || null;
   const userId = filters.user_id || null;
-  if (!templateId && !userId) return [];
+  const deviceId = filters.device_id || null;
+  if (!templateId && !userId && !deviceId) return [];
 
   const allTime = !!filters.allTime;
   const startFormatted = allTime ? null : formatDateForMySQL(startDate);
@@ -459,6 +462,7 @@ exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
   }
   if (templateId) conditions.push(`template_id = ${chStringLiteral(templateId)}`);
   if (userId) conditions.push(`user_id = ${chStringLiteral(userId)}`);
+  if (deviceId) conditions.push(`device_id = ${chStringLiteral(deviceId)}`);
 
   const lim = parseInt(limit, 10);
   const off = parseInt(offset, 10);

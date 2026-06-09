@@ -14,6 +14,7 @@ const { ROLES } = require('../../auth/constants/permissions.constants');
 const RbacModel = require('../../auth/models/rbac.model');
 const CreditsModel = require('../../credits/models/credits.model');
 const OrdersModel = require('../../orders/models/orders.model');
+const { formatGuestDeviceDisplayName } = require('../../orders/utils/guestDeviceDisplay.util');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
@@ -607,6 +608,268 @@ exports.getUserEntitlements = async function (req, res) {
     console.error('getUserEntitlements error:', err);
     return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
       message: req.t('user:USER_ENTITLEMENTS_FAILED') || 'Failed to retrieve user entitlements'
+    });
+  }
+};
+
+async function enrichAdminProfileOrders(orders) {
+  const planIds = [...new Set(orders.map((o) => o.payment_plan_id).filter(Boolean))];
+  const plans = planIds.length ? await PaymentPlansModel.getPlansByIds(planIds) : [];
+  const planMap = {};
+  for (const p of plans) planMap[p.pp_id] = p;
+
+  const [templateNameById, packNameById] = await Promise.all([
+    orderTemplateStitch.buildTemplateNameByIdMap(orders),
+    orderTemplateStitch.buildPackNameByIdMap(orders)
+  ]);
+
+  const data = orders.map((order) => {
+    const plan = order.payment_plan_id ? planMap[order.payment_plan_id] : null;
+    const planType = plan ? plan.plan_type : null;
+    const billingInterval = plan ? plan.billing_interval : null;
+    const tid = orderTemplateStitch.parseTemplateIdFromTransactionNotes(order.transaction_notes);
+    const pid = orderTemplateStitch.parsePackIdFromTransactionNotes(order.transaction_notes);
+    const { transaction_notes: _tn, ...rest } = order;
+    return {
+      ...rest,
+      plan_type: planType ?? null,
+      plan_name: plan ? (plan.plan_name || plan.plan_heading || null) : null,
+      plan_heading: plan ? (plan.plan_heading || plan.plan_name || null) : null,
+      billing_interval: billingInterval ?? null,
+      purchase_category: purchaseCategoryFromOrder(
+        order,
+        plan ? { plan_type: plan.plan_type, billing_interval: plan.billing_interval } : null
+      ),
+      template_id: tid,
+      template_name: tid ? (templateNameById[tid] ?? null) : null,
+      pack_id: pid,
+      pack_name: pid ? (packNameById[pid] ?? null) : null,
+      analytics_app_version: null,
+      analytics_os_name: null,
+      analytics_os_version: null
+    };
+  });
+
+  const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(orders);
+  return data.map((row) => orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(row, ctxMap));
+}
+
+/**
+ * Guest device purchase history for admin profile workspace.
+ * GET /admin/consumer-devices/by-device-id/:deviceId/orders
+ */
+exports.getGuestDeviceOrders = async function (req, res) {
+  try {
+    const deviceId = String(req.params.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'deviceId is required' });
+    }
+
+    const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
+    const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
+    const offset = (page - 1) * limit;
+
+    const orders = await OrdersModel.getByDeviceId(deviceId, limit, offset);
+    const enriched = await enrichAdminProfileOrders(orders);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: { orders: enriched }
+    });
+  } catch (err) {
+    console.error('getGuestDeviceOrders error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to retrieve guest device orders'
+    });
+  }
+};
+
+/**
+ * Guest device credit ledger for admin profile workspace.
+ * GET /admin/consumer-devices/by-device-id/:deviceId/credits/transactions
+ */
+exports.getGuestDeviceCreditTransactions = async function (req, res) {
+  try {
+    const deviceId = String(req.params.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'deviceId is required' });
+    }
+
+    const page = req.query.page ? (req.query.page > 0 ? parseInt(req.query.page) : config.pagination.page) : config.pagination.page;
+    const limit = req.query.limit ? (req.query.limit > 0 ? parseInt(req.query.limit) : config.pagination.limit) : config.pagination.limit;
+
+    const creditData = await CreditsModel.getDeviceCreditsTransactions(deviceId, page, limit, {
+      useMaster: true
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: creditData
+    });
+  } catch (err) {
+    console.error('getGuestDeviceCreditTransactions error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to retrieve guest device credit transactions'
+    });
+  }
+};
+
+/**
+ * Guest device template entitlements (pre-sign-in à la carte / pack purchases).
+ * GET /admin/consumer-devices/by-device-id/:deviceId/entitlements
+ */
+exports.getGuestDeviceEntitlements = async function (req, res) {
+  try {
+    const deviceId = String(req.params.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'deviceId is required' });
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const offset = (page - 1) * limit;
+
+    const [rows, slotsTotal] = await Promise.all([
+      EntitlementsModel.listByDeviceId(deviceId, limit, offset),
+      EntitlementsModel.sumTemplateSlotsRemainingByDeviceId(deviceId)
+    ]);
+
+    const entitlements = (rows || []).map((row) => {
+      const isExpired = row.is_expired || (row.valid_until && new Date(row.valid_until) < new Date());
+      let displayStatus = row.status || 'active';
+      if (isExpired) displayStatus = 'expired';
+      else if (row.template_slots_remaining <= 0) displayStatus = 'exhausted';
+
+      return {
+        entitlement_id: row.entitlement_id,
+        order_id: row.order_id,
+        template_id: row.template_id,
+        tier_plan_type: row.tier_plan_type,
+        template_slots_remaining: row.template_slots_remaining,
+        max_creations_per_template: row.max_creations_per_template,
+        status: displayStatus,
+        valid_from: row.valid_from,
+        valid_until: row.valid_until,
+        created_at: row.created_at
+      };
+    });
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        template_slots_remaining_total: slotsTotal,
+        entitlements
+      }
+    });
+  } catch (err) {
+    console.error('getGuestDeviceEntitlements error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to retrieve guest device entitlements'
+    });
+  }
+};
+
+/**
+ * Lightweight guest device preview for admin hover panels.
+ * GET /admin/consumer-devices/by-device-id/:deviceId/hover-card
+ */
+exports.getGuestDeviceHoverCard = async function (req, res) {
+  try {
+    const deviceId = String(req.params.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'deviceId is required' });
+    }
+
+    const [balanceMap, completedMap, boundsMap, subscription] = await Promise.all([
+      CreditsModel.getBalancesByDeviceIds([deviceId]),
+      ManageAdminUserDbo.countCompletedOrdersByDeviceIds([deviceId]),
+      ManageAdminUserDbo.getGuestDeviceOrderBoundsByDeviceIds([deviceId]),
+      ManageAdminUserDbo.getGuestDeviceSubscriptionByDeviceId(deviceId)
+    ]);
+
+    const wallet = balanceMap.get(deviceId) || { balance: 0, reserved_balance: 0 };
+    const bounds = boundsMap.get(deviceId) || {};
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        device_id: deviceId,
+        display_name: formatGuestDeviceDisplayName(deviceId),
+        purchaser_type: 'guest_device',
+        credit_balance: wallet.balance,
+        credit_reserved_balance: wallet.reserved_balance,
+        completed_orders_count: completedMap.get(deviceId) || 0,
+        order_count: bounds.order_count || 0,
+        first_order_at: bounds.first_order_at || null,
+        last_order_at: bounds.last_order_at || null,
+        subscription_status: subscription?.status || null,
+        subscription_claimed_at: subscription?.claimed_at || null
+      }
+    });
+  } catch (err) {
+    console.error('getGuestDeviceHoverCard error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to load guest device preview'
+    });
+  }
+};
+
+/**
+ * Guest device profile snapshot for admin slideout panels.
+ * GET /admin/consumer-devices/by-device-id/:deviceId
+ */
+exports.getGuestDeviceSnapshot = async function (req, res) {
+  try {
+    const deviceId = String(req.params.deviceId || '').trim();
+    if (!deviceId) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'deviceId is required' });
+    }
+
+    const [balanceMap, completedMap, boundsMap, subscription] = await Promise.all([
+      CreditsModel.getBalancesByDeviceIds([deviceId]),
+      ManageAdminUserDbo.countCompletedOrdersByDeviceIds([deviceId]),
+      ManageAdminUserDbo.getGuestDeviceOrderBoundsByDeviceIds([deviceId]),
+      ManageAdminUserDbo.getGuestDeviceSubscriptionByDeviceId(deviceId)
+    ]);
+
+    const wallet = balanceMap.get(deviceId) || { balance: 0, reserved_balance: 0 };
+    const bounds = boundsMap.get(deviceId) || {};
+
+    const displayName = formatGuestDeviceDisplayName(deviceId);
+    const guestUser = {
+      user_id: null,
+      device_id: deviceId,
+      display_name: displayName,
+      purchaser_type: 'guest_device',
+      email: null,
+      mobile: null,
+      mobile_number: null,
+      profile_pic: null
+    };
+
+    return res.status(HTTP_STATUS_CODES.OK).json({
+      data: {
+        device_id: deviceId,
+        display_name: displayName,
+        purchaser_type: 'guest_device',
+        user: guestUser,
+        credit_balance: wallet.balance,
+        credit_reserved_balance: wallet.reserved_balance,
+        completed_orders_count: completedMap.get(deviceId) || 0,
+        order_count: bounds.order_count || 0,
+        first_order_at: bounds.first_order_at || null,
+        last_order_at: bounds.last_order_at || null,
+        subscription: subscription
+          ? {
+              subscription_id: subscription.subscription_id,
+              status: subscription.status,
+              provider_plan_id: subscription.provider_plan_id,
+              start_at: subscription.start_at,
+              claimed_at: subscription.claimed_at
+            }
+          : null
+      }
+    });
+  } catch (err) {
+    console.error('getGuestDeviceSnapshot error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR || 500).json({
+      message: 'Failed to load guest device profile'
     });
   }
 };

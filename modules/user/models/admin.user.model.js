@@ -337,3 +337,66 @@ exports.searchEndUsersForSupportTicket = async function (type, rawQ, limit) {
 
   return [];
 };
+
+/** Completed guest orders keyed by device_id. */
+exports.countCompletedOrdersByDeviceIds = async function (deviceIds) {
+  const ids = [...new Set((deviceIds || []).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id)))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT device_id, COUNT(*) AS cnt
+     FROM orders
+     WHERE device_id IN (?) AND user_id IS NULL AND status = 'completed'
+     GROUP BY device_id`,
+    [ids]
+  );
+
+  for (const r of rows || []) {
+    map.set(String(r.device_id), Number(r.cnt) || 0);
+  }
+  return map;
+};
+
+/** First / last order timestamps for guest device anchors. */
+exports.getGuestDeviceOrderBoundsByDeviceIds = async function (deviceIds) {
+  const ids = [...new Set((deviceIds || []).filter((id) => id != null && String(id).trim() !== '').map((id) => String(id)))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT device_id,
+            MIN(created_at) AS first_order_at,
+            MAX(created_at) AS last_order_at,
+            COUNT(*) AS order_count
+     FROM orders
+     WHERE device_id IN (?) AND user_id IS NULL
+     GROUP BY device_id`,
+    [ids]
+  );
+
+  for (const r of rows || []) {
+    map.set(String(r.device_id), {
+      first_order_at: r.first_order_at || null,
+      last_order_at: r.last_order_at || null,
+      order_count: Number(r.order_count) || 0
+    });
+  }
+  return map;
+};
+
+/** Latest guest subscription row for a device (pre-sign-in mobile checkout). */
+exports.getGuestDeviceSubscriptionByDeviceId = async function (deviceId) {
+  const did = String(deviceId || '').trim();
+  if (!did) return null;
+
+  const rows = await mysqlQueryRunner.runQueryInSlave(
+    `SELECT subscription_id, status, provider_plan_id, start_at, claimed_at, created_at
+     FROM subscriptions
+     WHERE device_id = ? AND user_id IS NULL
+     ORDER BY COALESCE(start_at, created_at) DESC
+     LIMIT 1`,
+    [did]
+  );
+  return rows && rows[0] ? rows[0] : null;
+};

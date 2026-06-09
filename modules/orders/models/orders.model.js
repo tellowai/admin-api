@@ -118,8 +118,8 @@ function buildAdminOrdersWhere(filters) {
     const term = `%${search}%`;
     // No CAST on order_id — MySQL compares LIKE against numeric columns using string conversion;
     // avoids expression wrapping that can limit optimizer choices vs CAST(... AS CHAR).
-    where.push('(o.user_id LIKE ? OR o.order_id LIKE ?)');
-    params.push(term, term);
+    where.push('(o.user_id LIKE ? OR o.order_id LIKE ? OR o.device_id LIKE ?)');
+    params.push(term, term, term);
   }
 
   if (client_platform === 'android' || client_platform === 'ios' || client_platform === 'web') {
@@ -147,10 +147,18 @@ function buildAdminOrdersWhere(filters) {
   return { whereSql: where.join(' AND '), params };
 }
 
+/** Distinct purchaser anchor for admin user counts (logged-in user or guest device). */
+const PURCHASER_DISTINCT_EXPR = `CASE
+  WHEN o.user_id IS NOT NULL THEN CONCAT('user:', o.user_id)
+  WHEN o.device_id IS NOT NULL THEN CONCAT('device:', o.device_id)
+  ELSE NULL
+END`;
+
 const ORDERS_ADMIN_SELECT = `
   SELECT
     o.order_id,
     o.user_id,
+    o.device_id,
     o.payment_gateway,
     o.client_platform,
     o.pg_order_id,
@@ -253,7 +261,7 @@ exports.countDistinctUsersAdmin = async function (filters) {
   const resolved = await resolveAdminFilterPayload(filters);
   const { whereSql, params } = buildAdminOrdersWhere(resolved);
   const query = `
-    SELECT COUNT(DISTINCT o.user_id) AS n
+    SELECT COUNT(DISTINCT ${PURCHASER_DISTINCT_EXPR}) AS n
     FROM orders o
     WHERE ${whereSql}
   `;
@@ -274,6 +282,14 @@ const ADMIN_ORDER_DAY_SUMMARY_SINGLE_SCAN_MAX_SPAN_DAYS = 14;
  * @param {string} tz
  * @param {Set<string>} wantedDayKeys
  */
+function purchaserAnchorFromAdminRow(row) {
+  const uid = row.uid;
+  if (uid != null && uid !== '') return `user:${String(uid)}`;
+  const did = row.did;
+  if (did != null && did !== '') return `device:${String(did)}`;
+  return null;
+}
+
 function aggregateAdminOrderDayRows(rows, tz, wantedDayKeys) {
   /** @type {Map<string, { count: number, users: Set<string>, rev: Map<string, number> }>} */
   const byDay = new Map();
@@ -286,8 +302,8 @@ function aggregateAdminOrderDayRows(rows, tz, wantedDayKeys) {
       byDay.set(dk, agg);
     }
     agg.count += 1;
-    const uid = row.uid;
-    if (uid != null && uid !== '') agg.users.add(String(uid));
+    const anchor = purchaserAnchorFromAdminRow(row);
+    if (anchor) agg.users.add(anchor);
     const curRaw = row.cur != null ? String(row.cur).trim() : '';
     const curKey = curRaw === '' ? '__NONE__' : curRaw;
     const amt = Number(row.amt) || 0;
@@ -336,6 +352,7 @@ async function summarizeAdminOrdersCalendarDaysSingleScan(whereSql, params, tz, 
     SELECT
       o.created_at AS ca,
       o.user_id AS uid,
+      o.device_id AS did,
       COALESCE(NULLIF(TRIM(o.currency), ''), '') AS cur,
       o.amount_paid AS amt
     FROM orders o
@@ -360,7 +377,7 @@ async function summarizeAdminOrdersCalendarDaysPerDayAggregates(whereSql, params
     const bind = [...params, startUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), endUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
 
     const qCount = `
-      SELECT COUNT(*) AS order_count, COUNT(DISTINCT o.user_id) AS unique_users
+      SELECT COUNT(*) AS order_count, COUNT(DISTINCT ${PURCHASER_DISTINCT_EXPR}) AS unique_users
       FROM orders o
       WHERE ${whereSql} AND o.created_at >= ? AND o.created_at < ?
     `;
@@ -452,6 +469,26 @@ exports.getByUserId = async function (userId, limit, offset) {
     LIMIT ? OFFSET ?
   `;
   return await MysqlQueryRunner.runQueryInSlave(query, [userId, limit, offset]);
+};
+
+/**
+ * Guest device orders (pre-sign-in checkout anchor).
+ * @param {string} deviceId
+ * @param {number} limit
+ * @param {number} offset
+ */
+exports.getByDeviceId = async function (deviceId, limit, offset) {
+  const query = `
+    SELECT order_id, user_id, device_id, payment_gateway, pg_order_id, quantity, pg_payment_id,
+           payment_plan_id, amount_paid, currency, payment_method, status,
+           transaction_notes,
+           created_at, completed_at, failed_at, refunded_at
+    FROM orders
+    WHERE device_id = ? AND user_id IS NULL
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, [deviceId, limit, offset]);
 };
 
 /**

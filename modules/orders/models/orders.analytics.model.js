@@ -359,7 +359,13 @@ exports.getOrdersVolumeSummary = async function (opts) {
   const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const query = `
-    SELECT COUNT(*) AS total_orders, COUNT(DISTINCT user_id) AS unique_users
+    SELECT
+      COUNT(*) AS total_orders,
+      COUNT(DISTINCT CASE
+        WHEN o.user_id IS NOT NULL THEN CONCAT('user:', o.user_id)
+        WHEN o.device_id IS NOT NULL THEN CONCAT('device:', o.device_id)
+        ELSE NULL
+      END) AS unique_users
     FROM orders o
     WHERE o.created_at >= ? AND o.created_at <= ?${filterPart.sql}
   `;
@@ -490,13 +496,52 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
   const col =
     PURCHASING_CUSTOMERS_SORT_COLUMNS[key] || PURCHASING_CUSTOMERS_SORT_COLUMNS.last_purchased_at;
   const dir = String(sortDir || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-  return `${col} ${dir}, purchasers.user_id DESC`;
+  return `${col} ${dir}, purchasers.purchaser_key DESC`;
 }
 
 const PURCHASE_AT_ORDERS_SQL = `COALESCE(o.completed_at, o.created_at)`;
 const PURCHASE_AT_ORDERS_ELIGIBLE_SQL = `COALESCE(completed_at, created_at)`;
 const PURCHASE_AT_SUBSCRIPTIONS_SQL = `COALESCE(s.start_at, s.created_at)`;
 const PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL = `COALESCE(start_at, created_at)`;
+
+/** Purchaser anchor — account user or unclaimed device (aligned with subscriptions analytics). */
+const PURCHASER_TEXT_COLLATION = 'utf8mb4_unicode_ci';
+
+/** orders.device_id vs subscriptions.device_id can differ in collation after additive migrations. */
+function sqlCollateText(expr) {
+  return `CONVERT(${expr} USING utf8mb4) COLLATE ${PURCHASER_TEXT_COLLATION}`;
+}
+
+function sqlPurchaserKey(userIdExpr, deviceIdExpr) {
+  const deviceCol = sqlCollateText(deviceIdExpr);
+  return `COALESCE(
+    CONCAT('user:', CAST(${userIdExpr} AS CHAR) COLLATE ${PURCHASER_TEXT_COLLATION}),
+    CONCAT('device:', ${deviceCol})
+  )`;
+}
+
+const PURCHASER_KEY_ORDERS_ELIGIBLE = sqlPurchaserKey('user_id', 'device_id');
+const PURCHASER_KEY_SUBSCRIPTIONS_ELIGIBLE = sqlPurchaserKey('s.user_id', 's.device_id');
+const PURCHASER_KEY_O_ALIAS = sqlPurchaserKey('o.user_id', 'o.device_id');
+const PURCHASER_KEY_S_ALIAS = sqlPurchaserKey('s.user_id', 's.device_id');
+const DEVICE_ID_ORDERS_ELIGIBLE = sqlCollateText('device_id');
+const DEVICE_ID_SUBSCRIPTIONS_ELIGIBLE = sqlCollateText('s.device_id');
+const ORDER_PURCHASER_ANCHOR_FILTER = `(user_id IS NOT NULL OR device_id IS NOT NULL)`;
+const ORDER_O_PURCHASER_ANCHOR_FILTER = `(o.user_id IS NOT NULL OR o.device_id IS NOT NULL)`;
+const SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER = `(s.user_id IS NOT NULL OR s.device_id IS NOT NULL)`;
+
+/** Order ↔ subscription link by user or guest device (±2 day window uses outer aliases). */
+const ORDER_SUBSCRIPTION_LINK_MATCH_SQL = `
+  (
+    (o.user_id IS NOT NULL AND s_link.user_id = o.user_id)
+    OR (
+      o.user_id IS NULL
+      AND o.device_id IS NOT NULL
+      AND s_link.user_id IS NULL
+      AND ${sqlCollateText('s_link.device_id')} = ${sqlCollateText('o.device_id')}
+    )
+  )
+`;
 
 /** Upgrade check for subscription rows linked to orders (`s_link` alias). */
 const SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL = `
@@ -511,7 +556,7 @@ const SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL = `
 const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
   EXISTS (
     SELECT 1 FROM subscriptions s_link
-    WHERE s_link.user_id = o.user_id
+    WHERE ${ORDER_SUBSCRIPTION_LINK_MATCH_SQL}
       AND s_link.payment_type = 'recurring'
       AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL})
       AND COALESCE(s_link.start_at, s_link.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
@@ -587,14 +632,15 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
     const term = `%${searchTrim}%`;
     searchClause = `
       AND (
-        CAST(u.user_id AS CHAR) LIKE ?
+        CAST(eligible.user_id AS CHAR) LIKE ?
+        OR COALESCE(eligible.device_id, '') LIKE ?
         OR COALESCE(u.display_name, '') LIKE ?
         OR COALESCE(u.email, '') LIKE ?
         OR COALESCE(u.mobile, '') LIKE ?
         OR TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) LIKE ?
       )
     `;
-    searchParams.push(term, term, term, term, term);
+    searchParams.push(term, term, term, term, term, term);
   }
 
   const baseFromParams = [
@@ -606,19 +652,29 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   ];
 
   const baseFrom = `
-    FROM user u
-    INNER JOIN (
-      SELECT user_id FROM orders
+    FROM (
+      SELECT DISTINCT
+        ${PURCHASER_KEY_ORDERS_ELIGIBLE} AS purchaser_key,
+        user_id,
+        ${DEVICE_ID_ORDERS_ELIGIBLE} AS device_id
+      FROM orders
       WHERE status = 'completed' AND COALESCE(payment_gateway, '') <> 'admin_grant'
+        AND ${ORDER_PURCHASER_ANCHOR_FILTER}
         AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} <= ?
       UNION
-      SELECT user_id FROM subscriptions s
+      SELECT DISTINCT
+        ${PURCHASER_KEY_SUBSCRIPTIONS_ELIGIBLE} AS purchaser_key,
+        s.user_id,
+        ${DEVICE_ID_SUBSCRIPTIONS_ELIGIBLE} AS device_id
+      FROM subscriptions s
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+        AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
         AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} <= ?
-    ) eligible ON eligible.user_id = u.user_id
+    ) eligible
+    LEFT JOIN user u ON u.user_id = eligible.user_id AND (u.DELETED_AT IS NULL)
     LEFT JOIN (
       SELECT
-        o.user_id,
+        ${PURCHASER_KEY_O_ALIAS} AS purchaser_key,
         SUM(CASE WHEN ${ORDER_IS_ALACARTE_SQL} THEN 1 ELSE 0 END) AS alacarte_purchases,
         SUM(CASE WHEN ${ORDER_IS_ADDON_SQL} THEN 1 ELSE 0 END) AS addon_purchases,
         SUM(
@@ -634,33 +690,52 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
       FROM orders o
       LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
       WHERE o.status = 'completed' AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+        AND ${ORDER_O_PURCHASER_ANCHOR_FILTER}
         AND ${PURCHASE_AT_ORDERS_SQL} >= ? AND ${PURCHASE_AT_ORDERS_SQL} <= ?
-      GROUP BY o.user_id
-    ) ostats ON ostats.user_id = u.user_id
+      GROUP BY purchaser_key
+    ) ostats ON ostats.purchaser_key = eligible.purchaser_key
     LEFT JOIN (
       SELECT
-        s.user_id,
+        ${PURCHASER_KEY_S_ALIAS} AS purchaser_key,
         COUNT(*) AS subscription_purchases,
         MAX(${PURCHASE_AT_SUBSCRIPTIONS_SQL}) AS last_subscription_at
       FROM subscriptions s
       WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+        AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
         AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
-      GROUP BY s.user_id
-    ) sstats ON sstats.user_id = u.user_id
-    LEFT JOIN user_credits uc ON uc.user_id = u.user_id
-    WHERE (u.DELETED_AT IS NULL)
+      GROUP BY purchaser_key
+    ) sstats ON sstats.purchaser_key = eligible.purchaser_key
+    LEFT JOIN user_credits uc ON (
+      (eligible.user_id IS NOT NULL AND uc.user_id = eligible.user_id)
+      OR (
+        eligible.user_id IS NULL
+        AND eligible.device_id IS NOT NULL
+        AND ${sqlCollateText('uc.device_id')} = eligible.device_id
+        AND uc.user_id IS NULL
+      )
+    )
+    WHERE 1=1
     ${searchClause}
   `;
 
   const aggSelect = `
     SELECT
-      u.user_id,
-      COALESCE(
-        NULLIF(TRIM(u.display_name), ''),
-        NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
-        NULLIF(TRIM(u.email), ''),
-        CAST(u.user_id AS CHAR)
-      ) AS user_name,
+      eligible.purchaser_key,
+      eligible.user_id,
+      eligible.device_id,
+      CASE
+        WHEN eligible.user_id IS NOT NULL THEN COALESCE(
+          NULLIF(TRIM(u.display_name), ''),
+          NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
+          NULLIF(TRIM(u.email), ''),
+          CAST(eligible.user_id AS CHAR)
+        )
+        WHEN eligible.device_id IS NOT NULL THEN CONCAT(
+          'Guest device',
+          IF(CHAR_LENGTH(eligible.device_id) > 8, CONCAT(' · ', RIGHT(eligible.device_id, 8)), '')
+        )
+        ELSE CAST(eligible.purchaser_key AS CHAR)
+      END AS user_name,
       u.email AS user_email,
       u.mobile AS user_mobile,
       u.display_name AS user_display_name,

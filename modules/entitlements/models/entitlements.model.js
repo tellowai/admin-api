@@ -48,3 +48,43 @@ exports.listByUserId = async function (userId, limit, offset) {
   `;
   return await MysqlQueryRunner.runQueryInSlave(query, [userId, limit, offset]);
 };
+
+/**
+ * Paginated entitlements for a guest device anchor (user_id IS NULL).
+ */
+exports.listByDeviceId = async function (deviceId, limit, offset) {
+  const query = `
+    SELECT
+      entitlement_id,
+      user_id,
+      device_id,
+      order_id,
+      template_id,
+      tier_plan_type,
+      template_slots_remaining,
+      max_creations_per_template,
+      status,
+      is_expired,
+      valid_from,
+      valid_until,
+      created_at,
+      updated_at
+    FROM entitlements
+    WHERE device_id = ?
+      AND user_id IS NULL
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `;
+  return await MysqlQueryRunner.runQueryInSlave(query, [deviceId, limit, offset]);
+};
+
+exports.sumTemplateSlotsRemainingByDeviceId = async function (deviceId) {
+  const query = `
+    SELECT COALESCE(SUM(template_slots_remaining), 0) AS total
+    FROM entitlements
+    WHERE device_id = ? AND user_id IS NULL
+  `;
+  const rows = await MysqlQueryRunner.runQueryInSlave(query, [deviceId]);
+  const n = rows && rows[0] ? Number(rows[0].total) : 0;
+  return Number.isFinite(n) ? n : 0;
+};

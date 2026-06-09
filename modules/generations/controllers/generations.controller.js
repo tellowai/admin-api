@@ -337,7 +337,13 @@ exports.listGenerations = async function (req, res) {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const { template_id, job_status } = req.query;
     const user_id = req.query.user_id ? String(req.query.user_id).trim() : '';
+    const device_id = req.query.device_id ? String(req.query.device_id).trim() : '';
     const photo_booth_id = req.query.photo_booth_id ? String(req.query.photo_booth_id).trim() : '';
+    if (user_id && device_id) {
+      return res.status(400).send({
+        message: 'Pass user_id or device_id, not both'
+      });
+    }
     if (photo_booth_id && !BOOTH_UUID_RE.test(photo_booth_id)) {
       return res.status(400).send({
         message: 'Invalid photo_booth_id'
@@ -370,6 +376,7 @@ exports.listGenerations = async function (req, res) {
         template_id,
         job_status,
         user_id: user_id || undefined,
+        device_id: device_id || undefined,
         allTime
       });
     }
@@ -395,6 +402,7 @@ exports.listGenerations = async function (req, res) {
       const parentGen = resourceGenMap[gen.media_generation_id];
       if (parentGen) {
         gen.user_id = parentGen.user_id;
+        gen.device_id = parentGen.device_id;
         gen.template_id = parentGen.template_id;
         gen.media_type = parentGen.media_type;
         gen.created_at = parentGen.created_at; // use the true creation time of the generation

@@ -59,6 +59,29 @@ const EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL = `
   )
 `;
 
+/** One entitled subscriber per account or unclaimed device (mobile guest sync). */
+const ENTITLEMENT_ANCHOR_SQL = `COALESCE(CAST(s.user_id AS CHAR), CONCAT('device:', s.device_id))`;
+const ENTITLEMENT_ANCHOR_FILTER_SQL = `AND (s.user_id IS NOT NULL OR s.device_id IS NOT NULL)`;
+
+/** orders.device_id vs subscriptions.device_id can differ in collation after additive migrations. */
+const PURCHASER_TEXT_COLLATION = 'utf8mb4_unicode_ci';
+
+function sqlCollateText(expr) {
+  return `CONVERT(${expr} USING utf8mb4) COLLATE ${PURCHASER_TEXT_COLLATION}`;
+}
+
+/** Nearest completed order for subscription row (user or guest device anchor). */
+const LINKED_ORDER_MATCH_SQL = `
+  (
+    (s.user_id IS NOT NULL AND o.user_id = s.user_id)
+    OR (
+      s.user_id IS NULL
+      AND s.device_id IS NOT NULL
+      AND ${sqlCollateText('o.device_id')} = ${sqlCollateText('s.device_id')}
+    )
+  )
+`;
+
 /**
  * Recurring subscriptions entitled to access at a point in time (UTC),
  * aligned with api subscription.model recurringRowIsEntitled semantics.
@@ -87,11 +110,11 @@ class SubscriptionsAnalyticsModel {
       WITH ranked AS (
         SELECT s.*,
           ROW_NUMBER() OVER (
-            PARTITION BY s.user_id
+            PARTITION BY ${ENTITLEMENT_ANCHOR_SQL}
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM subscriptions s
-        WHERE s.payment_type = 'recurring'
+        WHERE s.payment_type = 'recurring' ${ENTITLEMENT_ANCHOR_FILTER_SQL}
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
           AND COALESCE(s.start_at, s.created_at) <= ?
       )
@@ -129,11 +152,11 @@ class SubscriptionsAnalyticsModel {
       WITH ranked AS (
         SELECT s.*,
           ROW_NUMBER() OVER (
-            PARTITION BY s.user_id
+            PARTITION BY ${ENTITLEMENT_ANCHOR_SQL}
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM subscriptions s
-        WHERE s.payment_type = 'recurring'
+        WHERE s.payment_type = 'recurring' ${ENTITLEMENT_ANCHOR_FILTER_SQL}
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
           AND COALESCE(s.start_at, s.created_at) <= ?
       )
@@ -201,7 +224,7 @@ class SubscriptionsAnalyticsModel {
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM subscriptions s
-        WHERE s.payment_type = 'recurring'
+        WHERE s.payment_type = 'recurring' AND s.user_id IS NOT NULL
           AND s.user_id IN (${ph})
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
           AND COALESCE(s.start_at, s.created_at) <= UTC_TIMESTAMP()
@@ -268,12 +291,13 @@ class SubscriptionsAnalyticsModel {
           d.day_start_utc,
           s.*,
           ROW_NUMBER() OVER (
-            PARTITION BY d.day_key, s.user_id
+            PARTITION BY d.day_key, ${ENTITLEMENT_ANCHOR_SQL}
             ORDER BY COALESCE(s.start_at, s.created_at) DESC, s.created_at DESC, s.subscription_id DESC
           ) AS rn
         FROM days d
         INNER JOIN subscriptions s
           ON s.payment_type = 'recurring'
+          ${ENTITLEMENT_ANCHOR_FILTER_SQL}
           AND COALESCE(s.start_at, s.created_at) <= d.day_end_utc
           ${EXCLUDE_SAME_CALENDAR_DAY_UPGRADE_ENTITLEMENT_SQL}
       ),
@@ -377,7 +401,7 @@ class SubscriptionsAnalyticsModel {
         END AS is_upgrade,
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
-      WHERE s.payment_type = 'recurring'
+      WHERE s.payment_type = 'recurring' ${ENTITLEMENT_ANCHOR_FILTER_SQL}
         AND COALESCE(s.start_at, s.created_at) <= ?
         AND (
           COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
@@ -617,12 +641,21 @@ class SubscriptionsAnalyticsModel {
       SELECT
         s.subscription_id,
         s.user_id,
-        COALESCE(
-          NULLIF(TRIM(u.display_name), ''),
-          NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
-          NULLIF(TRIM(u.email), ''),
-          CAST(s.user_id AS CHAR)
-        ) AS user_name,
+        s.device_id,
+        s.claimed_at,
+        CASE
+          WHEN s.user_id IS NOT NULL THEN COALESCE(
+            NULLIF(TRIM(u.display_name), ''),
+            NULLIF(TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))), ''),
+            NULLIF(TRIM(u.email), ''),
+            CAST(s.user_id AS CHAR)
+          )
+          WHEN s.device_id IS NOT NULL THEN CONCAT(
+            'Guest device',
+            IF(CHAR_LENGTH(s.device_id) > 8, CONCAT(' · ', RIGHT(s.device_id, 8)), '')
+          )
+          ELSE NULL
+        END AS user_name,
         s.provider_plan_id,
         s.provider AS subscription_provider,
         s.payment_type,
@@ -636,9 +669,9 @@ class SubscriptionsAnalyticsModel {
         (
           SELECT o.client_platform
           FROM orders o
-          WHERE o.user_id = s.user_id
-            AND o.status = 'completed'
+          WHERE o.status = 'completed'
             AND o.completed_at IS NOT NULL
+            AND ${LINKED_ORDER_MATCH_SQL}
             AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
             AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
           ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
@@ -648,9 +681,9 @@ class SubscriptionsAnalyticsModel {
         (
           SELECT o.payment_gateway
           FROM orders o
-          WHERE o.user_id = s.user_id
-            AND o.status = 'completed'
+          WHERE o.status = 'completed'
             AND o.completed_at IS NOT NULL
+            AND ${LINKED_ORDER_MATCH_SQL}
             AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
             AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
           ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
@@ -659,8 +692,9 @@ class SubscriptionsAnalyticsModel {
         ) AS linked_order_gateway,
         s.additional_data AS subscription_additional_data
       FROM subscriptions s
-      INNER JOIN user u ON u.user_id = s.user_id
-      WHERE (u.DELETED_AT IS NULL)
+      LEFT JOIN user u ON u.user_id = s.user_id
+      WHERE (s.user_id IS NULL OR u.DELETED_AT IS NULL)
+        ${ENTITLEMENT_ANCHOR_FILTER_SQL}
         AND COALESCE(s.start_at, s.created_at) <= ?
         AND (
           COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL

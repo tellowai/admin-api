@@ -12,6 +12,8 @@ const {
   labelForSubscriptionEventTypeKey
 } = require('../constants/subscription-event-types');
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
+const { formatGuestDeviceDisplayName } = require('../utils/guestDeviceDisplay.util');
+const { stitchGuestDeviceDetailsForRows } = require('../utils/guestDeviceStitch.util');
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
   'active',
@@ -142,14 +144,20 @@ function planCreditsFromMap(providerPlanId, planMap) {
   };
 }
 
-function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new Map()) {
+function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new Map(), deviceBalanceMap = new Map()) {
   return (rawRows || []).map((r) => {
     const { credits, bonus_credits } = planCreditsFromMap(r.provider_plan_id, planMap);
     const subscriptionEventTypeKey = classifySubscriptionEventType(r);
-    const wallet = balanceMap.get(r.user_id != null ? String(r.user_id) : '');
+    const isGuestUnclaimed = r.user_id == null && r.device_id != null && String(r.device_id).trim() !== '';
+    const wallet = isGuestUnclaimed
+      ? deviceBalanceMap.get(String(r.device_id))
+      : balanceMap.get(r.user_id != null ? String(r.user_id) : '');
     return {
       subscription_id: r.subscription_id,
       user_id: r.user_id,
+      device_id: r.device_id,
+      is_guest_unclaimed: isGuestUnclaimed,
+      claimed_at: r.claimed_at != null ? formatIsoDate(r.claimed_at) : null,
       user_name: r.user_name,
       subscription_event_type_key: subscriptionEventTypeKey,
       subscription_event_type: labelForSubscriptionEventTypeKey(subscriptionEventTypeKey),
@@ -365,8 +373,18 @@ exports.getUserSubscriptionsTable = async function (req, res) {
       useMaster: true
     });
     const userIds = [...new Set((rows || []).map((r) => r.user_id).filter((id) => id != null))];
-    const balanceMap = await CreditsModel.getBalancesByUserIds(userIds, { useMaster: true });
-    const items = buildSubscriptionRowDtos(rows, planMap, balanceMap);
+    const deviceIds = [
+      ...new Set(
+        (rows || [])
+          .filter((r) => r.user_id == null && r.device_id != null && String(r.device_id).trim() !== '')
+          .map((r) => String(r.device_id).trim())
+      )
+    ];
+    const [balanceMap, deviceBalanceMap] = await Promise.all([
+      CreditsModel.getBalancesByUserIds(userIds, { useMaster: true }),
+      CreditsModel.getBalancesByDeviceIds(deviceIds, { useMaster: true })
+    ]);
+    const items = buildSubscriptionRowDtos(rows, planMap, balanceMap, deviceBalanceMap);
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,
@@ -450,18 +468,35 @@ exports.getPurchasingCustomersTable = async function (req, res) {
       useMaster: true
     });
 
-    const items = (rows || []).map((row) => ({
-      user_id: row.user_id,
-      user_name: row.user_name != null ? String(row.user_name) : null,
-      user_details: buildPurchasingCustomerUserDetails(row),
-      last_purchased_at: formatIsoDate(row.last_purchased_at),
-      alacarte_purchases: Number(row.alacarte_purchases) || 0,
-      addon_purchases: Number(row.addon_purchases) || 0,
-      subscription_purchases: Number(row.subscription_purchases) || 0,
-      total_purchases: Number(row.total_purchases) || 0,
-      credit_balance: Number(row.credit_balance) || 0,
-      credit_reserved_balance: Number(row.credit_reserved_balance) || 0
-    }));
+    const guestDeviceById = await stitchGuestDeviceDetailsForRows(rows);
+
+    const items = (rows || []).map((row) => {
+      const isGuestUnclaimed =
+        row.user_id == null && row.device_id != null && String(row.device_id).trim() !== '';
+      const deviceId = row.device_id != null ? String(row.device_id).trim() : '';
+      const guestDeviceDetails =
+        isGuestUnclaimed && deviceId ? guestDeviceById.get(deviceId) || null : null;
+
+      return {
+        user_id: row.user_id,
+        device_id: row.device_id,
+        is_guest_unclaimed: isGuestUnclaimed,
+        is_guest_device: isGuestUnclaimed,
+        purchaser_key: row.purchaser_key != null ? String(row.purchaser_key) : null,
+        user_name: row.user_name != null ? String(row.user_name) : null,
+        guest_display_name:
+          isGuestUnclaimed && deviceId ? formatGuestDeviceDisplayName(deviceId) : null,
+        guest_device_details: guestDeviceDetails,
+        user_details: buildPurchasingCustomerUserDetails(row),
+        last_purchased_at: formatIsoDate(row.last_purchased_at),
+        alacarte_purchases: Number(row.alacarte_purchases) || 0,
+        addon_purchases: Number(row.addon_purchases) || 0,
+        subscription_purchases: Number(row.subscription_purchases) || 0,
+        total_purchases: Number(row.total_purchases) || 0,
+        credit_balance: Number(row.credit_balance) || 0,
+        credit_reserved_balance: Number(row.credit_reserved_balance) || 0
+      };
+    });
 
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {

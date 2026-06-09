@@ -4,6 +4,8 @@ const OrdersModel = require('../models/orders.model');
 const PaymentOrphanModel = require('../models/payment-orphan.model');
 const PaymentPlansModel = require('../../payment-plans/models/payment-plans.model');
 const GenerationsModel = require('../../generations/models/generations.model');
+const { formatGuestDeviceDisplayName } = require('../utils/guestDeviceDisplay.util');
+const { stitchGuestDeviceDetailsForRows } = require('../utils/guestDeviceStitch.util');
 const orderTemplateStitch = require('../utils/orderTemplateStitch.util');
 const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnalyticsEnrichment.util');
 const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
@@ -31,6 +33,12 @@ function mapRowToAdminOrder(o, planById, userById, templateNameById, packNameByI
   return {
     order_id: o.order_id,
     user_id: o.user_id,
+    device_id: o.device_id ?? null,
+    is_guest_unclaimed: !o.user_id && !!o.device_id,
+    is_guest_device: !o.user_id && !!o.device_id,
+    guest_display_name:
+      !o.user_id && o.device_id ? formatGuestDeviceDisplayName(o.device_id) : null,
+    guest_device_details: null,
     payment_gateway: o.payment_gateway,
     client_platform: o.client_platform ?? null,
     pg_order_id: o.pg_order_id,
@@ -105,7 +113,13 @@ function aggregateOrdersByUserForCsv(orders) {
   const map = new Map();
   for (const o of orders) {
     const uid = o.user_id;
-    const key = uid == null || uid === '' ? '__NO_USER__' : String(uid);
+    const did = o.device_id;
+    const key =
+      uid != null && uid !== ''
+        ? String(uid)
+        : did != null && did !== ''
+          ? `device:${String(did)}`
+          : '__NO_USER__';
     let agg = map.get(key);
     if (!agg) {
       agg = { userKey: key, userRows: [] };
@@ -308,6 +322,7 @@ exports.listAdminOrders = async function (req, res) {
     }
 
     const { planById, userById } = await stitchPlansAndUsersForRows(rows);
+    const guestDeviceById = await stitchGuestDeviceDetailsForRows(rows);
     const [templateNameById, packNameById] = await Promise.all([
       orderTemplateStitch.buildTemplateNameByIdMap(rows),
       orderTemplateStitch.buildPackNameByIdMap(rows)
@@ -315,6 +330,9 @@ exports.listAdminOrders = async function (req, res) {
     const ctxMap = await orderLifecycleAnalyticsEnrichment.fetchLifecycleContextMapForOrderRows(rows);
     const orders = rows.map((o) => {
       const base = mapRowToAdminOrder(o, planById, userById, templateNameById, packNameById);
+      if (!base.user_id && base.device_id) {
+        base.guest_device_details = guestDeviceById.get(String(base.device_id)) || null;
+      }
       return orderLifecycleAnalyticsEnrichment.applyLifecycleContextToOrderPayload(base, ctxMap);
     });
 

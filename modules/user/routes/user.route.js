@@ -98,6 +98,46 @@ module.exports = function (app) {
 
   app.route(
     versionConfig.routePrefix +
+    "/admin/consumer-devices/by-device-id/:deviceId/hover-card"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getGuestDeviceHoverCard
+  );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-devices/by-device-id/:deviceId/orders"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getGuestDeviceOrders
+  );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-devices/by-device-id/:deviceId/credits/transactions"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getGuestDeviceCreditTransactions
+  );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-devices/by-device-id/:deviceId/entitlements"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getGuestDeviceEntitlements
+  );
+
+  app.route(
+    versionConfig.routePrefix +
+    "/admin/consumer-devices/by-device-id/:deviceId"
+  ).get(
+    AuthMiddleware.isAdminUser,
+    AdminUserCtrl.getGuestDeviceSnapshot
+  );
+
+  app.route(
+    versionConfig.routePrefix +
     "/admin/consumer-users/by-user-id/:userId/hover-card"
   ).get(
     AuthMiddleware.isAdminUser,

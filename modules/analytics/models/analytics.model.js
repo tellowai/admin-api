@@ -3,6 +3,21 @@
 const { slaveClickhouse } = require('../../../config/lib/clickhouse');
 const ANALYTICS_CONSTANTS = require('../constants/analytics.constants');
 
+/** Commerce payer anchor: account user_id or guest device_id (mobile subscription sync). */
+const COMMERCE_PAYER_ANCHOR_EXPR = `
+  multiIf(
+    user_id IS NOT NULL AND trimBoth(user_id) != '', user_id,
+    device_id IS NOT NULL AND trimBoth(device_id) != '', concat('device:', device_id),
+    ''
+  )
+`;
+const COMMERCE_PAYER_PRESENT_FILTER = `
+  (
+    (user_id IS NOT NULL AND trimBoth(user_id) != '')
+    OR (device_id IS NOT NULL AND trimBoth(device_id) != '')
+  )
+`;
+
 class AnalyticsModel {
   // Simple query methods - models are lean and dumb
   static async queryRawTable(tableName, whereConditions) {
@@ -1578,7 +1593,7 @@ error_category,
         countIf(event_name = 'attributed_install' AND object_type = 'attribution') AS installs,
         sumIf(revenue, event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0) AS gross_revenue,
         countIf(event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0) AS purchase_rows,
-        uniqIf(user_id, event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0 AND user_id IS NOT NULL AND trimBoth(user_id) != '') AS paying_users,
+        uniqIf(${COMMERCE_PAYER_ANCHOR_EXPR}, event_name = 'purchase' AND object_type = 'commerce' AND revenue > 0 AND ${COMMERCE_PAYER_PRESENT_FILTER}) AS paying_users,
         countIf(event_name = 'order_created' AND object_type = 'order'${orderAggFragment}) AS orders_created,
         countIf(event_name = 'order_completed' AND object_type = 'order'${orderAggFragment}) AS orders_completed,
         sumIf(toFloat64OrZero(properties['amount']), event_name = 'order_completed' AND object_type = 'order'${orderAggFragment}) AS revenue_completed
@@ -1651,12 +1666,11 @@ error_category,
       SELECT
         toString(toDate(toTimeZone(timestamp, '${tzEsc}'))) AS date,
         uniqIf(
-          user_id,
+          ${COMMERCE_PAYER_ANCHOR_EXPR},
           event_name = 'purchase'
             AND object_type = 'commerce'
             AND revenue > 0
-            AND user_id IS NOT NULL
-            AND trimBoth(user_id) != ''
+            AND ${COMMERCE_PAYER_PRESENT_FILTER}
         ) AS paying_users
       FROM ${table}
       PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
@@ -1698,8 +1712,8 @@ error_category,
       SELECT
         formatDateTime(toDate(toTimeZone(timestamp, '${tzEsc}')), '%Y-%m') AS month,
         uniqIf(
-          user_id,
-          revenue > 0 AND user_id IS NOT NULL AND trimBoth(user_id) != ''
+          ${COMMERCE_PAYER_ANCHOR_EXPR},
+          revenue > 0 AND ${COMMERCE_PAYER_PRESENT_FILTER}
         ) AS paying_users
       FROM ${table}
       PREWHERE timestamp >= toDateTime64('${esc(rangeStartUtc)}', 3, 'UTC')
