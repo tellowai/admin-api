@@ -585,8 +585,8 @@ function purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc) {
  *
  * Purchase counts are computed in SQL (not summed on the client):
  * - `alacarte_purchases`: completed orders on à la carte plans
- * - `addon_purchases`: completed orders on add-on plans
- * - `subscription_purchases`: initial + renewal subscription rows, plus completed credit /
+ * - `addon_purchases`: completed orders on add-on plans and one-time credit packs
+ * - `subscription_purchases`: initial + renewal subscription rows, plus completed recurring
  *   subscription-plan orders not already represented by a linked subscription row (±2 days)
  * - `total_purchases`: `alacarte + addon + subscription` (all from SQL)
  *
@@ -653,34 +653,48 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
 
   const baseFrom = `
     FROM (
-      SELECT DISTINCT
-        ${PURCHASER_KEY_ORDERS_ELIGIBLE} AS purchaser_key,
-        user_id,
-        ${DEVICE_ID_ORDERS_ELIGIBLE} AS device_id
-      FROM orders
-      WHERE status = 'completed' AND COALESCE(payment_gateway, '') <> 'admin_grant'
-        AND ${ORDER_PURCHASER_ANCHOR_FILTER}
-        AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} <= ?
-      UNION
-      SELECT DISTINCT
-        ${PURCHASER_KEY_SUBSCRIPTIONS_ELIGIBLE} AS purchaser_key,
-        s.user_id,
-        ${DEVICE_ID_SUBSCRIPTIONS_ELIGIBLE} AS device_id
-      FROM subscriptions s
-      WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
-        AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
-        AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} <= ?
+      SELECT
+        purchaser_key,
+        MAX(user_id) AS user_id,
+        CASE
+          WHEN MAX(user_id) IS NOT NULL THEN NULL
+          ELSE MAX(device_id)
+        END AS device_id
+      FROM (
+        SELECT DISTINCT
+          ${PURCHASER_KEY_ORDERS_ELIGIBLE} AS purchaser_key,
+          user_id,
+          ${DEVICE_ID_ORDERS_ELIGIBLE} AS device_id
+        FROM orders
+        WHERE status = 'completed' AND COALESCE(payment_gateway, '') <> 'admin_grant'
+          AND ${ORDER_PURCHASER_ANCHOR_FILTER}
+          AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_ORDERS_ELIGIBLE_SQL} <= ?
+        UNION
+        SELECT DISTINCT
+          ${PURCHASER_KEY_SUBSCRIPTIONS_ELIGIBLE} AS purchaser_key,
+          s.user_id,
+          ${DEVICE_ID_SUBSCRIPTIONS_ELIGIBLE} AS device_id
+        FROM subscriptions s
+        WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+          AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
+          AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL} <= ?
+      ) eligible_raw
+      GROUP BY purchaser_key
     ) eligible
     LEFT JOIN user u ON u.user_id = eligible.user_id AND (u.DELETED_AT IS NULL)
     LEFT JOIN (
       SELECT
         ${PURCHASER_KEY_O_ALIAS} AS purchaser_key,
         SUM(CASE WHEN ${ORDER_IS_ALACARTE_SQL} THEN 1 ELSE 0 END) AS alacarte_purchases,
-        SUM(CASE WHEN ${ORDER_IS_ADDON_SQL} THEN 1 ELSE 0 END) AS addon_purchases,
+        SUM(
+          CASE
+            WHEN ${ORDER_IS_ADDON_SQL} OR ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
+            ELSE 0
+          END
+        ) AS addon_purchases,
         SUM(
           CASE
             WHEN ${ORDER_IS_RENEWAL_LEDGER_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
-            WHEN ${ORDER_IS_ONETIME_CREDITS_SQL} THEN 1
             WHEN ${ORDER_IS_SUBSCRIPTION_PLAN_SQL} AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
             WHEN pp.pp_id IS NULL AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL}) THEN 1
             ELSE 0
@@ -806,6 +820,89 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   `;
   const rows = await runQuery(listQuery, [...baseFromParams, ...rangeParams, limit, offset]);
   return { rows: rows || [], total, summary };
+};
+
+/** Completed order rows that count as a deduped purchase event (matches purchasing-customers SQL). */
+const DEDUPED_PURCHASE_ORDER_EVENT_FILTER_SQL = `
+  (
+    (${ORDER_IS_ALACARTE_SQL})
+    OR (${ORDER_IS_ADDON_SQL})
+    OR (${ORDER_IS_ONETIME_CREDITS_SQL})
+    OR (
+      (
+        (${ORDER_IS_RENEWAL_LEDGER_SQL})
+        OR (${ORDER_IS_SUBSCRIPTION_PLAN_SQL})
+        OR pp.pp_id IS NULL
+      )
+      AND NOT (${ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL})
+    )
+  )
+`;
+
+/**
+ * Deduped purchase events per calendar day (MySQL source of truth — matches Customers → Purchases).
+ *
+ * @param {{ startCal: string, endCal: string, tz: string }} opts
+ * @returns {Promise<Array<{ date: string, count: number }>>}
+ */
+exports.getDedupedPurchaseEventsDaily = async function (opts) {
+  const { startCal, endCal, tz } = opts || {};
+  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+
+  const orderEventsQuery = `
+    SELECT DATE_FORMAT(${PURCHASE_AT_ORDERS_SQL}, '%Y-%m-%d %H:%i:%s') AS ts_utc
+    FROM orders o
+    LEFT JOIN payment_plans pp ON pp.pp_id = o.payment_plan_id
+    WHERE o.status = 'completed' AND COALESCE(o.payment_gateway, '') <> 'admin_grant'
+      AND ${ORDER_O_PURCHASER_ANCHOR_FILTER}
+      AND ${PURCHASE_AT_ORDERS_SQL} >= ? AND ${PURCHASE_AT_ORDERS_SQL} <= ?
+      AND ${DEDUPED_PURCHASE_ORDER_EVENT_FILTER_SQL}
+  `;
+
+  const subscriptionEventsQuery = `
+    SELECT DATE_FORMAT(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, '%Y-%m-%d %H:%i:%s') AS ts_utc
+    FROM subscriptions s
+    WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+      AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
+      AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
+  `;
+
+  const params = [rangeStartUtc, rangeEndUtc];
+  const [orderRows, subscriptionRows] = await Promise.all([
+    MysqlQueryRunner.runQueryInSlave(orderEventsQuery, params),
+    MysqlQueryRunner.runQueryInSlave(subscriptionEventsQuery, params)
+  ]);
+
+  const dayCounts = new Map();
+  for (const r of [...(orderRows || []), ...(subscriptionRows || [])]) {
+    const dayKey = calendarDayInTzFromUtcWallTime(r.ts_utc, tz);
+    if (dayKey == null) continue;
+    dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
+  }
+
+  return Array.from(dayCounts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, count]) => ({
+      date,
+      count: Number(count) || 0
+    }));
+};
+
+/**
+ * Total deduped purchase count for a calendar range (sum of per-customer purchase events).
+ *
+ * @param {{ startCal: string, endCal: string, tz: string }} opts
+ * @returns {Promise<{ total_purchases: number, alacarte_purchases: number, subscription_purchases: number, addon_purchases: number }>}
+ */
+exports.getDedupedPurchaseEventsSummary = async function (opts) {
+  const { summary } = await exports.listPurchasingCustomersForAdmin({
+    ...opts,
+    search: '',
+    limit: 1,
+    offset: 0,
+    useMaster: false
+  });
+  return summary;
 };
 
 /** Extract template_id from orders.transaction_notes (à la carte single-template purchases). */

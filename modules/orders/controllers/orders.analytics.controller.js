@@ -421,6 +421,31 @@ function buildPurchasingCustomerUserDetails(row) {
   return Object.keys(details).length ? details : null;
 }
 
+/** GET /admin/orders/analytics/purchase-events-daily — deduped purchase events per calendar day (MySQL). */
+exports.getPurchaseEventsDaily = async function (req, res) {
+  try {
+    const q = req.validatedQuery;
+    const tzRaw = q.tz && String(q.tz).trim() ? String(q.tz).trim() : TimezoneService.getDefaultTimezone();
+    const tz = normalizeMysqlTimezone(tzRaw);
+    if (!TimezoneService.isValidTimezone(tzRaw)) {
+      return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({ message: 'Invalid timezone' });
+    }
+
+    const startCal = toCalendarDate(q.start_date, tz);
+    const endCal = toCalendarDate(q.end_date, tz);
+
+    const [daily, summary] = await Promise.all([
+      OrdersAnalyticsModel.getDedupedPurchaseEventsDaily({ startCal, endCal, tz }),
+      OrdersAnalyticsModel.getDedupedPurchaseEventsSummary({ startCal, endCal, tz })
+    ]);
+
+    return res.status(HTTP_STATUS_CODES.OK).json({ data: daily, summary });
+  } catch (err) {
+    console.error('getPurchaseEventsDaily error:', err);
+    return res.status(HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR).json({ message: 'Failed to load purchase events' });
+  }
+};
+
 /** GET /admin/orders/analytics/purchasing-customers — purchasers in date range (paginated). */
 exports.getPurchasingCustomersTable = async function (req, res) {
   try {

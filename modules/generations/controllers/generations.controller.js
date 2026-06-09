@@ -398,6 +398,18 @@ exports.listGenerations = async function (req, res) {
     }
 
     // Attach base generation details to event objects before user/template step
+    const missingContextIds = generations
+      .filter((gen) => !gen.template_id || !gen.user_id)
+      .map((gen) => gen.media_generation_id)
+      .filter(Boolean);
+    let mysqlContextMap = new Map();
+    if (missingContextIds.length) {
+      const mysqlContextRows = await generationsModel.getMediaGenerationsByIds(missingContextIds);
+      mysqlContextMap = new Map(
+        mysqlContextRows.map((row) => [row.media_generation_id, row])
+      );
+    }
+
     generations.forEach(gen => {
       const parentGen = resourceGenMap[gen.media_generation_id];
       if (parentGen) {
@@ -408,6 +420,15 @@ exports.listGenerations = async function (req, res) {
         gen.created_at = parentGen.created_at; // use the true creation time of the generation
         if (parentGen.entitlement_id != null && String(parentGen.entitlement_id).trim() !== '') {
           gen.entitlement_id = parentGen.entitlement_id;
+        }
+      } else {
+        const mysqlGen = mysqlContextMap.get(gen.media_generation_id);
+        if (mysqlGen) {
+          gen.user_id = gen.user_id || mysqlGen.user_id;
+          gen.device_id = gen.device_id || mysqlGen.device_id;
+          gen.template_id = gen.template_id || mysqlGen.template_id;
+          gen.media_type = gen.media_type || mysqlGen.media_type;
+          gen.created_at = gen.created_at || mysqlGen.created_at;
         }
       }
     });

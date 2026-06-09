@@ -38,19 +38,59 @@ exports.getGenerationsByDateRange = async function (startDate, endDate, page = 1
 
   /** Optional filters on resource_generations (template, user, and/or guest device), merge terminal CH + MySQL in-flight. */
   if (filters.template_id || filters.user_id || filters.device_id) {
-    const idRows = await exports.listResourceGenerationIdsByCreatedRangeFilters(
-      startDate,
-      endDate,
-      limit,
-      offset,
-      {
-        template_id: filters.template_id || null,
-        user_id: filters.user_id || null,
-        device_id: filters.device_id || null,
-        allTime
+    const fetchCount = offset + limit;
+    const safeFetch = Math.min(Math.max(fetchCount, limit), 5000);
+    const filterPayload = {
+      template_id: filters.template_id || null,
+      user_id: filters.user_id || null,
+      device_id: filters.device_id || null,
+      allTime
+    };
+    const [chIdRows, mysqlIdRows] = await Promise.all([
+      exports.listResourceGenerationIdsByCreatedRangeFilters(
+        startDate,
+        endDate,
+        safeFetch,
+        0,
+        filterPayload
+      ),
+      exports.listMysqlMediaGenerationIdsByCreatedRangeFilters(
+        startDate,
+        endDate,
+        safeFetch,
+        0,
+        filterPayload
+      )
+    ]);
+
+    const activityById = new Map();
+    for (const row of mysqlIdRows) {
+      if (row.media_generation_id) {
+        activityById.set(row.media_generation_id, row.activity_at);
       }
-    );
-    const orderedIds = idRows.map((r) => r.resource_generation_id).filter(Boolean);
+    }
+    for (const row of chIdRows) {
+      const id = row.resource_generation_id;
+      if (id && !activityById.has(id)) {
+        activityById.set(id, row.created_at);
+      }
+    }
+
+    const mergedIds = [
+      ...new Set([
+        ...chIdRows.map((r) => r.resource_generation_id),
+        ...mysqlIdRows.map((r) => r.media_generation_id)
+      ])
+    ].filter(Boolean);
+
+    mergedIds.sort((a, b) => {
+      const ta = new Date(activityById.get(a) || 0).getTime();
+      const tb = new Date(activityById.get(b) || 0).getTime();
+      if (tb !== ta) return tb - ta;
+      return String(a).localeCompare(String(b));
+    });
+
+    const orderedIds = mergedIds.slice(offset, offset + limit);
     if (!orderedIds.length) return [];
     const mergeJobStatus =
       filters.job_status === 'in_progress' ? undefined : filters.job_status;
@@ -235,7 +275,21 @@ exports.getMergedTerminalAndInProgressPage = async function (startFormatted, end
     })()
   ]);
 
-  const merged = [...terminalRows, ...inProgressMysql].sort(
+  /** Completed/failed rows that exist in MySQL but never reached ClickHouse terminal events. */
+  const mysqlCompletedOnly = await exports.listMysqlTerminalGenerationsByDateRange(
+    startFormatted,
+    endFormatted,
+    safeFetch,
+    { allTime }
+  );
+  const terminalIds = new Set(
+    terminalRows.map((r) => r.media_generation_id).filter(Boolean)
+  );
+  const mysqlOnlyTerminal = mysqlCompletedOnly.filter(
+    (r) => r.media_generation_id && !terminalIds.has(r.media_generation_id)
+  );
+
+  const merged = [...terminalRows, ...inProgressMysql, ...mysqlOnlyTerminal].sort(
     (a, b) => rowActivityTimeMs(b) - rowActivityTimeMs(a)
   );
   return merged.slice(offset, offset + limit);
@@ -467,7 +521,7 @@ exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
   const lim = parseInt(limit, 10);
   const off = parseInt(offset, 10);
   const query = `
-    SELECT resource_generation_id
+    SELECT resource_generation_id, created_at
     FROM resource_generations
     WHERE ${conditions.join(' AND ')}
     ORDER BY created_at DESC, resource_generation_id ASC
@@ -475,6 +529,109 @@ exports.listResourceGenerationIdsByCreatedRangeFilters = async function (
   `;
   const result = await slaveClickhouse.querying(query, { dataObjects: true });
   return result.data || [];
+};
+
+/**
+ * MySQL media_generations in created_at range (source of truth when ClickHouse is missing rows).
+ */
+exports.listMysqlMediaGenerationIdsByCreatedRangeFilters = async function (
+  startDate,
+  endDate,
+  limit,
+  offset,
+  filters = {}
+) {
+  const templateId = filters.template_id || null;
+  const userId = filters.user_id || null;
+  const deviceId = filters.device_id || null;
+  if (!templateId && !userId && !deviceId) return [];
+
+  const allTime = !!filters.allTime;
+  const startDb = allTime ? null : formatDateForMySQL(startDate);
+  let endDb = allTime ? null : formatDateForMySQL(endDate);
+  if (!allTime && !endDb) {
+    endDb = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+  }
+
+  const conditions = [
+    'mg.deleted_at IS NULL',
+    "mg.job_status IN ('submitted', 'in_progress', 'completed', 'failed')"
+  ];
+  const params = [];
+  if (!allTime) {
+    conditions.push('COALESCE(mg.submitted_at, mg.created_at) >= ?');
+    conditions.push('COALESCE(mg.submitted_at, mg.created_at) <= ?');
+    params.push(startDb, endDb);
+  }
+  if (templateId) {
+    conditions.push('mg.template_id = ?');
+    params.push(templateId);
+  }
+  if (userId) {
+    conditions.push('mg.user_id = ?');
+    params.push(userId);
+  }
+  if (deviceId) {
+    conditions.push('mg.user_id IS NULL');
+    conditions.push('mg.device_id = ?');
+    params.push(deviceId);
+  }
+
+  const lim = parseInt(limit, 10);
+  const off = parseInt(offset, 10);
+  const query = `
+    SELECT
+      mg.media_generation_id,
+      COALESCE(mg.submitted_at, mg.created_at) AS activity_at
+    FROM media_generations mg
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY activity_at DESC, mg.media_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 20} OFFSET ${Number.isFinite(off) ? off : 0}
+  `;
+  return await mysqlQueryRunner.runQueryInSlave(query, params);
+};
+
+/**
+ * Terminal MySQL generations (completed/failed) in activity date range.
+ * Used to backfill admin list when ClickHouse terminal events are missing.
+ */
+exports.listMysqlTerminalGenerationsByDateRange = async function (
+  startFormatted,
+  endFormatted,
+  limit,
+  options = {}
+) {
+  const allTime = !!options.allTime;
+  const dateClause = allTime
+    ? ''
+    : 'AND COALESCE(completed_at, submitted_at, created_at) >= ? AND COALESCE(completed_at, submitted_at, created_at) <= ?';
+  const params = allTime ? [] : [startFormatted, endFormatted];
+  const lim = parseInt(limit, 10);
+  const query = `
+    SELECT
+      media_generation_id,
+      job_status,
+      output_media_bucket,
+      output_media_asset_key,
+      error_message,
+      media_type,
+      COALESCE(completed_at, submitted_at, created_at) AS activity_at
+    FROM media_generations
+    WHERE job_status IN ('completed', 'failed')
+      AND deleted_at IS NULL
+      ${dateClause}
+    ORDER BY COALESCE(completed_at, submitted_at, created_at) DESC, media_generation_id ASC
+    LIMIT ${Number.isFinite(lim) ? lim : 5000}
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, params);
+  return rows.map((mg) => ({
+    media_generation_id: mg.media_generation_id,
+    job_status: exports.mapMysqlJobStatusToUi(mg.job_status),
+    output_media_bucket: mg.output_media_bucket,
+    output_media_asset_key: mg.output_media_asset_key,
+    completed_at: mg.activity_at,
+    error_message: mg.error_message || ''
+  }));
 };
 
 /**
@@ -554,11 +711,15 @@ exports.getMediaGenerationsByIds = async function (mediaGenerationIds) {
   const query = `
     SELECT 
       media_generation_id,
+      user_id,
+      device_id,
+      template_id,
       job_status,
       output_media_bucket,
       output_media_asset_key,
       error_message,
       media_type,
+      created_at,
       updated_at,
       completed_at
     FROM media_generations
