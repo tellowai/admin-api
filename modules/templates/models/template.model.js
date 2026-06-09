@@ -1552,6 +1552,50 @@ exports.createClipWorkflowInTransaction = async function (connection, tacId, wor
 };
 
 /**
+ * Next clip_index (1-based) for a new clip: lowest slot not used by an active row.
+ * Purges any soft-deleted row at that slot so the insert is always a fresh tac_id.
+ */
+exports.allocateNextClipSlotDb = async function (templateId, assetType) {
+  const query = `
+    SELECT clip_index FROM template_ai_clips
+    WHERE template_id = ? AND asset_type = ? AND deleted_at IS NULL
+    ORDER BY clip_index ASC
+  `;
+  const rows = await mysqlQueryRunner.runQueryInSlave(query, [templateId, assetType]);
+  let candidate = 1;
+  for (const row of rows) {
+    const idx = Number(row.clip_index);
+    if (!Number.isFinite(idx)) continue;
+    if (idx > candidate) break;
+    if (idx === candidate) candidate += 1;
+  }
+  await exports.purgeSoftDeletedClipsAtSlot(templateId, candidate, assetType);
+  return candidate;
+};
+
+/**
+ * Hard-delete soft-deleted clip rows at a slot so a fresh row can be inserted.
+ * uk_template_clip_slot includes soft-deleted rows; purging frees the slot without reusing old tac_id/wf_id.
+ */
+exports.purgeSoftDeletedClipsAtSlot = async function (templateId, clipIndexDb, assetType) {
+  const query = `
+    SELECT tac_id, wf_id FROM template_ai_clips
+    WHERE template_id = ? AND clip_index = ? AND asset_type = ?
+      AND deleted_at IS NOT NULL
+  `;
+  const rows = await mysqlQueryRunner.runQueryInMaster(query, [templateId, clipIndexDb, assetType]);
+  for (const row of rows) {
+    if (row.wf_id != null) {
+      await WorkflowModel.archiveWorkflowByWfId(row.wf_id);
+    }
+    await mysqlQueryRunner.runQueryInMaster(
+      `DELETE FROM template_ai_clips WHERE tac_id = ?`,
+      [row.tac_id]
+    );
+  }
+};
+
+/**
  * Get or create a single template_ai_clip by (template_id, clip_index, asset_type).
  * API accepts 0-based clip_index; DB stores 1-based (CHECK clip_index >= 1).
  * Returns { tac_id } for use when clip might not exist yet (e.g. workflow save before template save).
@@ -1565,6 +1609,9 @@ exports.ensureTemplateAiClip = async function (templateId, clipIndex, assetType 
   `;
   const existing = await mysqlQueryRunner.runQueryInSlave(existingQuery, [templateId, clipIndexDb, assetType]);
   if (existing.length > 0) return { tac_id: existing[0].tac_id };
+
+  // Never restore soft-deleted rows — purge so INSERT gets a fresh tac_id.
+  await exports.purgeSoftDeletedClipsAtSlot(templateId, clipIndexDb, assetType);
 
   const tacId = uuidv7();
   const insertQuery = `
@@ -1592,26 +1639,22 @@ exports.ensureTemplateAiClipsWithWorkflows = async function (templateId, clips, 
 };
 
 /**
- * Add a new clip to a template with an empty workflow
+ * Add a new clip to a template with an empty workflow.
+ * Allocates the lowest free slot, purges any soft-deleted row there, then inserts a fresh tac_id.
  */
 exports.addTemplateClipWithWorkflow = async function (templateId, assetType = 'video', userId) {
-  const clips = await this.getTemplateAiClips(templateId);
-  const sameKind = (clips || []).filter((c) =>
-    assetType === 'audio'
-      ? c.asset_type === 'audio'
-      : (c.asset_type === 'image' || c.asset_type === 'video')
-  );
-  let nextIndex = 0;
-  if (sameKind.length > 0) {
-    nextIndex = Math.max(...sameKind.map(c => c.clip_index || 0));
-  }
+  const nextSlotDb = await exports.allocateNextClipSlotDb(templateId, assetType);
 
-  // ensureTemplateAiClip adds 1 internally so passing max clip_index creates max + 1
-  const { tac_id } = await exports.ensureTemplateAiClip(templateId, nextIndex, assetType);
-  await WorkflowModel.ensureWorkflowForTacId(tac_id, userId);
+  const tacId = uuidv7();
+  const insertQuery = `
+    INSERT INTO template_ai_clips (tac_id, template_id, clip_index, asset_type, created_at, updated_at)
+    VALUES (?, ?, ?, ?, NOW(), NOW())
+  `;
+  await mysqlQueryRunner.runQueryInMaster(insertQuery, [tacId, templateId, nextSlotDb, assetType]);
+  await WorkflowModel.ensureWorkflowForTacId(tacId, userId);
 
   const updatedClips = await exports.getTemplateAiClips(templateId);
-  return updatedClips.find(c => c.tac_id === tac_id);
+  return updatedClips.find(c => c.tac_id === tacId);
 };
 
 /**
