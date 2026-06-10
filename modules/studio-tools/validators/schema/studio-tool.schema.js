@@ -9,6 +9,8 @@ const workflowSchema = Joi.object({
   output_media_type: Joi.string().valid('video', 'gif', 'auto').optional(),
   input_label: Joi.string().allow('').optional(),
   output_label: Joi.string().allow('').optional(),
+  tool_preview_image_key: Joi.string().max(1024).allow('').optional(),
+  tool_preview_image_bucket: Joi.string().max(128).allow('').optional(),
 }).optional();
 
 const badgeSchema = Joi.object({
