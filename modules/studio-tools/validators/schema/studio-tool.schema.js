@@ -4,9 +4,10 @@ const Joi = require('@hapi/joi');
 
 const workflowSchema = Joi.object({
   input_image_url: Joi.string().allow('').optional(),
+  input_media_type: Joi.string().valid('video', 'gif', 'image', 'auto').optional(),
   arrow_image_url: Joi.string().allow('').optional(),
   output_media_url: Joi.string().allow('').optional(),
-  output_media_type: Joi.string().valid('video', 'gif', 'auto').optional(),
+  output_media_type: Joi.string().valid('video', 'gif', 'image', 'auto').optional(),
   input_label: Joi.string().allow('').optional(),
   output_label: Joi.string().allow('').optional(),
   tool_preview_image_key: Joi.string().max(1024).allow('').optional(),
