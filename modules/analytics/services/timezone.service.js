@@ -289,11 +289,11 @@ class TimezoneService {
   }
 
   /**
-   * Get default timezone (UTC)
+   * Admin dashboard default (IST).
    * @returns {string} - Default timezone
    */
   static getDefaultTimezone() {
-    return 'UTC';
+    return 'Asia/Kolkata';
   }
 
   /**

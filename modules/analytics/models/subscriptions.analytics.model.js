@@ -2,6 +2,12 @@
 
 const moment = require('moment-timezone');
 const MysqlQueryRunner = require('../../core/models/mysql.promise.model');
+const {
+  runQueryingInSlave: runClickHouseQueryInSlave
+} = require('../../core/models/clickhouse.promise.model');
+const {
+  subscriptionRowIsCancelledSql: subscriptionCancellationSignalsSql
+} = require('../../orders/utils/subscriptionDisplayStatus.util');
 
 /**
  * Statuses considered "alive" for an entitled recurring subscription.
@@ -70,6 +76,46 @@ function sqlCollateText(expr) {
   return `CONVERT(${expr} USING utf8mb4) COLLATE ${PURCHASER_TEXT_COLLATION}`;
 }
 
+/** Subscription period-end columns are IST wall-clock literals (moment.unix().format); convert before UTC compare. */
+const SUBSCRIPTION_PERIOD_END_STORAGE_TZ = '+05:30';
+
+/** Period end as UTC epoch seconds — avoids SESSION tz bugs when mixing TIMESTAMP + DATETIME. */
+const subscriptionPeriodEndUnixSql = (alias) =>
+  `UNIX_TIMESTAMP(CONVERT_TZ(COALESCE(${alias}.current_period_end, ${alias}.renews_at, ${alias}.end_at), '${SUBSCRIPTION_PERIOD_END_STORAGE_TZ}', '+00:00'))`;
+
+/** Later billing-period row points at this subscription_id via previous_subscription_id. */
+const subscriptionSupersededByRenewalSql = (alias) =>
+  `EXISTS (
+    SELECT 1 FROM subscriptions s_sup
+    WHERE s_sup.payment_type = 'recurring'
+      AND (
+        (${alias}.user_id IS NOT NULL AND s_sup.user_id = ${alias}.user_id)
+        OR (
+          ${alias}.user_id IS NULL
+          AND ${alias}.device_id IS NOT NULL
+          AND s_sup.user_id IS NULL
+          AND ${sqlCollateText('s_sup.device_id')} = ${sqlCollateText(`${alias}.device_id`)}
+        )
+      )
+      AND JSON_VALID(s_sup.additional_data)
+      AND JSON_UNQUOTE(JSON_EXTRACT(s_sup.additional_data, '$.previous_subscription_id')) = ${alias}.subscription_id
+  )`;
+
+/** Cancelled for display — not on superseded period rows (renewal/resubscribe replaced that billing period). */
+const subscriptionRowIsCancelledSql = (alias) =>
+  `(
+    NOT ${subscriptionSupersededByRenewalSql(alias)}
+    AND ${subscriptionCancellationSignalsSql(alias)}
+  )`;
+
+/** True when stored period end is null/open-ended or still in the future at UTC `asOf` (bound param). */
+const subscriptionPeriodEndAfterUtcParamSql = (alias, paramPlaceholder) =>
+  `(COALESCE(${alias}.current_period_end, ${alias}.renews_at, ${alias}.end_at) IS NULL OR ${subscriptionPeriodEndUnixSql(alias)} > UNIX_TIMESTAMP(${paramPlaceholder}))`;
+
+/** True when stored period end exists and is still in the future at UTC `asOf` (bound param). */
+const subscriptionPeriodEndStrictlyAfterUtcParamSql = (alias, paramPlaceholder) =>
+  `(COALESCE(${alias}.current_period_end, ${alias}.renews_at, ${alias}.end_at) IS NOT NULL AND ${subscriptionPeriodEndUnixSql(alias)} > UNIX_TIMESTAMP(${paramPlaceholder}))`;
+
 /** Nearest completed order for subscription row (user or guest device anchor). */
 const LINKED_ORDER_MATCH_SQL = `
   (
@@ -81,6 +127,9 @@ const LINKED_ORDER_MATCH_SQL = `
     )
   )
 `;
+
+/** When checkout happened in our system — reliable for linking orders (not RC-billing \`start_at\`). */
+const SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL = 's.created_at';
 
 /**
  * Recurring subscriptions entitled to access at a point in time (UTC),
@@ -122,8 +171,7 @@ class SubscriptionsAnalyticsModel {
       FROM ranked r
       WHERE r.rn = 1
         AND (
-          COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-          OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+          ${subscriptionPeriodEndAfterUtcParamSql('r', '?')}
         )
         AND (
           r.status IN (${aliveCsv})
@@ -167,14 +215,12 @@ class SubscriptionsAnalyticsModel {
           (
             r.status IN (${aliveCsv})
             AND (
-              COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+              ${subscriptionPeriodEndAfterUtcParamSql('r', '?')}
             )
           )
           OR (
             r.status = 'cancelled'
-            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > ?
+            AND ${subscriptionPeriodEndStrictlyAfterUtcParamSql('r', '?')}
           )
         )
     `;
@@ -246,15 +292,11 @@ class SubscriptionsAnalyticsModel {
         AND (
           (
             r.status IN (${aliveCsv})
-            AND (
-              COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-              OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
-            )
+            AND ${subscriptionPeriodEndAfterUtcParamSql('r', 'UTC_TIMESTAMP()')}
           )
           OR (
             r.status = 'cancelled'
-            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-            AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > UTC_TIMESTAMP()
+            AND ${subscriptionPeriodEndStrictlyAfterUtcParamSql('r', 'UTC_TIMESTAMP()')}
           )
         )
     `;
@@ -308,15 +350,11 @@ class SubscriptionsAnalyticsModel {
           AND (
             (
               r.status IN (${aliveCsv})
-              AND (
-                COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NULL
-                OR COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
-              )
+              AND ${subscriptionPeriodEndAfterUtcParamSql('r', 'r.day_start_utc')}
             )
             OR (
               r.status = 'cancelled'
-              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) IS NOT NULL
-              AND COALESCE(r.current_period_end, r.renews_at, r.end_at) > r.day_start_utc
+              AND ${subscriptionPeriodEndStrictlyAfterUtcParamSql('r', 'r.day_start_utc')}
             )
           )
       )
@@ -402,7 +440,7 @@ class SubscriptionsAnalyticsModel {
         JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.notes.active_subscription_id')) AS upgrade_parent_id_raw
       FROM subscriptions s
       WHERE s.payment_type = 'recurring' ${ENTITLEMENT_ANCHOR_FILTER_SQL}
-        AND COALESCE(s.start_at, s.created_at) <= ?
+        AND s.created_at <= ?
         AND (
           COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
           OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
@@ -656,25 +694,26 @@ class SubscriptionsAnalyticsModel {
           )
           ELSE NULL
         END AS user_name,
+        s.provider_subscription_id,
         s.provider_plan_id,
         s.provider AS subscription_provider,
         s.payment_type,
         s.status,
+        s.cancelled_at,
         s.start_at,
         s.created_at,
         s.renews_at,
         s.current_period_end,
         s.end_at,
-        COALESCE(s.start_at, s.created_at) AS purchase_or_start_at,
         (
           SELECT o.client_platform
           FROM orders o
           WHERE o.status = 'completed'
             AND o.completed_at IS NOT NULL
             AND ${LINKED_ORDER_MATCH_SQL}
-            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            AND o.completed_at >= DATE_SUB(${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL}, INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL}, INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, ${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL})) ASC,
             o.order_id DESC
           LIMIT 1
         ) AS linked_client_platform,
@@ -684,9 +723,9 @@ class SubscriptionsAnalyticsModel {
           WHERE o.status = 'completed'
             AND o.completed_at IS NOT NULL
             AND ${LINKED_ORDER_MATCH_SQL}
-            AND o.completed_at >= DATE_SUB(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-            AND o.completed_at <= DATE_ADD(COALESCE(s.start_at, s.created_at), INTERVAL 2 DAY)
-          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, COALESCE(s.start_at, s.created_at))) ASC,
+            AND o.completed_at >= DATE_SUB(${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL}, INTERVAL 2 DAY)
+            AND o.completed_at <= DATE_ADD(${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL}, INTERVAL 2 DAY)
+          ORDER BY ABS(TIMESTAMPDIFF(SECOND, o.completed_at, ${SUBSCRIPTION_ADMIN_ORDER_LINK_ANCHOR_SQL})) ASC,
             o.order_id DESC
           LIMIT 1
         ) AS linked_order_gateway,
@@ -695,7 +734,7 @@ class SubscriptionsAnalyticsModel {
       LEFT JOIN user u ON u.user_id = s.user_id
       WHERE (s.user_id IS NULL OR u.DELETED_AT IS NULL)
         ${ENTITLEMENT_ANCHOR_FILTER_SQL}
-        AND COALESCE(s.start_at, s.created_at) <= ?
+        AND s.created_at <= ?
         AND (
           COALESCE(s.current_period_end, s.renews_at, s.end_at) IS NULL
           OR COALESCE(s.current_period_end, s.renews_at, s.end_at) >= ?
@@ -706,6 +745,57 @@ class SubscriptionsAnalyticsModel {
     const augmentedFrom = `
       SELECT
         inner_sub.*,
+        CASE
+          WHEN inner_sub.start_at IS NULL THEN inner_sub.created_at
+          WHEN inner_sub.created_at IS NULL THEN inner_sub.start_at
+          WHEN DATEDIFF(inner_sub.created_at, inner_sub.start_at) <= 1 THEN inner_sub.start_at
+          ELSE DATE_SUB(
+            COALESCE(inner_sub.renews_at, inner_sub.current_period_end),
+            INTERVAL (
+              COALESCE(
+                (
+                  SELECT TIMESTAMPDIFF(SECOND, s2.start_at, COALESCE(s2.renews_at, s2.current_period_end))
+                  FROM subscriptions s2
+                  WHERE (
+                      (inner_sub.user_id IS NOT NULL AND s2.user_id = inner_sub.user_id)
+                      OR (
+                        inner_sub.user_id IS NULL
+                        AND inner_sub.device_id IS NOT NULL
+                        AND s2.user_id IS NULL
+                        AND ${sqlCollateText('s2.device_id')} = ${sqlCollateText('inner_sub.device_id')}
+                      )
+                    )
+                    AND s2.provider_plan_id = inner_sub.provider_plan_id
+                    AND DATEDIFF(s2.created_at, s2.start_at) <= 1
+                    AND COALESCE(s2.renews_at, s2.current_period_end) IS NOT NULL
+                    AND TIMESTAMPDIFF(
+                      SECOND,
+                      s2.start_at,
+                      COALESCE(s2.renews_at, s2.current_period_end)
+                    ) BETWEEN 60 AND 86400 * 400
+                  ORDER BY s2.created_at DESC
+                  LIMIT 1
+                ),
+                CASE
+                  WHEN JSON_VALID(inner_sub.subscription_additional_data)
+                    AND JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_end') IS NOT NULL
+                    AND JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_start') IS NOT NULL
+                    AND CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_end') AS UNSIGNED)
+                      > CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_start') AS UNSIGNED)
+                    AND (
+                      CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_end') AS UNSIGNED)
+                      - CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_start') AS UNSIGNED)
+                    ) BETWEEN 60 AND 86400
+                  THEN
+                    CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_end') AS UNSIGNED)
+                    - CAST(JSON_EXTRACT(inner_sub.subscription_additional_data, '$.current_start') AS UNSIGNED)
+                  ELSE NULL
+                END,
+                300
+              )
+            ) SECOND
+          )
+        END AS purchase_or_start_at,
         (
           CASE
             WHEN JSON_VALID(inner_sub.subscription_additional_data) AND (
@@ -727,12 +817,14 @@ class SubscriptionsAnalyticsModel {
         ) AS _event_type,
         (
           CASE
+            WHEN ${subscriptionSupersededByRenewalSql('inner_sub')} THEN 'expired'
+            WHEN ${subscriptionRowIsCancelledSql('inner_sub')} THEN 'cancelled'
             WHEN LOWER(TRIM(COALESCE(inner_sub.status, ''))) IN (
               'active','renewed','pending','trial','paused','upgraded',
               'active_non_recurring','upgraded_non_recurring','pending_otp_verification_for_upgrade'
             )
             AND COALESCE(inner_sub.current_period_end, inner_sub.renews_at, inner_sub.end_at) IS NOT NULL
-            AND COALESCE(inner_sub.current_period_end, inner_sub.renews_at, inner_sub.end_at) <= UTC_TIMESTAMP()
+            AND ${subscriptionPeriodEndUnixSql('inner_sub')} <= UNIX_TIMESTAMP(UTC_TIMESTAMP())
               THEN 'expired'
             WHEN inner_sub.status IS NULL OR TRIM(COALESCE(inner_sub.status, '')) = '' THEN 'unknown'
             ELSE LOWER(TRIM(inner_sub.status))
@@ -774,6 +866,80 @@ class SubscriptionsAnalyticsModel {
     const rows = await runQuery(listQuery, [...innerParams, ...platformClause.params, ...filterParams, limit, offset]);
 
     return { rows: rows || [], total };
+  }
+
+  /**
+   * Cancellation hints from ClickHouse webhook log (internal row id + store transaction id).
+   */
+  static async findWebhookCancellationHints({
+    subscriptionIds = [],
+    providerSubscriptionIds = [],
+    userIds = []
+  } = {}) {
+    const internalIds = [...new Set((subscriptionIds || []).map((id) => String(id).trim()).filter(Boolean))];
+    const providerIds = [
+      ...new Set((providerSubscriptionIds || []).map((id) => String(id).trim()).filter(Boolean))
+    ];
+    const purchaserUserIds = [...new Set((userIds || []).map((id) => String(id).trim()).filter(Boolean))];
+    const result = { internalIds: new Set(), providerIds: new Set(), userIds: new Set() };
+    if (!internalIds.length && !providerIds.length && !purchaserUserIds.length) return result;
+
+    try {
+      const clauses = [];
+      if (internalIds.length) {
+        const inList = internalIds
+          .map((id) => `'${String(id).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`)
+          .join(', ');
+        clauses.push(`JSONExtractString(additional_data, 'subscription_id') IN (${inList})`);
+      }
+      if (providerIds.length) {
+        const inList = providerIds
+          .map((id) => `'${String(id).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`)
+          .join(', ');
+        clauses.push(`JSONExtractString(provider_event_data, 'subscription_id') IN (${inList})`);
+      }
+      if (purchaserUserIds.length) {
+        const inList = purchaserUserIds
+          .map((id) => `'${String(id).replace(/\\/g, '\\\\').replace(/'/g, "''")}'`)
+          .join(', ');
+        clauses.push(`JSONExtractString(additional_data, 'user_id') IN (${inList})`);
+      }
+
+      const query = `
+        SELECT
+          JSONExtractString(additional_data, 'subscription_id') AS internal_subscription_id,
+          JSONExtractString(provider_event_data, 'subscription_id') AS provider_subscription_id,
+          JSONExtractString(additional_data, 'user_id') AS user_id
+        FROM subscription_webhook_events
+        WHERE status = 'success'
+          AND (
+            positionCaseInsensitive(provider_event_id, '_cancel') > 0
+            OR JSONExtractString(additional_data, 'event_type') = 'subscription.cancelled'
+          )
+          AND (${clauses.join(' OR ')})
+      `;
+      const rows = await runClickHouseQueryInSlave(query);
+      for (const row of rows || []) {
+        const sid =
+          row?.internal_subscription_id != null ? String(row.internal_subscription_id).trim() : '';
+        const pid =
+          row?.provider_subscription_id != null ? String(row.provider_subscription_id).trim() : '';
+        const uid = row?.user_id != null ? String(row.user_id).trim() : '';
+        if (sid) result.internalIds.add(sid);
+        if (pid) result.providerIds.add(pid);
+        if (uid) result.userIds.add(uid);
+      }
+    } catch (err) {
+      console.warn('findWebhookCancellationHints skipped:', err.message);
+    }
+
+    return result;
+  }
+
+  /** @deprecated use {@link findWebhookCancellationHints} */
+  static async findWebhookCancelledSubscriptionIds(subscriptionIds) {
+    const hints = await SubscriptionsAnalyticsModel.findWebhookCancellationHints({ subscriptionIds });
+    return hints.internalIds;
   }
 }
 

@@ -147,12 +147,23 @@ function buildAdminOrdersWhere(filters) {
   return { whereSql: where.join(' AND '), params };
 }
 
-/** Distinct purchaser anchor for admin user counts (logged-in user or guest device). */
-const PURCHASER_DISTINCT_EXPR = `CASE
-  WHEN o.user_id IS NOT NULL THEN CONCAT('user:', o.user_id)
-  WHEN o.device_id IS NOT NULL THEN CONCAT('device:', o.device_id)
-  ELSE NULL
-END`;
+const PURCHASER_TEXT_COLLATION = 'utf8mb4_unicode_ci';
+
+function sqlCollateText(expr) {
+  return `CONVERT(${expr} USING utf8mb4) COLLATE ${PURCHASER_TEXT_COLLATION}`;
+}
+
+/** Distinct purchaser anchor — logged-in user or guest device (matches orders.analytics sqlPurchaserKey). */
+function sqlPurchaserDistinctExpr(alias = 'o') {
+  const uid = `${alias}.user_id`;
+  const did = sqlCollateText(`${alias}.device_id`);
+  return `COALESCE(
+    NULLIF(TRIM(CONCAT('user:', CAST(${uid} AS CHAR) COLLATE ${PURCHASER_TEXT_COLLATION})), 'user:'),
+    NULLIF(TRIM(CONCAT('device:', ${did})), 'device:')
+  )`;
+}
+
+const PURCHASER_DISTINCT_EXPR = sqlPurchaserDistinctExpr('o');
 
 const ORDERS_ADMIN_SELECT = `
   SELECT
@@ -284,9 +295,9 @@ const ADMIN_ORDER_DAY_SUMMARY_SINGLE_SCAN_MAX_SPAN_DAYS = 14;
  */
 function purchaserAnchorFromAdminRow(row) {
   const uid = row.uid;
-  if (uid != null && uid !== '') return `user:${String(uid)}`;
+  if (uid != null && String(uid).trim() !== '') return `user:${String(uid).trim()}`;
   const did = row.did;
-  if (did != null && did !== '') return `device:${String(did)}`;
+  if (did != null && String(did).trim() !== '') return `device:${String(did).trim()}`;
   return null;
 }
 
@@ -346,7 +357,8 @@ async function summarizeAdminOrdersCalendarDaysSingleScan(whereSql, params, tz, 
   const lastDay = sortedAsc[sortedAsc.length - 1];
   const rangeStartUtc = moment.tz(`${firstDay} 00:00:00.000`, tz).utc();
   const rangeEndUtc = moment.tz(`${lastDay} 00:00:00.000`, tz).utc().add(1, 'day');
-  const bind = [...params, rangeStartUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), rangeEndUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
+  // Bind Date objects — naive UTC strings are interpreted in the MySQL session TZ and skew TIMESTAMP bounds.
+  const bind = [...params, rangeStartUtc.toDate(), rangeEndUtc.toDate()];
 
   const q = `
     SELECT
@@ -374,7 +386,7 @@ async function summarizeAdminOrdersCalendarDaysPerDayAggregates(whereSql, params
   const tasks = sortedDesc.map(async (dayKey) => {
     const startUtc = moment.tz(`${dayKey} 00:00:00.000`, tz).utc();
     const endUtc = startUtc.clone().add(1, 'day');
-    const bind = [...params, startUtc.format('YYYY-MM-DD HH:mm:ss.SSS'), endUtc.format('YYYY-MM-DD HH:mm:ss.SSS')];
+    const bind = [...params, startUtc.toDate(), endUtc.toDate()];
 
     const qCount = `
       SELECT COUNT(*) AS order_count, COUNT(DISTINCT ${PURCHASER_DISTINCT_EXPR}) AS unique_users

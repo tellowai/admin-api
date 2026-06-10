@@ -13,7 +13,8 @@ var masterConnConfig = {
   user : config.mysql.master.options.user,
   password : config.mysql.master.options.pass,
   database : config.mysql.master.databaseName,
-  charset: 'utf8mb4'
+  charset: 'utf8mb4',
+  timezone: 'Z'
 };
 
 var slaveConnConfig = {
@@ -23,7 +24,8 @@ var slaveConnConfig = {
   user : config.mysql.slave.options.user,
   password : config.mysql.slave.options.pass,
   database : config.mysql.slave.databaseName,
-  charset: 'utf8mb4'
+  charset: 'utf8mb4',
+  timezone: 'Z'
 };
 
 var masterConnPool = mysql.createPool(masterConnConfig);

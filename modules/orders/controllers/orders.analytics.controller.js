@@ -14,34 +14,11 @@ const {
 const HTTP_STATUS_CODES = require('../../core/controllers/httpcodes.server.controller').CODES;
 const { formatGuestDeviceDisplayName } = require('../utils/guestDeviceDisplay.util');
 const { stitchGuestDeviceDetailsForRows } = require('../utils/guestDeviceStitch.util');
-
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set([
-  'active',
-  'renewed',
-  'pending',
-  'trial',
-  'paused',
-  'upgraded',
-  'active_non_recurring',
-  'upgraded_non_recurring',
-  'pending_otp_verification_for_upgrade'
-]);
-
-function subscriptionPeriodEndMs(row) {
-  const end = row.current_period_end || row.renews_at || row.end_at;
-  if (!end) return null;
-  const t = new Date(end).getTime();
-  return Number.isNaN(t) ? null : t;
-}
-
-function displaySubscriptionStatus(row) {
-  const status = row.status != null ? String(row.status) : '';
-  if (ACTIVE_SUBSCRIPTION_STATUSES.has(status)) {
-    const endMs = subscriptionPeriodEndMs(row);
-    if (endMs != null && endMs <= Date.now()) return 'expired';
-  }
-  return status || 'unknown';
-}
+const {
+  parseSubscriptionAdditionalData,
+  buildSubscriptionGroupDisplayContext,
+  displaySubscriptionStatusForAdmin
+} = require('../utils/subscriptionDisplayStatus.util');
 
 function formatPlatformLabel(clientPlatform) {
   const p = clientPlatform && String(clientPlatform).trim().toLowerCase();
@@ -49,6 +26,31 @@ function formatPlatformLabel(clientPlatform) {
   if (p === 'android') return 'Android';
   if (p === 'web') return 'Web';
   return 'Unknown';
+}
+
+/** Map RevenueCat / store enum from subscription `additional_data` when no linked order. */
+function clientPlatformFromRcStore(store) {
+  const s = store != null ? String(store).trim().toLowerCase() : '';
+  if (!s) return null;
+  if (s.includes('app_store') || s === 'ios' || s === 'apple') return 'ios';
+  if (s.includes('play_store') || s.includes('google') || s === 'android') return 'android';
+  if (s === 'web' || s.includes('stripe') || s.includes('paypal')) return 'web';
+  return null;
+}
+
+function resolveSubscriptionPaymentPlatform(row) {
+  const linked = row.linked_client_platform;
+  if (linked != null && String(linked).trim() !== '') {
+    return formatPlatformLabel(linked);
+  }
+  const data = parseSubscriptionAdditionalData(row.subscription_additional_data);
+  const store =
+    (data && data.notes && data.notes.store) ||
+    (data && data.store) ||
+    null;
+  const fromStore = clientPlatformFromRcStore(store);
+  if (fromStore) return formatPlatformLabel(fromStore);
+  return formatPlatformLabel(null);
 }
 
 function formatGatewayLabel(orderGateway, subscriptionProvider) {
@@ -76,26 +78,6 @@ function formatIsoDate(val) {
   const t = new Date(val).getTime();
   if (Number.isNaN(t)) return String(val);
   return new Date(val).toISOString();
-}
-
-function parseSubscriptionAdditionalData(raw) {
-  if (raw == null || raw === '') return null;
-  if (Buffer.isBuffer(raw)) {
-    try {
-      return JSON.parse(raw.toString('utf8'));
-    } catch {
-      return null;
-    }
-  }
-  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 /**
@@ -144,7 +126,21 @@ function planCreditsFromMap(providerPlanId, planMap) {
   };
 }
 
-function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new Map(), deviceBalanceMap = new Map()) {
+function buildSubscriptionRowDtos(
+  rawRows,
+  planMap = new Map(),
+  balanceMap = new Map(),
+  deviceBalanceMap = new Map(),
+  webhookCancellationHints = { internalIds: new Set(), providerIds: new Set(), userIds: new Set() }
+) {
+  const webhookCancelledIds = webhookCancellationHints.internalIds || new Set();
+  const webhookCancelledProviderIds = webhookCancellationHints.providerIds || new Set();
+  const groupContext = buildSubscriptionGroupDisplayContext(
+    rawRows,
+    webhookCancelledIds,
+    webhookCancelledProviderIds
+  );
+
   return (rawRows || []).map((r) => {
     const { credits, bonus_credits } = planCreditsFromMap(r.provider_plan_id, planMap);
     const subscriptionEventTypeKey = classifySubscriptionEventType(r);
@@ -163,12 +159,14 @@ function buildSubscriptionRowDtos(rawRows, planMap = new Map(), balanceMap = new
       subscription_event_type: labelForSubscriptionEventTypeKey(subscriptionEventTypeKey),
       purchase_or_start_at: formatIsoDate(r.purchase_or_start_at),
       next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
-      payment_platform: formatPlatformLabel(r.linked_client_platform),
+      payment_platform: resolveSubscriptionPaymentPlatform(r),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
-      subscription_status:
-        r._display_status != null && String(r._display_status).trim() !== ''
-          ? String(r._display_status)
-          : displaySubscriptionStatus(r),
+      subscription_status: displaySubscriptionStatusForAdmin(
+        r,
+        groupContext,
+        webhookCancelledIds,
+        webhookCancelledProviderIds
+      ),
       plan_credits: credits,
       plan_bonus_credits: bonus_credits,
       credit_balance: wallet ? wallet.balance : 0,
@@ -380,11 +378,16 @@ exports.getUserSubscriptionsTable = async function (req, res) {
           .map((r) => String(r.device_id).trim())
       )
     ];
-    const [balanceMap, deviceBalanceMap] = await Promise.all([
+    const [balanceMap, deviceBalanceMap, webhookCancellationHints] = await Promise.all([
       CreditsModel.getBalancesByUserIds(userIds, { useMaster: true }),
-      CreditsModel.getBalancesByDeviceIds(deviceIds, { useMaster: true })
+      CreditsModel.getBalancesByDeviceIds(deviceIds, { useMaster: true }),
+      SubscriptionsAnalyticsModel.findWebhookCancellationHints({
+        subscriptionIds: (rows || []).map((r) => r.subscription_id).filter(Boolean),
+        providerSubscriptionIds: (rows || []).map((r) => r.provider_subscription_id).filter(Boolean),
+        userIds: (rows || []).map((r) => r.user_id).filter(Boolean)
+      })
     ]);
-    const items = buildSubscriptionRowDtos(rows, planMap, balanceMap, deviceBalanceMap);
+    const items = buildSubscriptionRowDtos(rows, planMap, balanceMap, deviceBalanceMap, webhookCancellationHints);
     return res.status(HTTP_STATUS_CODES.OK).json({
       data: {
         items,

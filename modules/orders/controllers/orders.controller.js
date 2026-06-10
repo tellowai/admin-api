@@ -200,7 +200,6 @@ function mergeAdminOrdersRangeFiltersFromQuery(req, filterPayload) {
   const start_date = req.query.start_date != null ? String(req.query.start_date).trim() : '';
   const end_date = req.query.end_date != null ? String(req.query.end_date).trim() : '';
   const tz = req.query.tz != null ? String(req.query.tz).trim() : '';
-
   let hasCreatedRange = false;
   if (start_date || end_date) {
     if (!start_date || !end_date) {

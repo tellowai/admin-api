@@ -86,15 +86,29 @@ async function getPpIdsForProductFilter(productType) {
 }
 
 /**
+ * UTC bounds for a client-calendar day range.
+ * Returns Date objects for MySQL params — naive UTC strings are interpreted in the server
+ * session timezone and break non-UTC dashboard timezones.
+ *
  * @param {string} startCal YYYY-MM-DD
  * @param {string} endCal YYYY-MM-DD
  * @param {string} tz IANA
- * @returns {{ rangeStartUtc: string, rangeEndUtc: string }}
+ * @returns {{ rangeStartUtc: string, rangeEndUtc: string, rangeStartDate: Date, rangeEndDate: Date }}
  */
 function utcRangeForCalendarDays(startCal, endCal, tz) {
-  const rangeStartUtc = moment.tz(`${startCal} 00:00:00.000`, tz).utc().format('YYYY-MM-DD HH:mm:ss.SSS');
-  const rangeEndUtc = moment.tz(`${endCal} 23:59:59.999`, tz).utc().format('YYYY-MM-DD HH:mm:ss.SSS');
-  return { rangeStartUtc, rangeEndUtc };
+  const rangeStartMoment = moment.tz(`${startCal} 00:00:00.000`, tz).utc();
+  const rangeEndMoment = moment.tz(`${endCal} 23:59:59.999`, tz).utc();
+  return {
+    rangeStartUtc: rangeStartMoment.format('YYYY-MM-DD HH:mm:ss.SSS'),
+    rangeEndUtc: rangeEndMoment.format('YYYY-MM-DD HH:mm:ss.SSS'),
+    rangeStartDate: rangeStartMoment.toDate(),
+    rangeEndDate: rangeEndMoment.toDate()
+  };
+}
+
+/** @param {{ rangeStartDate: Date, rangeEndDate: Date }} range */
+function mysqlUtcRangeParams(range) {
+  return [range.rangeStartDate, range.rangeEndDate];
 }
 
 /**
@@ -194,7 +208,7 @@ function calendarDayInTzFromUtcWallTime(tsVal, tz) {
  * @param {{ sql: string, params: any[] }} filterPart plan + optional gateway, etc.
  * @param {'created'|'completed'|'failed'} kind
  */
-async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind) {
+async function queryDailyByKind(tz, rangeStartDate, rangeEndDate, filterPart, kind) {
   let dateFormatCol;
   let whereExtra;
   if (kind === 'created') {
@@ -215,7 +229,7 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind
     ${filterPart.sql}
   `;
 
-  const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
+  const params = [rangeStartDate, rangeEndDate, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
 
   const dayCounts = new Map();
@@ -236,7 +250,7 @@ async function queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, kind
 /**
  * Period totals for orders analytics (same cohort semantics as {@link queryDailyByKind}).
  */
-async function queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, kind) {
+async function queryCountByKind(rangeStartDate, rangeEndDate, filterPart, kind) {
   let whereExtra;
   if (kind === 'created') {
     whereExtra = 'o.created_at >= ? AND o.created_at <= ?';
@@ -253,7 +267,7 @@ async function queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, kind) {
     ${filterPart.sql}
   `;
 
-  const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
+  const params = [rangeStartDate, rangeEndDate, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   const n = rows && rows[0] ? Number(rows[0].total) : 0;
   return Number.isFinite(n) ? n : 0;
@@ -270,7 +284,7 @@ async function queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, kind) {
 exports.getOrdersStatusDaily = async function (opts) {
   const { startCal, endCal, tz, productType, paymentGateway } = opts;
 
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
 
   let ppIds = null;
   if (productType && String(productType).trim()) {
@@ -281,8 +295,8 @@ exports.getOrdersStatusDaily = async function (opts) {
   const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const [created, completed] = await Promise.all([
-    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'created'),
-    queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'completed')
+    queryDailyByKind(tz, range.rangeStartDate, range.rangeEndDate, filterPart, 'created'),
+    queryDailyByKind(tz, range.rangeStartDate, range.rangeEndDate, filterPart, 'completed')
   ]);
 
   return { created, completed };
@@ -299,7 +313,7 @@ exports.getOrdersStatusDaily = async function (opts) {
  */
 exports.getOrdersStatusSummary = async function (opts) {
   const { startCal, endCal, tz, productType, paymentGateway } = opts;
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
 
   let ppIds = null;
   if (productType && String(productType).trim()) {
@@ -310,9 +324,9 @@ exports.getOrdersStatusSummary = async function (opts) {
   const filterPart = mergeSqlParts(planPart, ledgerPart, gatewayFilterClause(paymentGateway));
 
   const [created_count, completed_count, failed_count] = await Promise.all([
-    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'created'),
-    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'completed'),
-    queryCountByKind(rangeStartUtc, rangeEndUtc, filterPart, 'failed')
+    queryCountByKind(range.rangeStartDate, range.rangeEndDate, filterPart, 'created'),
+    queryCountByKind(range.rangeStartDate, range.rangeEndDate, filterPart, 'completed'),
+    queryCountByKind(range.rangeStartDate, range.rangeEndDate, filterPart, 'failed')
   ]);
 
   const failure_rate_pct =
@@ -352,7 +366,7 @@ exports.getOrdersStatusSummary = async function (opts) {
  */
 exports.getOrdersVolumeSummary = async function (opts) {
   const { startCal, endCal, tz, ppIds, paymentGateway, productTypeLedger } = opts;
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
 
   const planPart = planFilterClause(ppIds);
   const ledgerPart = subscriptionRenewalLedgerFilterPart(productTypeLedger && String(productTypeLedger).trim());
@@ -361,15 +375,14 @@ exports.getOrdersVolumeSummary = async function (opts) {
   const query = `
     SELECT
       COUNT(*) AS total_orders,
-      COUNT(DISTINCT CASE
-        WHEN o.user_id IS NOT NULL THEN CONCAT('user:', o.user_id)
-        WHEN o.device_id IS NOT NULL THEN CONCAT('device:', o.device_id)
-        ELSE NULL
-      END) AS unique_users
+      COUNT(DISTINCT COALESCE(
+        NULLIF(TRIM(CONCAT('user:', CAST(o.user_id AS CHAR) COLLATE utf8mb4_unicode_ci)), 'user:'),
+        NULLIF(TRIM(CONCAT('device:', CONVERT(o.device_id USING utf8mb4) COLLATE utf8mb4_unicode_ci)), 'device:')
+      )) AS unique_users
     FROM orders o
     WHERE o.created_at >= ? AND o.created_at <= ?${filterPart.sql}
   `;
-  const params = [rangeStartUtc, rangeEndUtc, ...filterPart.params];
+  const params = [range.rangeStartDate, range.rangeEndDate, ...filterPart.params];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   const row = rows && rows[0] ? rows[0] : {};
   return {
@@ -391,13 +404,13 @@ exports.getOrdersVolumeSummary = async function (opts) {
  */
 exports.getSubscriptionPurchasesDaily = async function (opts) {
   const { startCal, endCal, tz, paymentGateway } = opts;
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
 
   const ppIds = await getPpIdsForProductFilter('subscription');
   const planPart = planFilterClause(ppIds);
   const filterPart = mergeSqlParts(planPart, gatewayFilterClause(paymentGateway));
 
-  const daily = await queryDailyByKind(tz, rangeStartUtc, rangeEndUtc, filterPart, 'completed');
+  const daily = await queryDailyByKind(tz, range.rangeStartDate, range.rangeEndDate, filterPart, 'completed');
   return { daily };
 };
 
@@ -501,8 +514,9 @@ function resolvePurchasingCustomersOrderBy(sortBy, sortDir) {
 
 const PURCHASE_AT_ORDERS_SQL = `COALESCE(o.completed_at, o.created_at)`;
 const PURCHASE_AT_ORDERS_ELIGIBLE_SQL = `COALESCE(completed_at, created_at)`;
-const PURCHASE_AT_SUBSCRIPTIONS_SQL = `COALESCE(s.start_at, s.created_at)`;
-const PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL = `COALESCE(start_at, created_at)`;
+/** When the purchase event was recorded — not billing-period `start_at` (RC can backdate). */
+const PURCHASE_AT_SUBSCRIPTIONS_SQL = `s.created_at`;
+const PURCHASE_AT_SUBSCRIPTIONS_ELIGIBLE_SQL = `created_at`;
 
 /** Purchaser anchor — account user or unclaimed device (aligned with subscriptions analytics). */
 const PURCHASER_TEXT_COLLATION = 'utf8mb4_unicode_ci';
@@ -549,6 +563,12 @@ const SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL = `
   AND JSON_UNQUOTE(JSON_EXTRACT(s_link.additional_data, '$.notes.type')) = 'upgrade'
 `;
 
+/** Upgrade check for duplicate-subscription comparison (`s_dup` alias). */
+const SUBSCRIPTION_IS_UPGRADE_FOR_DUP_SQL = `
+  JSON_VALID(s_dup.additional_data)
+  AND JSON_UNQUOTE(JSON_EXTRACT(s_dup.additional_data, '$.notes.type')) = 'upgrade'
+`;
+
 /**
  * Completed order has a recurring initial/renewal subscription row within ±2 days
  * (same window as subscriptions analytics order link).
@@ -559,8 +579,266 @@ const ORDER_LINKED_SUBSCRIPTION_ROW_EXISTS_SQL = `
     WHERE ${ORDER_SUBSCRIPTION_LINK_MATCH_SQL}
       AND s_link.payment_type = 'recurring'
       AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_LINK_SQL})
-      AND COALESCE(s_link.start_at, s_link.created_at) >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
-      AND COALESCE(s_link.start_at, s_link.created_at) <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+      AND s_link.created_at >= DATE_SUB(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+      AND s_link.created_at <= DATE_ADD(${PURCHASE_AT_ORDERS_SQL}, INTERVAL 2 DAY)
+  )
+`;
+
+/** Same purchaser for subscription row `s` vs duplicate candidate `s_dup`. */
+const SUBSCRIPTION_S_S_DUP_PURCHASER_MATCH_SQL = `
+  (
+    (s.user_id IS NOT NULL AND s_dup.user_id = s.user_id)
+    OR (
+      s.user_id IS NULL
+      AND s.device_id IS NOT NULL
+      AND s_dup.user_id IS NULL
+      AND ${sqlCollateText('s_dup.device_id')} = ${sqlCollateText('s.device_id')}
+    )
+  )
+`;
+
+/**
+ * Secondary subscription row for the same checkout / webhook burst — do not double-count purchases.
+ * 1) Cancelled row when a non-cancelled sibling exists within ±2 days (same purchaser).
+ * 2) Near-duplicate active rows within 5 minutes — keep earliest `created_at` (tie-break subscription_id).
+ */
+const SUBSCRIPTION_IS_DUPLICATE_PURCHASE_EVENT_SQL = `
+  (
+    EXISTS (
+      SELECT 1 FROM subscriptions s_dup
+      WHERE ${SUBSCRIPTION_S_S_DUP_PURCHASER_MATCH_SQL}
+        AND s_dup.subscription_id <> s.subscription_id
+        AND s_dup.payment_type = 'recurring'
+        AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_DUP_SQL})
+        AND ABS(TIMESTAMPDIFF(SECOND, s.created_at, s_dup.created_at)) <= 172800
+        AND LOWER(TRIM(s.status)) = 'cancelled'
+        AND LOWER(TRIM(s_dup.status)) NOT IN ('cancelled', 'expired')
+    )
+    OR EXISTS (
+      SELECT 1 FROM subscriptions s_dup
+      WHERE ${SUBSCRIPTION_S_S_DUP_PURCHASER_MATCH_SQL}
+        AND s_dup.subscription_id <> s.subscription_id
+        AND s_dup.payment_type = 'recurring'
+        AND NOT (${SUBSCRIPTION_IS_UPGRADE_FOR_DUP_SQL})
+        AND ABS(TIMESTAMPDIFF(SECOND, s.created_at, s_dup.created_at)) <= 300
+        AND LOWER(TRIM(s.status)) NOT IN ('cancelled', 'expired')
+        AND LOWER(TRIM(s_dup.status)) NOT IN ('cancelled', 'expired')
+        AND (
+          s_dup.created_at < s.created_at
+          OR (
+            s_dup.created_at = s.created_at
+            AND s_dup.subscription_id < s.subscription_id
+          )
+        )
+    )
+  )
+`;
+
+/** Countable subscription purchase event (initial/renewal, not upgrade, not duplicate sibling). */
+const SUBSCRIPTION_ORDER_LINK_MATCH_SQL = `
+  (
+    (s.user_id IS NOT NULL AND o_link.user_id = s.user_id)
+    OR (
+      s.user_id IS NULL
+      AND s.device_id IS NOT NULL
+      AND o_link.user_id IS NULL
+      AND ${sqlCollateText('o_link.device_id')} = ${sqlCollateText('s.device_id')}
+    )
+  )
+`;
+
+/** Renewal subscription row (store/webhook renewal without a new checkout order). */
+const SUBSCRIPTION_IS_RENEWAL_ROW_SQL = `
+  JSON_VALID(s.additional_data)
+  AND (
+    (
+      JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) IS NOT NULL
+      AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> ''
+      AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> 'null'
+    )
+    OR CAST(JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.renewal_count')) AS UNSIGNED) > 0
+  )
+`;
+
+/** Parent subscription from \`previous_subscription_id\` is at least 1 day older (not same-checkout tagging). */
+const SUBSCRIPTION_RENEWAL_PRIOR_SUB_OLD_ENOUGH_SQL = `
+  EXISTS (
+    SELECT 1 FROM subscriptions s_parent
+    WHERE s_parent.subscription_id = JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id'))
+      AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) IS NOT NULL
+      AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> ''
+      AND JSON_UNQUOTE(JSON_EXTRACT(s.additional_data, '$.previous_subscription_id')) <> 'null'
+      AND s_parent.created_at <= DATE_SUB(s.created_at, INTERVAL 1 DAY)
+  )
+`;
+
+/** Completed order tagged \`subscription_renewal\` within ±2 days of this subscription row. */
+const SUBSCRIPTION_LINKED_RENEWAL_ORDER_EXISTS_SQL = `
+  EXISTS (
+    SELECT 1 FROM orders o_link
+    LEFT JOIN payment_plans pp_link ON pp_link.pp_id = o_link.payment_plan_id
+    WHERE o_link.status = 'completed'
+      AND COALESCE(o_link.payment_gateway, '') <> 'admin_grant'
+      AND ${SUBSCRIPTION_ORDER_LINK_MATCH_SQL}
+      AND COALESCE(o_link.completed_at, o_link.created_at) >= DATE_SUB(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+      AND COALESCE(o_link.completed_at, o_link.created_at) <= DATE_ADD(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+      AND JSON_VALID(o_link.transaction_notes)
+      AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o_link.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+      AND pp_link.pp_id IS NOT NULL
+      AND pp_link.plan_type = 'credits'
+      AND pp_link.billing_interval IN ('monthly', 'yearly')
+  )
+`;
+
+const SUBSCRIPTION_S_S_OTHER_PURCHASER_MATCH_SQL = `
+  (
+    (s.user_id IS NOT NULL AND s_other.user_id = s.user_id)
+    OR (
+      s.user_id IS NULL
+      AND s.device_id IS NOT NULL
+      AND s_other.user_id IS NULL
+      AND ${sqlCollateText('s_other.device_id')} = ${sqlCollateText('s.device_id')}
+    )
+  )
+`;
+
+/** Shared completed subscription/renewal order — same purchaser, ±2d from \`s.created_at\`. */
+const SUBSCRIPTION_ORDER_LINK_FOR_ROW_SQL = `
+  o_shared.status = 'completed'
+  AND COALESCE(o_shared.payment_gateway, '') <> 'admin_grant'
+  AND (
+    (s.user_id IS NOT NULL AND o_shared.user_id = s.user_id)
+    OR (
+      s.user_id IS NULL
+      AND s.device_id IS NOT NULL
+      AND o_shared.user_id IS NULL
+      AND ${sqlCollateText('o_shared.device_id')} = ${sqlCollateText('s.device_id')}
+    )
+  )
+  AND COALESCE(o_shared.completed_at, o_shared.created_at) >= DATE_SUB(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+  AND COALESCE(o_shared.completed_at, o_shared.created_at) <= DATE_ADD(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+  AND (
+    (
+      pp_shared.pp_id IS NOT NULL
+      AND pp_shared.plan_type = 'credits'
+      AND pp_shared.billing_interval IN ('monthly', 'yearly')
+    )
+    OR (
+      JSON_VALID(o_shared.transaction_notes)
+      AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o_shared.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+      AND pp_shared.pp_id IS NOT NULL
+      AND pp_shared.plan_type = 'credits'
+      AND pp_shared.billing_interval IN ('monthly', 'yearly')
+    )
+  )
+`;
+
+/**
+ * When multiple subscription rows link to the same completed order, count only the row
+ * whose `created_at` is closest to that order (avoids stale rows + new renewal both counting).
+ *
+ * Shadow is evaluated only on **this row's nearest** linked order. Otherwise back-to-back
+ * renewals (orders 7 & 8) both get excluded: each row loses on the other order's ±2d window.
+ */
+const SUBSCRIPTION_IS_SHADOWED_BY_CLOSER_ORDER_LINK_SQL = `
+  EXISTS (
+    SELECT 1 FROM orders o_shared
+    LEFT JOIN payment_plans pp_shared ON pp_shared.pp_id = o_shared.payment_plan_id
+    INNER JOIN subscriptions s_closer ON s_closer.subscription_id <> s.subscription_id
+      AND s_closer.payment_type = 'recurring'
+      AND NOT (
+        JSON_VALID(s_closer.additional_data)
+        AND JSON_UNQUOTE(JSON_EXTRACT(s_closer.additional_data, '$.notes.type')) = 'upgrade'
+      )
+      AND ${SUBSCRIPTION_S_S_OTHER_PURCHASER_MATCH_SQL.replace(/s_other/g, 's_closer')}
+      AND COALESCE(o_shared.completed_at, o_shared.created_at) >= DATE_SUB(s_closer.created_at, INTERVAL 2 DAY)
+      AND COALESCE(o_shared.completed_at, o_shared.created_at) <= DATE_ADD(s_closer.created_at, INTERVAL 2 DAY)
+      AND ABS(TIMESTAMPDIFF(SECOND, s_closer.created_at, COALESCE(o_shared.completed_at, o_shared.created_at)))
+          < ABS(TIMESTAMPDIFF(SECOND, s.created_at, COALESCE(o_shared.completed_at, o_shared.created_at)))
+    WHERE ${SUBSCRIPTION_ORDER_LINK_FOR_ROW_SQL}
+      AND NOT EXISTS (
+        SELECT 1 FROM orders o_nearest
+        LEFT JOIN payment_plans pp_nearest ON pp_nearest.pp_id = o_nearest.payment_plan_id
+        WHERE o_nearest.status = 'completed'
+          AND COALESCE(o_nearest.payment_gateway, '') <> 'admin_grant'
+          AND (
+            (s.user_id IS NOT NULL AND o_nearest.user_id = s.user_id)
+            OR (
+              s.user_id IS NULL
+              AND s.device_id IS NOT NULL
+              AND o_nearest.user_id IS NULL
+              AND ${sqlCollateText('o_nearest.device_id')} = ${sqlCollateText('s.device_id')}
+            )
+          )
+          AND COALESCE(o_nearest.completed_at, o_nearest.created_at) >= DATE_SUB(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+          AND COALESCE(o_nearest.completed_at, o_nearest.created_at) <= DATE_ADD(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+          AND (
+            (
+              pp_nearest.pp_id IS NOT NULL
+              AND pp_nearest.plan_type = 'credits'
+              AND pp_nearest.billing_interval IN ('monthly', 'yearly')
+            )
+            OR (
+              JSON_VALID(o_nearest.transaction_notes)
+              AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o_nearest.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+              AND pp_nearest.pp_id IS NOT NULL
+              AND pp_nearest.plan_type = 'credits'
+              AND pp_nearest.billing_interval IN ('monthly', 'yearly')
+            )
+          )
+          AND ABS(TIMESTAMPDIFF(SECOND, s.created_at, COALESCE(o_nearest.completed_at, o_nearest.created_at)))
+              < ABS(TIMESTAMPDIFF(SECOND, s.created_at, COALESCE(o_shared.completed_at, o_shared.created_at)))
+      )
+  )
+`;
+
+/** Store/webhook renewal that should count as a purchase (not same-day resubscribe sibling tagging). */
+const SUBSCRIPTION_IS_RENEWAL_PURCHASE_EVENT_SQL = `
+  (${SUBSCRIPTION_IS_RENEWAL_ROW_SQL})
+  AND (
+    (${SUBSCRIPTION_LINKED_RENEWAL_ORDER_EXISTS_SQL})
+    OR (${SUBSCRIPTION_RENEWAL_PRIOR_SUB_OLD_ENOUGH_SQL})
+  )
+`;
+
+/**
+ * Initial subscription checkout: count the subscription row only when a completed
+ * subscription-plan order exists within ±2 days (mirrors order-side dedup).
+ * Orphan rows after manual order deletes must not inflate purchase counts.
+ */
+const SUBSCRIPTION_LINKED_COMPLETED_ORDER_EXISTS_SQL = `
+  EXISTS (
+    SELECT 1 FROM orders o_link
+    LEFT JOIN payment_plans pp_link ON pp_link.pp_id = o_link.payment_plan_id
+    WHERE o_link.status = 'completed'
+      AND COALESCE(o_link.payment_gateway, '') <> 'admin_grant'
+      AND ${SUBSCRIPTION_ORDER_LINK_MATCH_SQL}
+      AND COALESCE(o_link.completed_at, o_link.created_at) >= DATE_SUB(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+      AND COALESCE(o_link.completed_at, o_link.created_at) <= DATE_ADD(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, INTERVAL 2 DAY)
+      AND (
+        (
+          pp_link.pp_id IS NOT NULL
+          AND pp_link.plan_type = 'credits'
+          AND pp_link.billing_interval IN ('monthly', 'yearly')
+        )
+        OR (
+          JSON_VALID(o_link.transaction_notes)
+          AND LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(o_link.transaction_notes, '$.purchase_subject')))) = 'subscription_renewal'
+          AND pp_link.pp_id IS NOT NULL
+          AND pp_link.plan_type = 'credits'
+          AND pp_link.billing_interval IN ('monthly', 'yearly')
+        )
+      )
+  )
+`;
+
+const SUBSCRIPTION_COUNTS_AS_PURCHASE_EVENT_SQL = `
+  ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+  AND NOT (${SUBSCRIPTION_IS_DUPLICATE_PURCHASE_EVENT_SQL})
+  AND NOT (${SUBSCRIPTION_IS_SHADOWED_BY_CLOSER_ORDER_LINK_SQL})
+  AND (
+    (${SUBSCRIPTION_IS_RENEWAL_PURCHASE_EVENT_SQL})
+    OR (${SUBSCRIPTION_LINKED_COMPLETED_ORDER_EXISTS_SQL})
   )
 `;
 
@@ -571,12 +849,11 @@ const ORDER_IS_RENEWAL_LEDGER_SQL = `
 `;
 
 /**
- * @param {string} rangeStartUtc
- * @param {string} rangeEndUtc
- * @returns {string[]}
+ * @param {{ rangeStartDate: Date, rangeEndDate: Date }} range
+ * @returns {Date[]}
  */
-function purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc) {
-  return [rangeStartUtc, rangeEndUtc];
+function purchasingCustomersDateParams(range) {
+  return mysqlUtcRangeParams(range);
 }
 
 /**
@@ -622,8 +899,8 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
   } = opts;
   const orderBySql = resolvePurchasingCustomersOrderBy(sortBy, sortDir);
   const runQuery = useMaster ? MysqlQueryRunner.runQueryInMaster : MysqlQueryRunner.runQueryInSlave;
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
-  const datePair = purchasingCustomersDateParams(rangeStartUtc, rangeEndUtc);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
+  const datePair = purchasingCustomersDateParams(range);
 
   const searchTrim = search != null ? String(search).trim() : '';
   let searchClause = '';
@@ -714,7 +991,7 @@ exports.listPurchasingCustomersForAdmin = async function (opts) {
         COUNT(*) AS subscription_purchases,
         MAX(${PURCHASE_AT_SUBSCRIPTIONS_SQL}) AS last_subscription_at
       FROM subscriptions s
-      WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+      WHERE ${SUBSCRIPTION_COUNTS_AS_PURCHASE_EVENT_SQL}
         AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
         AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
       GROUP BY purchaser_key
@@ -847,7 +1124,7 @@ const DEDUPED_PURCHASE_ORDER_EVENT_FILTER_SQL = `
  */
 exports.getDedupedPurchaseEventsDaily = async function (opts) {
   const { startCal, endCal, tz } = opts || {};
-  const { rangeStartUtc, rangeEndUtc } = utcRangeForCalendarDays(startCal, endCal, tz);
+  const range = utcRangeForCalendarDays(startCal, endCal, tz);
 
   const orderEventsQuery = `
     SELECT DATE_FORMAT(${PURCHASE_AT_ORDERS_SQL}, '%Y-%m-%d %H:%i:%s') AS ts_utc
@@ -862,12 +1139,12 @@ exports.getDedupedPurchaseEventsDaily = async function (opts) {
   const subscriptionEventsQuery = `
     SELECT DATE_FORMAT(${PURCHASE_AT_SUBSCRIPTIONS_SQL}, '%Y-%m-%d %H:%i:%s') AS ts_utc
     FROM subscriptions s
-    WHERE ${SUBSCRIPTION_IS_INITIAL_OR_RENEWAL_SQL}
+    WHERE ${SUBSCRIPTION_COUNTS_AS_PURCHASE_EVENT_SQL}
       AND ${SUBSCRIPTION_S_PURCHASER_ANCHOR_FILTER}
       AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} >= ? AND ${PURCHASE_AT_SUBSCRIPTIONS_SQL} <= ?
   `;
 
-  const params = [rangeStartUtc, rangeEndUtc];
+  const params = mysqlUtcRangeParams(range);
   const [orderRows, subscriptionRows] = await Promise.all([
     MysqlQueryRunner.runQueryInSlave(orderEventsQuery, params),
     MysqlQueryRunner.runQueryInSlave(subscriptionEventsQuery, params)
@@ -925,6 +1202,13 @@ exports.getOrderCountsByTemplateIds = async function (opts) {
   const ids = [...new Set((templateIds || []).map((id) => String(id).trim()).filter(Boolean))];
   if (!ids.length || !rangeStartUtc || !rangeEndUtc) return [];
 
+  const rangeStartDate = rangeStartUtc instanceof Date
+    ? rangeStartUtc
+    : moment.utc(String(rangeStartUtc), 'YYYY-MM-DD HH:mm:ss.SSS', true).toDate();
+  const rangeEndDate = rangeEndUtc instanceof Date
+    ? rangeEndUtc
+    : moment.utc(String(rangeEndUtc), 'YYYY-MM-DD HH:mm:ss.SSS', true).toDate();
+
   const query = `
     SELECT
       ${ORDER_TEMPLATE_ID_EXPR} AS template_id,
@@ -949,15 +1233,15 @@ exports.getOrderCountsByTemplateIds = async function (opts) {
     GROUP BY template_id
   `;
   const params = [
-    rangeStartUtc,
-    rangeEndUtc,
-    rangeStartUtc,
-    rangeEndUtc,
+    rangeStartDate,
+    rangeEndDate,
+    rangeStartDate,
+    rangeEndDate,
     ids,
-    rangeStartUtc,
-    rangeEndUtc,
-    rangeStartUtc,
-    rangeEndUtc
+    rangeStartDate,
+    rangeEndDate,
+    rangeStartDate,
+    rangeEndDate
   ];
   const rows = await MysqlQueryRunner.runQueryInSlave(query, params);
   return (rows || []).filter((r) => r.template_id);
