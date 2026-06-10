@@ -230,6 +230,82 @@ function stitchPurchaseRepeatSummary(byUser, byOrdinal) {
   };
 }
 
+function emptyChannelGroupRow(channelGroup) {
+  return {
+    channel_group: channelGroup,
+    link_clicks: 0,
+    app_opens: 0,
+    installs: 0,
+    signups: 0,
+    add_to_cart: 0,
+    purchases: 0,
+    revenue: 0
+  };
+}
+
+/** Aggregate attribution events + click rollups into MMP-style channel_group buckets. */
+function stitchChannelGroupMetrics(eventRows, clickRows) {
+  const byGroup = {};
+  const ensure = (group) => {
+    const g = group || 'Unassigned (legacy)';
+    if (!byGroup[g]) byGroup[g] = emptyChannelGroupRow(g);
+    return byGroup[g];
+  };
+
+  for (const r of clickRows || []) {
+    const row = ensure(r.channel_group);
+    row.link_clicks += Number(r.clicks) || 0;
+  }
+
+  for (const r of eventRows || []) {
+    const row = ensure(r.channel_group);
+    const ev = r.event_name;
+    const cnt = Number(r.total_events) || 0;
+    const rev = Number(r.total_revenue) || 0;
+    if (ev === 'app_open') row.app_opens += cnt;
+    else if (ev === 'attributed_install') row.installs += cnt;
+    else if (ev === 'attributed_signup') row.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') row.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      row.purchases += cnt;
+      row.revenue += rev;
+    }
+  }
+
+  return Object.values(byGroup).sort(
+    (a, b) => b.installs - a.installs || b.link_clicks - a.link_clicks || a.channel_group.localeCompare(b.channel_group)
+  );
+}
+
+async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
+  const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
+  const osParam = useOsFilter ? deviceOs : null;
+  const [eventRows, clickRows] = await Promise.all([
+    useOsFilter
+      ? AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, deviceOs)
+      : AttributionChModel.queryAttributionByChannelGroupV2(startDate, endDate),
+    AttributionChModel.queryClicksByChannelGroup(startDate, endDate)
+  ]);
+  const byChannelGroup = stitchChannelGroupMetrics(eventRows, clickRows);
+  let classifiedEvents = 0;
+  let totalEvents = 0;
+  for (const r of eventRows || []) {
+    const cnt = Number(r.total_events) || 0;
+    totalEvents += cnt;
+    if (r.channel_group && r.channel_group !== 'Unassigned (legacy)') classifiedEvents += cnt;
+  }
+  return {
+    by_channel_group: byChannelGroup,
+    device_os: deviceOs || 'all',
+    coverage: {
+      total_events: totalEvents,
+      classified_events: classifiedEvents,
+      unclassified_events: Math.max(0, totalEvents - classifiedEvents)
+    },
+    classification_version: 1
+  };
+}
+
 /**
  * ClickHouse analytics for one or more tracking link ids (object_id in raw events).
  * Installs chart is install-only; attribution_events includes all types (e.g. attributed_purchase + revenue);
@@ -625,6 +701,100 @@ exports.updateInfluencer = async function (id, patch) {
   await InfluencerModel.update(id, next);
   const updated = await InfluencerModel.getById(id);
   return serializeInfluencer(updated);
+};
+
+exports.getOverviewChannelGroups = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return buildChannelGroupOverview(startDate, endDate, deviceOs);
+};
+
+exports.getProfileChannelGroups = async function (profileId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const profile = await InfluencerModel.getById(profileId);
+  if (!profile) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
+  const linkIds = links.map((l) => l.id);
+  const deviceOs = normalizeDeviceOs(query);
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds(linkIds, startDate, endDate, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds(linkIds, startTs, endTs)
+  ]);
+  return {
+    profile: serializeInfluencer(profile),
+    by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
+    device_os: deviceOs
+  };
+};
+
+exports.getLinkChannelGroups = async function (linkId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const link = await TrackingLinkModel.getById(linkId);
+  if (!link) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds([link.id], startDate, endDate, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds([link.id], startTs, endTs)
+  ]);
+  return {
+    link,
+    by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
+    device_os: deviceOs
+  };
+};
+
+exports.getClassificationDiag = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const [totals, distribution] = await Promise.all([
+    AttributionChModel.queryClassificationEventTotalsV2(startDate, endDate),
+    AttributionChModel.queryClassificationDistributionV2(startDate, endDate)
+  ]);
+  const totalEvents = Number(totals.total_events) || 0;
+  const classifiedEvents = Number(totals.classified_events) || 0;
+  return {
+    total_events: totalEvents,
+    classified_events: classifiedEvents,
+    unclassified_events: Math.max(0, totalEvents - classifiedEvents),
+    distribution: distribution || []
+  };
 };
 
 exports.getOverview = async function (query) {

@@ -9,6 +9,7 @@ const orderLifecycleAnalyticsEnrichment = require('../utils/ordersLifecycleAnaly
 const GooglePlayOrderSyncService = require('../services/google-play-order-sync.service');
 const AppleOrphanDecoder = require('../services/apple-orphan-decoder.service');
 const { purchaseCategoryFromOrder } = require('../utils/purchaseCategory.util');
+const { buildEndUserDetailsMapForAdmin } = require('../../user/utils/resolveEndUserProfilePicUrl.util');
 
 const MAX_EXPORT_ROWS = 25000;
 /** Skip ClickHouse enrichment on CSV export above this many rows (single IN clause). */
@@ -71,10 +72,7 @@ async function stitchPlansAndUsersForRows(rows) {
 
   const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
   const users = userIds.length ? await GenerationsModel.getUsersByIds(userIds) : [];
-  const userById = {};
-  for (const u of users) {
-    userById[u.user_id] = u;
-  }
+  const userById = await buildEndUserDetailsMapForAdmin(users);
   return { planById, userById };
 }
 
