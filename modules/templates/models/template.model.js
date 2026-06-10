@@ -766,8 +766,12 @@ exports.updateTemplateWithClips = async function (templateId, templateData, clip
 
 /**
  * Get template by ID
+ * @param {string} templateId
+ * @param {{ includeArchived?: boolean }} [options] — admin GET may load archived templates for view/edit
  */
-exports.getTemplateById = async function (templateId) {
+exports.getTemplateById = async function (templateId, options = {}) {
+  const includeArchived = options.includeArchived === true;
+  const archivedClause = includeArchived ? '' : ' AND archived_at IS NULL';
   const query = `
     SELECT 
       template_id,
@@ -825,10 +829,10 @@ exports.getTemplateById = async function (templateId) {
       workflow_builder_version,
       group_id,
       variant_label,
+      archived_at,
       created_at
     FROM templates
-    WHERE template_id = ?
-    AND archived_at IS NULL
+    WHERE template_id = ?${archivedClause}
   `;
 
   const [template] = await mysqlQueryRunner.runQueryInSlave(query, [templateId]);
