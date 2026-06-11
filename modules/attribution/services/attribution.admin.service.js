@@ -315,6 +315,107 @@ async function queryChannelGroupClickRows(startDate, endDate) {
   return AttributionChModel.queryClicksByChannelGroupFromRaw(startTs, endTs);
 }
 
+function breakdownRowKey(r) {
+  return [
+    r.media_source || '',
+    r.medium || '',
+    r.classification_reason || '',
+    r.legacy_channel || '',
+    r.attribution_method || '',
+    r.utm_source || '',
+    r.utm_campaign || ''
+  ].join('\0');
+}
+
+function emptyBreakdownRow(seed = {}) {
+  return {
+    media_source: seed.media_source || '',
+    medium: seed.medium || '',
+    classification_reason: seed.classification_reason || '',
+    legacy_channel: seed.legacy_channel || '',
+    attribution_method: seed.attribution_method || '',
+    utm_source: seed.utm_source || '',
+    utm_campaign: seed.utm_campaign || '',
+    link_clicks: 0,
+    app_opens: 0,
+    installs: 0,
+    signups: 0,
+    add_to_cart: 0,
+    purchases: 0,
+    revenue: 0
+  };
+}
+
+/** Stitch per-dimension event rows into funnel breakdown lines. */
+function stitchChannelGroupBreakdown(eventRows, clickRows) {
+  const byKey = {};
+
+  for (const r of clickRows || []) {
+    const seed = {
+      media_source: r.media_source,
+      medium: r.medium,
+      classification_reason: r.classification_reason,
+      legacy_channel: '',
+      attribution_method: '',
+      utm_source: '',
+      utm_campaign: r.campaign || ''
+    };
+    const k = breakdownRowKey(seed);
+    if (!byKey[k]) byKey[k] = emptyBreakdownRow(seed);
+    byKey[k].link_clicks += Number(r.clicks) || 0;
+  }
+
+  for (const r of eventRows || []) {
+    const seed = {
+      media_source: r.media_source,
+      medium: r.medium,
+      classification_reason: r.classification_reason,
+      legacy_channel: r.legacy_channel,
+      attribution_method: r.attribution_method,
+      utm_source: r.utm_source,
+      utm_campaign: r.utm_campaign
+    };
+    const k = breakdownRowKey(seed);
+    if (!byKey[k]) byKey[k] = emptyBreakdownRow(seed);
+    const row = byKey[k];
+    const cnt = Number(r.total_events) || 0;
+    const rev = Number(r.total_revenue) || 0;
+    const ev = r.event_name;
+    if (ev === 'app_open') row.app_opens += cnt;
+    else if (ev === 'attributed_install') row.installs += cnt;
+    else if (ev === 'attributed_signup') row.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') row.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      row.purchases += cnt;
+      row.revenue += rev;
+    }
+  }
+
+  return Object.values(byKey).sort(
+    (a, b) => b.installs - a.installs || b.link_clicks - a.link_clicks || b.signups - a.signups
+  );
+}
+
+async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, objectIds, linkIds) {
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    AttributionChModel.queryChannelGroupEventBreakdownFromRaw(
+      startDate,
+      endDate,
+      channelGroup,
+      osParam,
+      objectIds
+    ),
+    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(startTs, endTs, channelGroup, linkIds)
+  ]);
+  return {
+    channel_group: normalizeChannelGroupKey(channelGroup),
+    breakdown: stitchChannelGroupBreakdown(eventRows, clickRows)
+  };
+}
+
 async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
   const [eventRows, clickRows] = await Promise.all([
     queryChannelGroupEventRows(startDate, endDate, deviceOs),
@@ -747,6 +848,80 @@ exports.getOverviewChannelGroups = async function (query) {
   }
   const deviceOs = normalizeDeviceOs(query);
   return buildChannelGroupOverview(startDate, endDate, deviceOs);
+};
+
+exports.getOverviewChannelGroupDetail = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, null, null);
+};
+
+exports.getProfileChannelGroupDetail = async function (profileId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const profile = await InfluencerModel.getById(profileId);
+  if (!profile) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
+  const linkIds = links.map((l) => l.id);
+  const deviceOs = normalizeDeviceOs(query);
+  return {
+    profile: serializeInfluencer(profile),
+    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, linkIds, linkIds))
+  };
+};
+
+exports.getLinkChannelGroupDetail = async function (linkId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const link = await TrackingLinkModel.getById(linkId);
+  if (!link) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return {
+    link,
+    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, [link.id], [link.id]))
+  };
 };
 
 exports.getProfileChannelGroups = async function (profileId, query) {

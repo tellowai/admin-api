@@ -96,6 +96,16 @@ exports.getOverviewChannelGroups = async function (req, res) {
   }
 };
 
+exports.getOverviewChannelGroupDetail = async function (req, res) {
+  try {
+    const out = await AttributionAdminService.getOverviewChannelGroupDetail(req.query);
+    return res.status(HTTP_STATUS_CODES.OK).json(out);
+  } catch (err) {
+    const code = err.statusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: err.message });
+  }
+};
+
 exports.getProfileChannelGroups = async function (req, res) {
   try {
     const out = await AttributionAdminService.getProfileChannelGroups(req.params.id, req.query);
@@ -106,9 +116,29 @@ exports.getProfileChannelGroups = async function (req, res) {
   }
 };
 
+exports.getProfileChannelGroupDetail = async function (req, res) {
+  try {
+    const out = await AttributionAdminService.getProfileChannelGroupDetail(req.params.id, req.query);
+    return res.status(HTTP_STATUS_CODES.OK).json(out);
+  } catch (err) {
+    const code = err.statusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: err.message });
+  }
+};
+
 exports.getLinkChannelGroups = async function (req, res) {
   try {
     const out = await AttributionAdminService.getLinkChannelGroups(req.params.id, req.query);
+    return res.status(HTTP_STATUS_CODES.OK).json(out);
+  } catch (err) {
+    const code = err.statusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
+    return res.status(code).json({ message: err.message });
+  }
+};
+
+exports.getLinkChannelGroupDetail = async function (req, res) {
+  try {
+    const out = await AttributionAdminService.getLinkChannelGroupDetail(req.params.id, req.query);
     return res.status(HTTP_STATUS_CODES.OK).json(out);
   } catch (err) {
     const code = err.statusCode || HTTP_STATUS_CODES.INTERNAL_SERVER_ERROR;
