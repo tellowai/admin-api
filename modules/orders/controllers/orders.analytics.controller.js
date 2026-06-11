@@ -80,6 +80,99 @@ function formatIsoDate(val) {
   return new Date(val).toISOString();
 }
 
+/** Naive MySQL datetime = UTC wall clock (mysql2 `timezone: 'Z'`), same as admin-ui parseServerUtcDate. */
+function parseAdminUtcWallMoment(val) {
+  if (val == null) return null;
+  if (val instanceof Date) {
+    return moment.utc(val);
+  }
+  const s = String(val).trim();
+  if (!s) return null;
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(s)) {
+    const parsed = moment.parseZone(s);
+    return parsed.isValid() ? parsed.utc() : null;
+  }
+  const asUtc = moment.utc(s, ['YYYY-MM-DD HH:mm:ss', 'YYYY-MM-DD HH:mm:ss.SSS', moment.ISO_8601], true);
+  return asUtc.isValid() ? asUtc : null;
+}
+
+function formatUtcWallIso(val) {
+  const m = parseAdminUtcWallMoment(val);
+  if (!m) {
+    if (val == null) return null;
+    const t = new Date(val).getTime();
+    if (Number.isNaN(t)) return String(val);
+    return new Date(val).toISOString();
+  }
+  return m.toISOString();
+}
+
+function unixSecToUtcWallIso(unixSec) {
+  const n = Number(unixSec);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return moment.unix(n).utc().toISOString();
+}
+
+/** RevenueCat billing period anchors stored as unix seconds in `additional_data`. */
+function extractRcPeriodUnixFromRow(row) {
+  const data = parseSubscriptionAdditionalData(row.subscription_additional_data);
+  if (!data || typeof data !== 'object') return { startSec: null, endSec: null };
+
+  // Use the row's billing period only — `cancellation_metadata.*` is from a later webhook
+  // and must not replace purchase / renewal columns in the admin table.
+  const startSec = data.current_start ?? data.start_at ?? null;
+  const endSec = data.current_end ?? data.charge_at ?? null;
+
+  return { startSec, endSec };
+}
+
+/**
+ * Some legacy rows store IST wall-clock digits in UTC columns (+5:30 ahead of `created_at`).
+ * Converting those again to IST in the UI double-shifts the time.
+ */
+function subscriptionStartAtLooksCorrupted(row) {
+  const startM = parseAdminUtcWallMoment(row.start_at);
+  const createdM = parseAdminUtcWallMoment(row.created_at);
+  if (!startM || !createdM) return false;
+  const diffMin = Math.round(startM.diff(createdM, 'minutes', true));
+  return diffMin >= 300 && diffMin <= 360;
+}
+
+function resolveSubscriptionPurchaseOrStartAt(row) {
+  const { startSec } = extractRcPeriodUnixFromRow(row);
+  const fromRc = unixSecToUtcWallIso(startSec);
+  if (fromRc) return fromRc;
+
+  if (subscriptionStartAtLooksCorrupted(row)) {
+    const fromCreated = formatUtcWallIso(row.created_at);
+    if (fromCreated) return fromCreated;
+  }
+
+  const sqlAnchor = row.purchase_or_start_at ?? row.start_at ?? row.created_at;
+  return formatUtcWallIso(sqlAnchor);
+}
+
+function resolveSubscriptionPeriodEndAt(row) {
+  const { endSec } = extractRcPeriodUnixFromRow(row);
+  const fromRc = unixSecToUtcWallIso(endSec);
+  if (fromRc) return fromRc;
+
+  if (subscriptionStartAtLooksCorrupted(row)) {
+    const { startSec: rcStartSec, endSec: rcEndSec } = extractRcPeriodUnixFromRow(row);
+    if (rcStartSec != null && rcEndSec != null) {
+      const durationSec = Number(rcEndSec) - Number(rcStartSec);
+      if (Number.isFinite(durationSec) && durationSec > 0 && durationSec <= 86400 * 400) {
+        const createdM = parseAdminUtcWallMoment(row.created_at);
+        if (createdM) {
+          return createdM.clone().add(durationSec, 'seconds').toISOString();
+        }
+      }
+    }
+  }
+
+  return formatUtcWallIso(row.current_period_end || row.renews_at || row.end_at);
+}
+
 /**
  * Admin table: Renewal vs initial vs upgrade vs one-time, from `subscriptions.additional_data`
  * and `payment_type` (renewal rows set `previous_subscription_id` in subscription.service).
@@ -153,12 +246,12 @@ function buildSubscriptionRowDtos(
       user_id: r.user_id,
       device_id: r.device_id,
       is_guest_unclaimed: isGuestUnclaimed,
-      claimed_at: r.claimed_at != null ? formatIsoDate(r.claimed_at) : null,
+      claimed_at: r.claimed_at != null ? formatUtcWallIso(r.claimed_at) : null,
       user_name: r.user_name,
       subscription_event_type_key: subscriptionEventTypeKey,
       subscription_event_type: labelForSubscriptionEventTypeKey(subscriptionEventTypeKey),
-      purchase_or_start_at: formatIsoDate(r.purchase_or_start_at),
-      next_recurring_or_renewal_at: formatIsoDate(r.current_period_end || r.renews_at || r.end_at),
+      purchase_or_start_at: resolveSubscriptionPurchaseOrStartAt(r),
+      next_recurring_or_renewal_at: resolveSubscriptionPeriodEndAt(r),
       payment_platform: resolveSubscriptionPaymentPlatform(r),
       payment_gateway: formatGatewayLabel(r.linked_order_gateway, r.subscription_provider),
       subscription_status: displaySubscriptionStatusForAdmin(

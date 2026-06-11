@@ -76,12 +76,9 @@ function sqlCollateText(expr) {
   return `CONVERT(${expr} USING utf8mb4) COLLATE ${PURCHASER_TEXT_COLLATION}`;
 }
 
-/** Subscription period-end columns are IST wall-clock literals (moment.unix().format); convert before UTC compare. */
-const SUBSCRIPTION_PERIOD_END_STORAGE_TZ = '+05:30';
-
-/** Period end as UTC epoch seconds — avoids SESSION tz bugs when mixing TIMESTAMP + DATETIME. */
+/** Period end as UTC epoch seconds — naive DATETIME interpreted as UTC (mysql connection timezone Z). */
 const subscriptionPeriodEndUnixSql = (alias) =>
-  `UNIX_TIMESTAMP(CONVERT_TZ(COALESCE(${alias}.current_period_end, ${alias}.renews_at, ${alias}.end_at), '${SUBSCRIPTION_PERIOD_END_STORAGE_TZ}', '+00:00'))`;
+  `UNIX_TIMESTAMP(COALESCE(${alias}.current_period_end, ${alias}.renews_at, ${alias}.end_at))`;
 
 /** Later billing-period row points at this subscription_id via previous_subscription_id. */
 const subscriptionSupersededByRenewalSql = (alias) =>
@@ -859,7 +856,7 @@ class SubscriptionsAnalyticsModel {
       ${platformClause.sql}
       ${eventClause.sql}
       ${statusClause.sql}
-      ORDER BY t.purchase_or_start_at DESC, t.subscription_id DESC
+      ORDER BY t.created_at DESC, t.subscription_id DESC
       LIMIT ? OFFSET ?
     `;
 
