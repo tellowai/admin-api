@@ -396,11 +396,30 @@ function stitchChannelGroupBreakdown(eventRows, clickRows) {
   );
 }
 
+function stitchFunnelFromEventCountRows(rows) {
+  const totals = emptyChannelGroupRow('');
+  delete totals.channel_group;
+  for (const r of rows || []) {
+    const cnt = Number(r.cnt) || 0;
+    const rev = Number(r.revenue) || 0;
+    const ev = r.event_name;
+    if (ev === 'app_open') totals.app_opens += cnt;
+    else if (ev === 'attributed_install') totals.installs += cnt;
+    else if (ev === 'attributed_signup') totals.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') totals.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      totals.purchases += cnt;
+      totals.revenue += rev;
+    }
+  }
+  return totals;
+}
+
 async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, objectIds, linkIds) {
   const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
   const startTs = `${startDate} 00:00:00`;
   const endTs = `${endDate} 23:59:59`;
-  const [eventRows, clickRows] = await Promise.all([
+  const [eventRows, clickRows, funnelRows] = await Promise.all([
     AttributionChModel.queryChannelGroupEventBreakdownFromRaw(
       startDate,
       endDate,
@@ -408,11 +427,16 @@ async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceO
       osParam,
       objectIds
     ),
-    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(startTs, endTs, channelGroup, linkIds)
+    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(startTs, endTs, channelGroup, linkIds),
+    AttributionChModel.queryChannelGroupFunnelFromRaw(startDate, endDate, channelGroup, osParam, objectIds)
   ]);
+  const breakdown = stitchChannelGroupBreakdown(eventRows, clickRows);
+  const funnelTotals = stitchFunnelFromEventCountRows(funnelRows);
+  funnelTotals.link_clicks = breakdown.reduce((s, r) => s + (Number(r.link_clicks) || 0), 0);
   return {
     channel_group: normalizeChannelGroupKey(channelGroup),
-    breakdown: stitchChannelGroupBreakdown(eventRows, clickRows)
+    totals: funnelTotals,
+    breakdown
   };
 }
 

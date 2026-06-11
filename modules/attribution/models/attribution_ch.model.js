@@ -810,6 +810,64 @@ function channelGroupWhereClause(normalizedGroup) {
   return `properties['channel_group'] = '${esc(g)}'`;
 }
 
+function numField(row, ...keys) {
+  for (const k of keys) {
+    if (row[k] != null && row[k] !== '') {
+      const n = Number(row[k]);
+      if (!Number.isNaN(n)) return n;
+    }
+  }
+  return 0;
+}
+
+function strField(row, key) {
+  const v = row[key];
+  return v != null && String(v).trim() !== '' ? String(v) : '';
+}
+
+function normalizeEventBreakdownRows(rows) {
+  return (rows || []).map((row) => ({
+    media_source: strField(row, 'media_source'),
+    medium: strField(row, 'medium'),
+    classification_reason: strField(row, 'classification_reason'),
+    legacy_channel: strField(row, 'legacy_channel'),
+    attribution_method: strField(row, 'attribution_method'),
+    utm_source: strField(row, 'utm_source'),
+    utm_campaign: strField(row, 'utm_campaign'),
+    event_name: strField(row, 'event_name'),
+    total_events: numField(row, 'cnt', 'total_events', 'CNT', 'TOTAL_EVENTS'),
+    total_revenue: numField(row, 'revenue', 'total_revenue', 'REVENUE', 'TOTAL_REVENUE')
+  }));
+}
+
+exports.queryChannelGroupFunnelFromRaw = async function (
+  startDate,
+  endDate,
+  channelGroup,
+  osFilter,
+  objectIds
+) {
+  const os = osFilterClause(osFilter);
+  const cgFilter = channelGroupWhereClause(channelGroup);
+  let objectFilter = '';
+  if (objectIds && objectIds.length) {
+    const ids = objectIdsClause(objectIds);
+    if (ids) objectFilter = ` AND object_id IN (${ids}) `;
+  }
+  const q = `
+    SELECT event_name, count() AS cnt, sum(revenue) AS revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${dateRangeClause(startDate, endDate)}
+      AND ${cgFilter}
+      ${objectFilter}
+      ${os}
+    GROUP BY event_name
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
 exports.queryChannelGroupEventBreakdownFromRaw = async function (
   startDate,
   endDate,
@@ -834,8 +892,8 @@ exports.queryChannelGroupEventBreakdownFromRaw = async function (
       properties['utm_source'] AS utm_source,
       properties['utm_campaign'] AS utm_campaign,
       event_name,
-      count() AS total_events,
-      sum(revenue) AS total_revenue
+      count() AS cnt,
+      sum(revenue) AS revenue
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND ${dateRangeClause(startDate, endDate)}
@@ -851,11 +909,11 @@ exports.queryChannelGroupEventBreakdownFromRaw = async function (
       properties['utm_source'],
       properties['utm_campaign'],
       event_name
-    ORDER BY total_events DESC
+    ORDER BY cnt DESC
     LIMIT 200
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
-  return result.data || [];
+  return normalizeEventBreakdownRows(result.data);
 };
 
 exports.queryChannelGroupClickBreakdownFromRaw = async function (startTs, endTs, channelGroup, linkIds) {
