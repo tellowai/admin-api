@@ -9,7 +9,8 @@ const {
   insertUploadPresignedURLGeneration
 } = require('../models/presigned.model');
 const logger = require('../../../config/lib/logger');
-const { deleteMediaRefs, normalizedMediaRef } = require('../utils/r2-orphan-cleanup.util');
+const { deleteMediaRefs, normalizedMediaRef, runWithR2CleanupLog } = require('../utils/r2-orphan-cleanup.util');
+const { buildPublicAssetUrl } = require('../../templates/utils/public.asset.url');
 
 /**
  * @api {post} /os2/presigned-urls Generate presigned upload URLs
@@ -252,11 +253,10 @@ exports.generatePresignedPublicBucketUrls = async function (req, res) {
       });
 
       const cleanKey = key.startsWith('/') ? key.slice(1) : key;
-      const bucketBase = String(config.os2?.r2?.public?.bucketUrl || '').replace(/\/$/, '');
       /** Stripped PUT URL host (R2 API). Not reliable for anonymous GET; kept for backward compatibility when CDN differs. */
       const strippedSignedBase = signedUploadUrl.split('?')[0];
-      /** Primary public GET URL (CDN / custom domain). */
-      const publicReadUrl = bucketBase ? `${bucketBase}/${cleanKey}` : strippedSignedBase;
+      /** Primary public GET URL (CDN / custom domain). Rejects misconfigured R2 API hostnames. */
+      const publicReadUrl = buildPublicAssetUrl(cleanKey) || strippedSignedBase;
 
       // Add to ClickHouse data array
       presignedUrlData.push({
@@ -440,10 +440,17 @@ exports.deleteStorageObjects = async function (req, res) {
         message: 'Only ephemeral bucket objects can be deleted via this endpoint',
       });
     }
+    let r2AssetCleanup = [];
     if (refs.length) {
-      await deleteMediaRefs(refs, 'storage_object');
+      r2AssetCleanup = await runWithR2CleanupLog(async () => {
+        await deleteMediaRefs(refs, 'storage_object');
+      });
     }
-    return res.status(HTTP_STATUS_CODES.OK).json({ deleted_count: refs.length });
+    const responseBody = { deleted_count: refs.length };
+    if (r2AssetCleanup.length) {
+      responseBody.r2_asset_cleanup = r2AssetCleanup;
+    }
+    return res.status(HTTP_STATUS_CODES.OK).json(responseBody);
   } catch (error) {
     logger.error('Error deleting storage objects:', { error: error.message, stack: error.stack });
     return res.status(HTTP_STATUS_CODES.BAD_REQUEST).json({

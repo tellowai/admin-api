@@ -42,6 +42,18 @@ exports.listByInfluencerProfileId = async function (profileId) {
   return mysqlQueryRunner.runQueryInSlave(q, [profileId]);
 };
 
+/** Batch fetch link ids for multiple profiles (for list metrics stitching). */
+exports.listByInfluencerProfileIds = async function (profileIds) {
+  if (!profileIds || !profileIds.length) return [];
+  const placeholders = profileIds.map(() => '?').join(',');
+  const q = `
+    SELECT id, influencer_profile_id
+    FROM tracking_links
+    WHERE influencer_profile_id IN (${placeholders})
+  `;
+  return mysqlQueryRunner.runQueryInSlave(q, profileIds);
+};
+
 exports.getById = async function (id) {
   const q = `SELECT * FROM tracking_links WHERE id = ? LIMIT 1`;
   const rows = await mysqlQueryRunner.runQueryInSlave(q, [id]);

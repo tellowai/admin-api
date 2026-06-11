@@ -5,6 +5,7 @@ const AuthMiddleware = require('../../auth/middlewares/auth.middleware');
 const TemplateCtrl = require('../controllers/template.controller');
 const TemplateMetadataInferenceCtrl = require('../controllers/template.metadata.inference.controller');
 const TemplateVariantCtrl = require('../controllers/template.variant.controller');
+const HeroPreviewCtrl = require('../controllers/hero.preview.controller');
 const JourneyStageCtrl = require('../../journey-stages/controllers/journey.stage.controller');
 const TemplateValidator = require('../validators/template.validator');
 
@@ -97,6 +98,27 @@ module.exports = function (app) {
   ).post(
     AuthMiddleware.isAuthorizedJWT,
     TemplateCtrl.refreshTemplateGenerationMeta
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/generate-hero-preview'
+  ).post(
+    AuthMiddleware.isAuthorizedJWT,
+    HeroPreviewCtrl.generateHeroPreview
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/hero-preview-status'
+  ).get(
+    AuthMiddleware.isAuthorizedJWT,
+    HeroPreviewCtrl.getHeroPreviewStatus
+  );
+
+  app.route(
+    versionConfig.routePrefix + '/templates/:templateId/hero-frame-index'
+  ).patch(
+    AuthMiddleware.isAuthorizedJWT,
+    HeroPreviewCtrl.updateHeroFrameIndex
   );
 
   app.route(

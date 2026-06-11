@@ -19,39 +19,7 @@ const orderTemplateStitch = require('../../orders/utils/orderTemplateStitch.util
 const orderLifecycleAnalyticsEnrichment = require('../../orders/utils/ordersLifecycleAnalyticsEnrichment.util');
 const { purchaseCategoryFromOrder } = require('../../orders/utils/purchaseCategory.util');
 const EntitlementsModel = require('../../entitlements/models/entitlements.model');
-const StorageFactory = require('../../os2/providers/storage.factory');
-
-async function resolveEndUserProfilePicUrl(userRow) {
-  if (!userRow) return null;
-  const storage = StorageFactory.getProvider();
-  let profilePicUrl = userRow.profile_pic || null;
-  const profilePicAssetKey = userRow.profile_pic_asset_key;
-  const profilePicBucket = userRow.profile_pic_bucket;
-
-  if (profilePicAssetKey) {
-    try {
-      if (profilePicBucket && profilePicBucket.includes('ephemeral')) {
-        profilePicUrl = await storage.generateEphemeralPresignedDownloadUrl(profilePicAssetKey, {
-          expiresIn: 3600
-        });
-      } else {
-        profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicAssetKey, {
-          expiresIn: 3600
-        });
-      }
-    } catch (e) {
-      console.error('consumer user profile presign failed:', e.message);
-    }
-  } else if (profilePicUrl && !String(profilePicUrl).startsWith('http')) {
-    try {
-      profilePicUrl = await storage.generatePresignedDownloadUrl(profilePicUrl, { expiresIn: 3600 });
-    } catch (e) {
-      console.error('consumer user profile presign fallback failed:', e.message);
-    }
-  }
-
-  return profilePicUrl;
-}
+const { resolveEndUserProfilePicUrl } = require('../utils/resolveEndUserProfilePicUrl.util');
 
 /**
  * @api {post} /admin/users Create a new admin user

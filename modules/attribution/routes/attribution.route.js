@@ -32,6 +32,34 @@ module.exports = function (app) {
     .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getOverview);
 
   app
+    .route(versionConfig.routePrefix + '/attribution/overview/channel-groups/detail')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getOverviewChannelGroupDetail);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/overview/channel-groups')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getOverviewChannelGroups);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/influencers/:id/channel-groups/detail')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getProfileChannelGroupDetail);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/influencers/:id/channel-groups')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getProfileChannelGroups);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/links/:id/channel-groups/detail')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getLinkChannelGroupDetail);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/links/:id/channel-groups')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getLinkChannelGroups);
+
+  app
+    .route(versionConfig.routePrefix + '/attribution/diag/classification')
+    .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getClassificationDiag);
+
+  app
     .route(versionConfig.routePrefix + '/attribution/links/:id/stats')
     .get(AuthMiddleware.isAuthorizedJWT, AttributionCtrl.getLinkStats);
 

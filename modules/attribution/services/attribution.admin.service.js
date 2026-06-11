@@ -230,6 +230,241 @@ function stitchPurchaseRepeatSummary(byUser, byOrdinal) {
   };
 }
 
+const CHANNEL_GROUP_LEGACY_LABEL = 'Unassigned (legacy)';
+
+/** Map empty / null CH channel_group to display label (normalization done in app, not SQL). */
+function normalizeChannelGroupKey(raw) {
+  const s = raw != null ? String(raw).trim() : '';
+  return s || CHANNEL_GROUP_LEGACY_LABEL;
+}
+
+function isClassifiedChannelGroup(key) {
+  return key && key !== CHANNEL_GROUP_LEGACY_LABEL;
+}
+
+function emptyChannelGroupRow(channelGroup) {
+  return {
+    channel_group: channelGroup,
+    link_clicks: 0,
+    app_opens: 0,
+    installs: 0,
+    signups: 0,
+    add_to_cart: 0,
+    purchases: 0,
+    revenue: 0
+  };
+}
+
+/** Aggregate attribution events + click rollups into MMP-style channel_group buckets. */
+function stitchChannelGroupMetrics(eventRows, clickRows) {
+  const byGroup = {};
+  const ensure = (rawGroup) => {
+    const g = normalizeChannelGroupKey(rawGroup);
+    if (!byGroup[g]) byGroup[g] = emptyChannelGroupRow(g);
+    return byGroup[g];
+  };
+
+  for (const r of clickRows || []) {
+    const row = ensure(r.channel_group);
+    row.link_clicks += Number(r.clicks) || 0;
+  }
+
+  for (const r of eventRows || []) {
+    const row = ensure(r.channel_group);
+    const ev = r.event_name;
+    const cnt = Number(r.total_events) || 0;
+    const rev = Number(r.total_revenue) || 0;
+    if (ev === 'app_open') row.app_opens += cnt;
+    else if (ev === 'attributed_install') row.installs += cnt;
+    else if (ev === 'attributed_signup') row.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') row.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      row.purchases += cnt;
+      row.revenue += rev;
+    }
+  }
+
+  return Object.values(byGroup).sort(
+    (a, b) => b.installs - a.installs || b.link_clicks - a.link_clicks || a.channel_group.localeCompare(b.channel_group)
+  );
+}
+
+async function queryChannelGroupEventRows(startDate, endDate, deviceOs) {
+  const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
+  if (useOsFilter) {
+    return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, deviceOs);
+  }
+  try {
+    const v2Rows = await AttributionChModel.queryAttributionByChannelGroupV2(startDate, endDate);
+    if (v2Rows && v2Rows.length) return v2Rows;
+  } catch (e) {
+    console.warn('[attribution] channel_group v2 event rollup failed, using raw', e?.message || e);
+  }
+  return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, null);
+}
+
+async function queryChannelGroupClickRows(startDate, endDate) {
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  try {
+    const rollupRows = await AttributionChModel.queryClicksByChannelGroup(startDate, endDate);
+    if (rollupRows && rollupRows.length) return rollupRows;
+  } catch (e) {
+    console.warn('[attribution] channel_group click rollup failed, using link_clicks raw', e?.message || e);
+  }
+  return AttributionChModel.queryClicksByChannelGroupFromRaw(startTs, endTs);
+}
+
+function breakdownRowKey(r) {
+  return [
+    r.media_source || '',
+    r.medium || '',
+    r.classification_reason || '',
+    r.legacy_channel || '',
+    r.attribution_method || '',
+    r.utm_source || '',
+    r.utm_campaign || ''
+  ].join('\0');
+}
+
+function emptyBreakdownRow(seed = {}) {
+  return {
+    media_source: seed.media_source || '',
+    medium: seed.medium || '',
+    classification_reason: seed.classification_reason || '',
+    legacy_channel: seed.legacy_channel || '',
+    attribution_method: seed.attribution_method || '',
+    utm_source: seed.utm_source || '',
+    utm_campaign: seed.utm_campaign || '',
+    link_clicks: 0,
+    app_opens: 0,
+    installs: 0,
+    signups: 0,
+    add_to_cart: 0,
+    purchases: 0,
+    revenue: 0
+  };
+}
+
+/** Stitch per-dimension event rows into funnel breakdown lines. */
+function stitchChannelGroupBreakdown(eventRows, clickRows) {
+  const byKey = {};
+
+  for (const r of clickRows || []) {
+    const seed = {
+      media_source: r.media_source,
+      medium: r.medium,
+      classification_reason: r.classification_reason,
+      legacy_channel: '',
+      attribution_method: '',
+      utm_source: '',
+      utm_campaign: r.campaign || ''
+    };
+    const k = breakdownRowKey(seed);
+    if (!byKey[k]) byKey[k] = emptyBreakdownRow(seed);
+    byKey[k].link_clicks += Number(r.clicks) || 0;
+  }
+
+  for (const r of eventRows || []) {
+    const seed = {
+      media_source: r.media_source,
+      medium: r.medium,
+      classification_reason: r.classification_reason,
+      legacy_channel: r.legacy_channel,
+      attribution_method: r.attribution_method,
+      utm_source: r.utm_source,
+      utm_campaign: r.utm_campaign
+    };
+    const k = breakdownRowKey(seed);
+    if (!byKey[k]) byKey[k] = emptyBreakdownRow(seed);
+    const row = byKey[k];
+    const cnt = Number(r.total_events) || 0;
+    const rev = Number(r.total_revenue) || 0;
+    const ev = r.event_name;
+    if (ev === 'app_open') row.app_opens += cnt;
+    else if (ev === 'attributed_install') row.installs += cnt;
+    else if (ev === 'attributed_signup') row.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') row.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      row.purchases += cnt;
+      row.revenue += rev;
+    }
+  }
+
+  return Object.values(byKey).sort(
+    (a, b) => b.installs - a.installs || b.link_clicks - a.link_clicks || b.signups - a.signups
+  );
+}
+
+function stitchFunnelFromEventCountRows(rows) {
+  const totals = emptyChannelGroupRow('');
+  delete totals.channel_group;
+  for (const r of rows || []) {
+    const cnt = Number(r.cnt) || 0;
+    const rev = Number(r.revenue) || 0;
+    const ev = r.event_name;
+    if (ev === 'app_open') totals.app_opens += cnt;
+    else if (ev === 'attributed_install') totals.installs += cnt;
+    else if (ev === 'attributed_signup') totals.signups += cnt;
+    else if (ev === 'attributed_add_to_cart') totals.add_to_cart += cnt;
+    else if (ev === 'attributed_purchase') {
+      totals.purchases += cnt;
+      totals.revenue += rev;
+    }
+  }
+  return totals;
+}
+
+async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, objectIds, linkIds) {
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows, funnelRows] = await Promise.all([
+    AttributionChModel.queryChannelGroupEventBreakdownFromRaw(
+      startDate,
+      endDate,
+      channelGroup,
+      osParam,
+      objectIds
+    ),
+    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(startTs, endTs, channelGroup, linkIds),
+    AttributionChModel.queryChannelGroupFunnelFromRaw(startDate, endDate, channelGroup, osParam, objectIds)
+  ]);
+  const breakdown = stitchChannelGroupBreakdown(eventRows, clickRows);
+  const funnelTotals = stitchFunnelFromEventCountRows(funnelRows);
+  funnelTotals.link_clicks = breakdown.reduce((s, r) => s + (Number(r.link_clicks) || 0), 0);
+  return {
+    channel_group: normalizeChannelGroupKey(channelGroup),
+    totals: funnelTotals,
+    breakdown
+  };
+}
+
+async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
+  const [eventRows, clickRows] = await Promise.all([
+    queryChannelGroupEventRows(startDate, endDate, deviceOs),
+    queryChannelGroupClickRows(startDate, endDate)
+  ]);
+  const byChannelGroup = stitchChannelGroupMetrics(eventRows, clickRows);
+  let classifiedEvents = 0;
+  let totalEvents = 0;
+  for (const r of eventRows || []) {
+    const cnt = Number(r.total_events) || 0;
+    totalEvents += cnt;
+    if (isClassifiedChannelGroup(normalizeChannelGroupKey(r.channel_group))) classifiedEvents += cnt;
+  }
+  return {
+    by_channel_group: byChannelGroup,
+    device_os: deviceOs || 'all',
+    coverage: {
+      total_events: totalEvents,
+      classified_events: classifiedEvents,
+      unclassified_events: Math.max(0, totalEvents - classifiedEvents)
+    },
+    classification_version: 1
+  };
+}
+
 /**
  * ClickHouse analytics for one or more tracking link ids (object_id in raw events).
  * Installs chart is install-only; attribution_events includes all types (e.g. attributed_purchase + revenue);
@@ -482,13 +717,92 @@ exports.updateTrackingLink = async function (id, patch) {
   return TrackingLinkModel.getById(id);
 };
 
+function emptyAttributionFunnelMetrics() {
+  return { link_clicks: 0, app_opens: 0, installs: 0, signups: 0, add_to_cart: 0, purchases: 0 };
+}
+
+function stitchLinkClickCounts(rows, targetMap, keyForRow) {
+  for (const row of rows) {
+    const key = keyForRow(row);
+    if (!key || !targetMap[key]) continue;
+    targetMap[key].link_clicks += Number(row.clicks) || 0;
+  }
+}
+
+function stitchAttributionEventCounts(rows, targetMap, keyForRow) {
+  for (const row of rows) {
+    const key = keyForRow(row);
+    if (!key || !targetMap[key]) continue;
+    const n = Number(row.cnt) || 0;
+    const ev = row.event_name;
+    if (ev === 'app_open') targetMap[key].app_opens += n;
+    else if (ev === 'attributed_install') targetMap[key].installs += n;
+    else if (ev === 'attributed_signup') targetMap[key].signups += n;
+    else if (ev === 'attributed_add_to_cart') targetMap[key].add_to_cart += n;
+    else if (ev === 'attributed_purchase') targetMap[key].purchases += n;
+  }
+}
+
+async function queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs) {
+  if (!linkIds.length) return [];
+  const os = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  return AttributionChModel.queryAttributionEventCountsByObjectIds(linkIds, startDate, endDate, os);
+}
+
+async function buildLinkListMetrics(linkIds, startDate, endDate, deviceOs) {
+  const byLink = Object.fromEntries(linkIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
+  if (!linkIds.length) return byLink;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+  ]);
+  stitchAttributionEventCounts(eventRows, byLink, (row) => row.object_id);
+  stitchLinkClickCounts(clickRows, byLink, (row) => row.link_id);
+  return byLink;
+}
+
+async function buildProfileListMetrics(profileIds, startDate, endDate, deviceOs) {
+  if (!profileIds.length) return {};
+  const byProfile = Object.fromEntries(profileIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
+  const links = await TrackingLinkModel.listByInfluencerProfileIds(profileIds);
+  if (!links.length) return byProfile;
+  const linkToProfile = new Map(links.map((l) => [l.id, l.influencer_profile_id]));
+  const linkIds = links.map((l) => l.id);
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+  ]);
+  stitchAttributionEventCounts(eventRows, byProfile, (row) => linkToProfile.get(row.object_id));
+  stitchLinkClickCounts(clickRows, byProfile, (row) => linkToProfile.get(row.link_id));
+  return byProfile;
+}
+
 exports.listInfluencers = async function (pagination) {
   const limit = Math.min(Number(pagination.limit) || 50, 200);
   const offset = Number(pagination.offset) || 0;
   const rows = await InfluencerModel.list(limit, offset, {
     list_in_admin_only: !!pagination.admin_list_only
   });
-  const data = rows.map((r) => serializeInfluencer(r));
+  let data = rows.map((r) => serializeInfluencer(r));
+  const startDate = pagination.start_date || pagination.startDate;
+  const endDate = pagination.end_date || pagination.endDate;
+  if (startDate && endDate) {
+    const deviceOs = normalizeDeviceOs(pagination);
+    const metricsByProfile = await buildProfileListMetrics(
+      data.map((r) => r.id),
+      startDate,
+      endDate,
+      deviceOs
+    );
+    data = data.map((r) => ({
+      ...r,
+      metrics: metricsByProfile[r.id] || emptyAttributionFunnelMetrics()
+    }));
+  }
   return { data };
 };
 
@@ -546,6 +860,174 @@ exports.updateInfluencer = async function (id, patch) {
   await InfluencerModel.update(id, next);
   const updated = await InfluencerModel.getById(id);
   return serializeInfluencer(updated);
+};
+
+exports.getOverviewChannelGroups = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return buildChannelGroupOverview(startDate, endDate, deviceOs);
+};
+
+exports.getOverviewChannelGroupDetail = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, null, null);
+};
+
+exports.getProfileChannelGroupDetail = async function (profileId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const profile = await InfluencerModel.getById(profileId);
+  if (!profile) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
+  const linkIds = links.map((l) => l.id);
+  const deviceOs = normalizeDeviceOs(query);
+  return {
+    profile: serializeInfluencer(profile),
+    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, linkIds, linkIds))
+  };
+};
+
+exports.getLinkChannelGroupDetail = async function (linkId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  const channelGroup = query.channel_group || query.channelGroup;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!channelGroup) {
+    const err = new Error('channel_group is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const link = await TrackingLinkModel.getById(linkId);
+  if (!link) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  return {
+    link,
+    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, [link.id], [link.id]))
+  };
+};
+
+exports.getProfileChannelGroups = async function (profileId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const profile = await InfluencerModel.getById(profileId);
+  if (!profile) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
+  const linkIds = links.map((l) => l.id);
+  const deviceOs = normalizeDeviceOs(query);
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds(linkIds, startDate, endDate, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds(linkIds, startTs, endTs)
+  ]);
+  return {
+    profile: serializeInfluencer(profile),
+    by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
+    device_os: deviceOs
+  };
+};
+
+exports.getLinkChannelGroups = async function (linkId, query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const link = await TrackingLinkModel.getById(linkId);
+  if (!link) {
+    const err = new Error('Not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const deviceOs = normalizeDeviceOs(query);
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  const [eventRows, clickRows] = await Promise.all([
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds([link.id], startDate, endDate, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds([link.id], startTs, endTs)
+  ]);
+  return {
+    link,
+    by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
+    device_os: deviceOs
+  };
+};
+
+exports.getClassificationDiag = async function (query) {
+  const startDate = query.start_date || query.startDate;
+  const endDate = query.end_date || query.endDate;
+  if (!startDate || !endDate) {
+    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
+    err.statusCode = 400;
+    throw err;
+  }
+  const [totals, distribution] = await Promise.all([
+    AttributionChModel.queryClassificationEventTotalsV2(startDate, endDate),
+    AttributionChModel.queryClassificationDistributionV2(startDate, endDate)
+  ]);
+  const totalEvents = Number(totals.total_events) || 0;
+  const classifiedEvents = Number(totals.classified_events) || 0;
+  return {
+    total_events: totalEvents,
+    classified_events: classifiedEvents,
+    unclassified_events: Math.max(0, totalEvents - classifiedEvents),
+    distribution: distribution || []
+  };
 };
 
 exports.getOverview = async function (query) {
@@ -639,8 +1121,15 @@ exports.getProfileStats = async function (profileId, query) {
   const links = await TrackingLinkModel.listByInfluencerProfileId(profileId);
   const linkIds = links.map((l) => l.id);
   const deviceOs = normalizeDeviceOs(query);
-  const analytics = await buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs);
-  return { profile: serializeInfluencer(profile), links, analytics };
+  const [analytics, metricsByLink] = await Promise.all([
+    buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs),
+    buildLinkListMetrics(linkIds, startDate, endDate, deviceOs)
+  ]);
+  const linksWithMetrics = links.map((l) => ({
+    ...l,
+    metrics: metricsByLink[l.id] || emptyAttributionFunnelMetrics()
+  }));
+  return { profile: serializeInfluencer(profile), links: linksWithMetrics, analytics };
 };
 
 const MAGIC_PHOTOBOOTH_PROFILE_KEY = 'tellow_magic_photobooth';
