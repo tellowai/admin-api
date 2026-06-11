@@ -719,6 +719,25 @@ exports.queryClicksByChannelGroup = async function (startDate, endDate) {
 };
 
 /**
+ * Link clicks by channel_group from link_clicks (fallback when daily roll-up MV is empty / missing).
+ */
+exports.queryClicksByChannelGroupFromRaw = async function (startTs, endTs) {
+  const cg = channelGroupExprFromColumn('channel_group');
+  const q = `
+    SELECT
+      ${cg} AS channel_group,
+      count() AS clicks
+    FROM link_clicks
+    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    GROUP BY ${cg}
+    ORDER BY clicks DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
  * Channel-group stats filtered by link object_ids (profile/link detail).
  */
 exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, startDate, endDate, osFilter) {

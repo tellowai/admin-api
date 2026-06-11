@@ -277,14 +277,36 @@ function stitchChannelGroupMetrics(eventRows, clickRows) {
   );
 }
 
-async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
+async function queryChannelGroupEventRows(startDate, endDate, deviceOs) {
   const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
-  const osParam = useOsFilter ? deviceOs : null;
+  if (useOsFilter) {
+    return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, deviceOs);
+  }
+  try {
+    const v2Rows = await AttributionChModel.queryAttributionByChannelGroupV2(startDate, endDate);
+    if (v2Rows && v2Rows.length) return v2Rows;
+  } catch (e) {
+    console.warn('[attribution] channel_group v2 event rollup failed, using raw', e?.message || e);
+  }
+  return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, null);
+}
+
+async function queryChannelGroupClickRows(startDate, endDate) {
+  const startTs = `${startDate} 00:00:00`;
+  const endTs = `${endDate} 23:59:59`;
+  try {
+    const rollupRows = await AttributionChModel.queryClicksByChannelGroup(startDate, endDate);
+    if (rollupRows && rollupRows.length) return rollupRows;
+  } catch (e) {
+    console.warn('[attribution] channel_group click rollup failed, using link_clicks raw', e?.message || e);
+  }
+  return AttributionChModel.queryClicksByChannelGroupFromRaw(startTs, endTs);
+}
+
+async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
   const [eventRows, clickRows] = await Promise.all([
-    useOsFilter
-      ? AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, deviceOs)
-      : AttributionChModel.queryAttributionByChannelGroupV2(startDate, endDate),
-    AttributionChModel.queryClicksByChannelGroup(startDate, endDate)
+    queryChannelGroupEventRows(startDate, endDate, deviceOs),
+    queryChannelGroupClickRows(startDate, endDate)
   ]);
   const byChannelGroup = stitchChannelGroupMetrics(eventRows, clickRows);
   let classifiedEvents = 0;
