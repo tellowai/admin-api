@@ -230,6 +230,18 @@ function stitchPurchaseRepeatSummary(byUser, byOrdinal) {
   };
 }
 
+const CHANNEL_GROUP_LEGACY_LABEL = 'Unassigned (legacy)';
+
+/** Map empty / null CH channel_group to display label (normalization done in app, not SQL). */
+function normalizeChannelGroupKey(raw) {
+  const s = raw != null ? String(raw).trim() : '';
+  return s || CHANNEL_GROUP_LEGACY_LABEL;
+}
+
+function isClassifiedChannelGroup(key) {
+  return key && key !== CHANNEL_GROUP_LEGACY_LABEL;
+}
+
 function emptyChannelGroupRow(channelGroup) {
   return {
     channel_group: channelGroup,
@@ -246,8 +258,8 @@ function emptyChannelGroupRow(channelGroup) {
 /** Aggregate attribution events + click rollups into MMP-style channel_group buckets. */
 function stitchChannelGroupMetrics(eventRows, clickRows) {
   const byGroup = {};
-  const ensure = (group) => {
-    const g = group || 'Unassigned (legacy)';
+  const ensure = (rawGroup) => {
+    const g = normalizeChannelGroupKey(rawGroup);
     if (!byGroup[g]) byGroup[g] = emptyChannelGroupRow(g);
     return byGroup[g];
   };
@@ -314,7 +326,7 @@ async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
   for (const r of eventRows || []) {
     const cnt = Number(r.total_events) || 0;
     totalEvents += cnt;
-    if (r.channel_group && r.channel_group !== 'Unassigned (legacy)') classifiedEvents += cnt;
+    if (isClassifiedChannelGroup(normalizeChannelGroupKey(r.channel_group))) classifiedEvents += cnt;
   }
   return {
     by_channel_group: byChannelGroup,
