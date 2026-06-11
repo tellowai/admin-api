@@ -1270,14 +1270,16 @@ exports.getTemplate = async function (req, res) {
       });
     }
 
-    // Get template by ID
-    const template = await TemplateModel.getTemplateById(templateId);
+    // Admin detail: include archived templates (opened from /templates/archived).
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
 
     if (!template) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Template not found'
       });
     }
+
+    template.is_archived = template.archived_at != null;
 
     await enrichAdminTemplateDetailForGetResponse(template);
 
@@ -1396,7 +1398,7 @@ exports.ensureTemplateAiClips = async function (req, res) {
     const { clips } = req.validatedBody;
     const userId = req.user.userId;
 
-    const template = await TemplateModel.getTemplateById(templateId);
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
     if (!template) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Template not found'
@@ -1423,7 +1425,7 @@ exports.reorderTemplateClips = async function (req, res) {
     const { templateId } = req.params;
     const { clips } = req.validatedBody;
 
-    const template = await TemplateModel.getTemplateById(templateId);
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
     if (!template) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Template not found'
@@ -1449,7 +1451,7 @@ exports.addTemplateClip = async function (req, res) {
     const { asset_type } = req.validatedBody;
     const userId = req.user.userId;
 
-    const template = await TemplateModel.getTemplateById(templateId);
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
     if (!template) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Template not found'
@@ -1474,7 +1476,7 @@ exports.deleteTemplateClip = async function (req, res) {
   try {
     const { templateId, tacId } = req.params;
 
-    const template = await TemplateModel.getTemplateById(templateId);
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
     if (!template) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         error: 'Template not found'
@@ -3522,8 +3524,8 @@ exports.updateTemplate = async function (req, res) {
       delete templateData.clips;
     }
 
-    // Check if template exists and get current template info
-    const existingTemplate = await TemplateModel.getTemplateById(templateId);
+    // Check if template exists and get current template info (include archived for admin editor).
+    const existingTemplate = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
     if (!existingTemplate) {
       return res.status(HTTP_STATUS_CODES.NOT_FOUND).json({
         message: req.t('template:TEMPLATE_NOT_FOUND')
@@ -4090,8 +4092,11 @@ exports.updateTemplate = async function (req, res) {
       'create_admin_activity_log'
     );
 
-    const template = await TemplateModel.getTemplateById(templateId);
-    await enrichAdminTemplateDetailForGetResponse(template);
+    const template = await TemplateModel.getTemplateById(templateId, { includeArchived: true });
+    if (template) {
+      template.is_archived = template.archived_at != null;
+      await enrichAdminTemplateDetailForGetResponse(template);
+    }
 
     const responseBody = {
       message: req.t('template:TEMPLATE_UPDATED'),

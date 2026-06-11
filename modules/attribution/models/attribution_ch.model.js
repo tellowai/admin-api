@@ -646,3 +646,305 @@ exports.queryClickEventsCountForTimeline = async function (linkIds, startTs, end
   const row = result.data && result.data[0];
   return row ? Number(row.total) : 0;
 };
+
+/**
+ * Attribution events grouped by channel_group (v2 spoke).
+ */
+exports.queryAttributionByChannelGroupV2 = async function (startDate, endDate) {
+  const q = `
+    SELECT
+      event_name,
+      channel_group,
+      sum(total_events) AS total_events,
+      sum(total_revenue) AS total_revenue
+    FROM attribution_daily_stats_v2
+    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+    GROUP BY event_name, channel_group
+    ORDER BY total_events DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Attribution events by channel_group from raw (when OS filter applied).
+ */
+exports.queryAttributionByChannelGroupFromRaw = async function (startDate, endDate, osFilter) {
+  const os = osFilterClause(osFilter);
+  const q = `
+    SELECT
+      event_name,
+      properties['channel_group'] AS channel_group,
+      count() AS total_events,
+      sum(revenue) AS total_revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${dateRangeClause(startDate, endDate)} ${os}
+    GROUP BY event_name, properties['channel_group']
+    ORDER BY total_events DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Link clicks grouped by channel_group (v2 roll-up).
+ */
+exports.queryClicksByChannelGroup = async function (startDate, endDate) {
+  const q = `
+    SELECT
+      channel_group,
+      sum(total_clicks) AS clicks
+    FROM link_clicks_daily_stats
+    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+    GROUP BY channel_group
+    ORDER BY clicks DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Link clicks by channel_group from link_clicks (fallback when daily roll-up MV is empty / missing).
+ */
+exports.queryClicksByChannelGroupFromRaw = async function (startTs, endTs) {
+  const q = `
+    SELECT
+      channel_group,
+      count() AS clicks
+    FROM link_clicks
+    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    GROUP BY channel_group
+    ORDER BY clicks DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Channel-group stats filtered by link object_ids (profile/link detail).
+ */
+exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+  const ids = objectIdsClause(objectIds);
+  if (!ids) return [];
+  const os = osFilterClause(osFilter);
+  const q = `
+    SELECT
+      event_name,
+      properties['channel_group'] AS channel_group,
+      count() AS total_events,
+      sum(revenue) AS total_revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND object_id IN (${ids})
+      AND ${dateRangeClause(startDate, endDate)} ${os}
+    GROUP BY event_name, properties['channel_group']
+    ORDER BY total_events DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+exports.queryClicksByChannelGroupForLinkIds = async function (linkIds, startTs, endTs) {
+  const ids = objectIdsClause(linkIds);
+  if (!ids) return [];
+  const q = `
+    SELECT
+      channel_group,
+      count() AS clicks
+    FROM link_clicks
+    WHERE link_id IN (${ids})
+      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    GROUP BY channel_group
+    ORDER BY clicks DESC
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+/**
+ * Total attribution events in range (v2 roll-up — no raw scan).
+ */
+exports.queryClassificationEventTotalsV2 = async function (startDate, endDate) {
+  const q = `
+    SELECT
+      sum(total_events) AS total_events,
+      sumIf(total_events, classification_version > 0) AS classified_events
+    FROM attribution_daily_stats_v2
+    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  const row = result.data && result.data[0];
+  return {
+    total_events: row ? Number(row.total_events) || 0 : 0,
+    classified_events: row ? Number(row.classified_events) || 0 : 0
+  };
+};
+
+/**
+ * Channel group distribution (v2 roll-up).
+ */
+exports.queryClassificationDistributionV2 = async function (startDate, endDate) {
+  const q = `
+    SELECT
+      channel_group,
+      sum(total_events) AS total_events,
+      max(classification_version) AS classification_version
+    FROM attribution_daily_stats_v2
+    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+    GROUP BY channel_group
+    ORDER BY total_events DESC
+    LIMIT 50
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+function channelGroupWhereClause(normalizedGroup) {
+  const g = String(normalizedGroup || '').trim();
+  if (!g || g === 'Unassigned (legacy)') {
+    return "(properties['channel_group'] = '' OR isNull(properties['channel_group']))";
+  }
+  return `properties['channel_group'] = '${esc(g)}'`;
+}
+
+function numField(row, ...keys) {
+  for (const k of keys) {
+    if (row[k] != null && row[k] !== '') {
+      const n = Number(row[k]);
+      if (!Number.isNaN(n)) return n;
+    }
+  }
+  return 0;
+}
+
+function strField(row, key) {
+  const v = row[key];
+  return v != null && String(v).trim() !== '' ? String(v) : '';
+}
+
+function normalizeEventBreakdownRows(rows) {
+  return (rows || []).map((row) => ({
+    media_source: strField(row, 'media_source'),
+    medium: strField(row, 'medium'),
+    classification_reason: strField(row, 'classification_reason'),
+    legacy_channel: strField(row, 'legacy_channel'),
+    attribution_method: strField(row, 'attribution_method'),
+    utm_source: strField(row, 'utm_source'),
+    utm_campaign: strField(row, 'utm_campaign'),
+    event_name: strField(row, 'event_name'),
+    total_events: numField(row, 'cnt', 'total_events', 'CNT', 'TOTAL_EVENTS'),
+    total_revenue: numField(row, 'revenue', 'total_revenue', 'REVENUE', 'TOTAL_REVENUE')
+  }));
+}
+
+exports.queryChannelGroupFunnelFromRaw = async function (
+  startDate,
+  endDate,
+  channelGroup,
+  osFilter,
+  objectIds
+) {
+  const os = osFilterClause(osFilter);
+  const cgFilter = channelGroupWhereClause(channelGroup);
+  let objectFilter = '';
+  if (objectIds && objectIds.length) {
+    const ids = objectIdsClause(objectIds);
+    if (ids) objectFilter = ` AND object_id IN (${ids}) `;
+  }
+  const q = `
+    SELECT event_name, count() AS cnt, sum(revenue) AS revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${dateRangeClause(startDate, endDate)}
+      AND ${cgFilter}
+      ${objectFilter}
+      ${os}
+    GROUP BY event_name
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};
+
+exports.queryChannelGroupEventBreakdownFromRaw = async function (
+  startDate,
+  endDate,
+  channelGroup,
+  osFilter,
+  objectIds
+) {
+  const os = osFilterClause(osFilter);
+  const cgFilter = channelGroupWhereClause(channelGroup);
+  let objectFilter = '';
+  if (objectIds && objectIds.length) {
+    const ids = objectIdsClause(objectIds);
+    if (ids) objectFilter = ` AND object_id IN (${ids}) `;
+  }
+  const q = `
+    SELECT
+      properties['media_source'] AS media_source,
+      properties['medium'] AS medium,
+      properties['classification_reason'] AS classification_reason,
+      properties['channel'] AS legacy_channel,
+      properties['attribution_method'] AS attribution_method,
+      properties['utm_source'] AS utm_source,
+      properties['utm_campaign'] AS utm_campaign,
+      event_name,
+      count() AS cnt,
+      sum(revenue) AS revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${dateRangeClause(startDate, endDate)}
+      AND ${cgFilter}
+      ${objectFilter}
+      ${os}
+    GROUP BY
+      properties['media_source'],
+      properties['medium'],
+      properties['classification_reason'],
+      properties['channel'],
+      properties['attribution_method'],
+      properties['utm_source'],
+      properties['utm_campaign'],
+      event_name
+    ORDER BY cnt DESC
+    LIMIT 200
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return normalizeEventBreakdownRows(result.data);
+};
+
+exports.queryChannelGroupClickBreakdownFromRaw = async function (startTs, endTs, channelGroup, linkIds) {
+  const g = String(channelGroup || '').trim();
+  let cgFilter;
+  if (!g || g === 'Unassigned (legacy)') {
+    cgFilter = "(channel_group = '' OR isNull(channel_group))";
+  } else {
+    cgFilter = `channel_group = '${esc(g)}'`;
+  }
+  let linkFilter = '';
+  if (linkIds && linkIds.length) {
+    const ids = objectIdsClause(linkIds);
+    if (ids) linkFilter = ` AND link_id IN (${ids}) `;
+  }
+  const q = `
+    SELECT
+      media_source,
+      medium,
+      classification_reason,
+      campaign,
+      count() AS clicks
+    FROM link_clicks
+    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
+      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${cgFilter}
+      ${linkFilter}
+    GROUP BY media_source, medium, classification_reason, campaign
+    ORDER BY clicks DESC
+    LIMIT 100
+  `;
+  const result = await slaveClickhouse.querying(q, { dataObjects: true });
+  return result.data || [];
+};

@@ -41,6 +41,28 @@ module.exports = {
     aggregating: true,
     pii_columns: [],
   },
+  attribution_daily_stats_v2: {
+    required_date_column: 'report_date',
+    description: 'Daily attribution rollups by MMP channel_group (SummingMergeTree).',
+    columns: [
+      'report_date', 'event_name', 'attribution_class', 'channel_group', 'media_source', 'medium',
+      'campaign', 'attribution_method', 'classification_version', 'total_events', 'total_revenue',
+    ],
+    date_filter_example: "WHERE report_date = '2026-05-19'",
+    aggregating: true,
+    pii_columns: [],
+  },
+  link_clicks_daily_stats: {
+    required_date_column: 'report_date',
+    description: 'Daily link click rollups by channel_group.',
+    columns: [
+      'report_date', 'attribution_class', 'channel_group', 'media_source', 'medium', 'campaign',
+      'classification_version', 'total_clicks',
+    ],
+    date_filter_example: "WHERE report_date >= '2026-05-19'",
+    aggregating: true,
+    pii_columns: [],
+  },
   auth_daily_stats: {
     required_date_column: 'report_date',
     description: 'Daily auth events (signup, login, etc.) by provider. Filter event_name as needed.',
