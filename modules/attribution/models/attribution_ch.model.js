@@ -6,9 +6,22 @@ function esc(str) {
   return String(str).replace(/'/g, "''");
 }
 
-/** Simple date filter for analytics_events_raw. */
-function dateRangeClause(startDate, endDate) {
-  return `toDate(timestamp) >= toDate('${esc(startDate)}') AND toDate(timestamp) <= toDate('${esc(endDate)}')`;
+/** Inclusive UTC bounds for analytics_events_raw.timestamp (DateTime64 UTC). */
+function utcTimestampPrewhere(window) {
+  const startEsc = esc(window.rangeStartUtc);
+  const endEsc = esc(window.rangeEndUtc);
+  return `timestamp >= toDateTime64('${startEsc}', 3, 'UTC') AND timestamp <= toDateTime64('${endEsc}', 3, 'UTC')`;
+}
+
+/** Same UTC window for link_clicks.timestamp. */
+function linkClickTimestampPrewhere(window) {
+  return utcTimestampPrewhere(window);
+}
+
+/** Calendar day in client TZ for daily series (matches Growth metrics). */
+function clientDayExpr(tz) {
+  const tzEsc = esc(String(tz || 'UTC').trim() || 'UTC');
+  return `toString(toDate(toTimeZone(timestamp, '${tzEsc}')))`;
 }
 
 /** Simple object_ids filter. */
@@ -33,16 +46,17 @@ function osFilterClause(osFilter) {
 /**
  * Aggregated attribution events from daily stats MV.
  */
-exports.queryAttributionByChannel = async function (startDate, endDate) {
+exports.queryAttributionByChannel = async function (window) {
   const q = `
     SELECT
       event_name,
-      channel,
-      source_name,
-      sum(total_events) AS total_events,
-      sum(total_revenue) AS total_revenue
-    FROM attribution_daily_stats
-    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+      ifNull(properties['channel'], '') AS channel,
+      ifNull(properties['source_name'], '') AS source_name,
+      count() AS total_events,
+      sum(revenue) AS total_revenue
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${utcTimestampPrewhere(window)}
     GROUP BY event_name, channel, source_name
     ORDER BY total_events DESC
   `;
@@ -53,14 +67,13 @@ exports.queryAttributionByChannel = async function (startDate, endDate) {
 /**
  * Clicks per short_code in time range.
  */
-exports.queryClicksByShortCode = async function (startTs, endTs) {
+exports.queryClicksByShortCode = async function (window) {
   const q = `
     SELECT
       short_code,
       count() AS clicks
     FROM link_clicks
-    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    WHERE ${linkClickTimestampPrewhere(window)}
     GROUP BY short_code
     ORDER BY clicks DESC
   `;
@@ -71,14 +84,13 @@ exports.queryClicksByShortCode = async function (startTs, endTs) {
 /**
  * Clicks per channel in time range (from link_clicks.channel). Used for Performance by channel.
  */
-exports.queryClicksByChannel = async function (startTs, endTs) {
+exports.queryClicksByChannel = async function (window) {
   const q = `
     SELECT
       ifNull(channel, '') AS channel,
       count() AS clicks
     FROM link_clicks
-    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    WHERE ${linkClickTimestampPrewhere(window)}
     GROUP BY channel
     ORDER BY clicks DESC
   `;
@@ -89,12 +101,13 @@ exports.queryClicksByChannel = async function (startTs, endTs) {
 /**
  * Daily app opens for overview chart (platform-wide).
  */
-exports.queryAppOpensByDay = async function (startDate, endDate, osFilter) {
+exports.queryAppOpensByDay = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
+  const dayExpr = clientDayExpr(window.tz);
   const q = `
-    SELECT toDate(timestamp) AS day, ifNull(properties['channel'], '') AS channel, count() AS app_opens
+    SELECT ${dayExpr} AS day, ifNull(properties['channel'], '') AS channel, count() AS app_opens
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND event_name = 'app_open' AND ${dateRangeClause(startDate, endDate)} ${os}
+    WHERE object_type = 'attribution' AND event_name = 'app_open' AND ${utcTimestampPrewhere(window)} ${os}
     GROUP BY day, channel
     ORDER BY day ASC, channel ASC
   `;
@@ -105,12 +118,13 @@ exports.queryAppOpensByDay = async function (startDate, endDate, osFilter) {
 /**
  * Daily install events for chart.
  */
-exports.queryInstallsByDay = async function (startDate, endDate, osFilter) {
+exports.queryInstallsByDay = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
+  const dayExpr = clientDayExpr(window.tz);
   const q = `
-    SELECT toDate(timestamp) AS day, ifNull(properties['channel'], '') AS channel, count() AS installs
+    SELECT ${dayExpr} AS day, ifNull(properties['channel'], '') AS channel, count() AS installs
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND event_name = 'attributed_install' AND ${dateRangeClause(startDate, endDate)} ${os}
+    WHERE object_type = 'attribution' AND event_name = 'attributed_install' AND ${utcTimestampPrewhere(window)} ${os}
     GROUP BY day, channel
     ORDER BY day ASC, channel ASC
   `;
@@ -121,7 +135,7 @@ exports.queryInstallsByDay = async function (startDate, endDate, osFilter) {
 /**
  * Installs in range. Returns os_name and install_os for service to derive os_family.
  */
-exports.queryInstallsByOs = async function (startDate, endDate, osFilter) {
+exports.queryInstallsByOs = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
   const q = `
     SELECT
@@ -131,7 +145,7 @@ exports.queryInstallsByOs = async function (startDate, endDate, osFilter) {
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_install'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       ${os}
     GROUP BY os_name, install_os
     ORDER BY installs DESC
@@ -143,13 +157,13 @@ exports.queryInstallsByOs = async function (startDate, endDate, osFilter) {
 /**
  * Attribution by channel from raw events. Supports device_os filter.
  */
-exports.queryAttributionByChannelFromRaw = async function (startDate, endDate, osFilter) {
+exports.queryAttributionByChannelFromRaw = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
   const q = `
     SELECT event_name, ifNull(properties['channel'], '') AS channel, ifNull(properties['source_name'], '') AS source_name,
       count() AS total_events, sum(revenue) AS total_revenue
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND ${dateRangeClause(startDate, endDate)} ${os}
+    WHERE object_type = 'attribution' AND ${utcTimestampPrewhere(window)} ${os}
     GROUP BY event_name, channel, source_name
     ORDER BY total_events DESC
   `;
@@ -160,7 +174,7 @@ exports.queryAttributionByChannelFromRaw = async function (startDate, endDate, o
 /**
  * Funnel counts. Returns os_name, install_os, event_name. Service derives os_family and aggregates.
  */
-exports.queryFunnelMetricsByOs = async function (startDate, endDate) {
+exports.queryFunnelMetricsByOs = async function (window) {
   const q = `
     SELECT
       ifNull(os_name, '') AS os_name,
@@ -171,7 +185,7 @@ exports.queryFunnelMetricsByOs = async function (startDate, endDate) {
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name IN ('app_open', 'attributed_install', 'attributed_signup', 'attributed_add_to_cart', 'attributed_purchase')
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
     GROUP BY os_name, install_os, event_name
     ORDER BY os_name, install_os, event_name
   `;
@@ -182,7 +196,7 @@ exports.queryFunnelMetricsByOs = async function (startDate, endDate) {
 /**
  * Funnel counts for specific object_ids. Same shape: os_name, install_os, event_name.
  */
-exports.queryFunnelMetricsByOsForObjectIds = async function (objectIds, startDate, endDate) {
+exports.queryFunnelMetricsByOsForObjectIds = async function (objectIds, window) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const q = `
@@ -195,7 +209,7 @@ exports.queryFunnelMetricsByOsForObjectIds = async function (objectIds, startDat
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name IN ('app_open', 'attributed_install', 'attributed_signup', 'attributed_add_to_cart', 'attributed_purchase')
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND object_id IN (${ids})
     GROUP BY os_name, install_os, event_name
     ORDER BY os_name, install_os, event_name
@@ -207,7 +221,7 @@ exports.queryFunnelMetricsByOsForObjectIds = async function (objectIds, startDat
 /**
  * Installs for specific object_ids. Returns os_name, install_os for service to derive os_family.
  */
-exports.queryInstallsByOsForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryInstallsByOsForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -219,7 +233,7 @@ exports.queryInstallsByOsForObjectIds = async function (objectIds, startDate, en
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_install'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND object_id IN (${ids})
       ${os}
     GROUP BY os_name, install_os
@@ -232,7 +246,7 @@ exports.queryInstallsByOsForObjectIds = async function (objectIds, startDate, en
 /**
  * Attribution by channel for specific object_ids.
  */
-exports.queryAttributionByChannelFromRawForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAttributionByChannelFromRawForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -240,7 +254,7 @@ exports.queryAttributionByChannelFromRawForObjectIds = async function (objectIds
     SELECT event_name, ifNull(properties['channel'], '') AS channel, ifNull(properties['source_name'], '') AS source_name,
       count() AS total_events, sum(revenue) AS total_revenue
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+    WHERE object_type = 'attribution' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY event_name, channel, source_name
     ORDER BY total_events DESC
   `;
@@ -251,7 +265,7 @@ exports.queryAttributionByChannelFromRawForObjectIds = async function (objectIds
 /**
  * Clicks per channel for specific link_ids.
  */
-exports.queryClicksByChannelForLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClicksByChannelForLinkIds = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const q = `
@@ -260,8 +274,7 @@ exports.queryClicksByChannelForLinkIds = async function (linkIds, startTs, endTs
       count() AS clicks
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
     GROUP BY channel
     ORDER BY clicks DESC
   `;
@@ -272,7 +285,7 @@ exports.queryClicksByChannelForLinkIds = async function (linkIds, startTs, endTs
 /**
  * Signups in range. Returns auth_attribution_occasion (may be empty). Service maps '' to 'unknown'.
  */
-exports.querySignupsByAuthOccasion = async function (startDate, endDate, osFilter) {
+exports.querySignupsByAuthOccasion = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
   const q = `
     SELECT
@@ -281,7 +294,7 @@ exports.querySignupsByAuthOccasion = async function (startDate, endDate, osFilte
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_signup'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       ${os}
     GROUP BY auth_occasion
     ORDER BY signups DESC
@@ -293,7 +306,7 @@ exports.querySignupsByAuthOccasion = async function (startDate, endDate, osFilte
 /**
  * Signups for object_ids. Same shape.
  */
-exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -304,7 +317,7 @@ exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, star
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_signup'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND object_id IN (${ids})
       ${os}
     GROUP BY auth_occasion
@@ -317,15 +330,14 @@ exports.querySignupsByAuthOccasionForObjectIds = async function (objectIds, star
 /**
  * Link clicks per link_id in time range (not filtered by device OS).
  */
-exports.queryClickCountsByLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClickCountsByLinkIds = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const q = `
     SELECT link_id, count() AS clicks
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
     GROUP BY link_id
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
@@ -335,15 +347,14 @@ exports.queryClickCountsByLinkIds = async function (linkIds, startTs, endTs) {
 /**
  * Total link clicks for one or more link_ids.
  */
-exports.queryClickCountForLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClickCountForLinkIds = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return { total: 0 };
   const q = `
     SELECT count() AS total
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
@@ -353,7 +364,7 @@ exports.queryClickCountForLinkIds = async function (linkIds, startTs, endTs) {
 /**
  * Attribution funnel counts per object_id (tracking link) for list stitching.
  */
-exports.queryAttributionEventCountsByObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAttributionEventCountsByObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -362,7 +373,7 @@ exports.queryAttributionEventCountsByObjectIds = async function (objectIds, star
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name IN ('app_open', 'attributed_install', 'attributed_signup', 'attributed_add_to_cart', 'attributed_purchase')
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND object_id IN (${ids}) ${os}
     GROUP BY object_id, event_name
   `;
@@ -373,14 +384,14 @@ exports.queryAttributionEventCountsByObjectIds = async function (objectIds, star
 /**
  * Attribution events by event_name for object_ids.
  */
-exports.queryAttributionEventsForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAttributionEventsForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
   const q = `
     SELECT event_name, count() AS cnt, sum(revenue) AS revenue
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+    WHERE object_type = 'attribution' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY event_name
     ORDER BY cnt DESC
   `;
@@ -391,7 +402,7 @@ exports.queryAttributionEventsForObjectIds = async function (objectIds, startDat
 /**
  * Add-to-cart and purchase events by plan for object_ids.
  */
-exports.queryAttributionEventsByPlanForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAttributionEventsByPlanForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -400,7 +411,7 @@ exports.queryAttributionEventsByPlanForObjectIds = async function (objectIds, st
       count() AS cnt, sum(revenue) AS revenue
     FROM analytics_events_raw
     WHERE object_type = 'attribution' AND event_name IN ('attributed_add_to_cart', 'attributed_purchase')
-      AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+      AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY event_name, plan_id, plan_name
     ORDER BY event_name ASC, cnt DESC
   `;
@@ -411,14 +422,15 @@ exports.queryAttributionEventsByPlanForObjectIds = async function (objectIds, st
 /**
  * Daily app opens for object_ids.
  */
-exports.queryAppOpensByDayForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAppOpensByDayForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
+  const dayExpr = clientDayExpr(window.tz);
   const q = `
-    SELECT toDate(timestamp) AS day, count() AS app_opens
+    SELECT ${dayExpr} AS day, count() AS app_opens
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND event_name = 'app_open' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+    WHERE object_type = 'attribution' AND event_name = 'app_open' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY day
     ORDER BY day ASC
   `;
@@ -429,14 +441,15 @@ exports.queryAppOpensByDayForObjectIds = async function (objectIds, startDate, e
 /**
  * Daily installs for object_ids.
  */
-exports.queryInstallsByDayForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryInstallsByDayForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
+  const dayExpr = clientDayExpr(window.tz);
   const q = `
-    SELECT toDate(timestamp) AS day, count() AS installs
+    SELECT ${dayExpr} AS day, count() AS installs
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND event_name = 'attributed_install' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+    WHERE object_type = 'attribution' AND event_name = 'attributed_install' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY day
     ORDER BY day ASC
   `;
@@ -447,14 +460,15 @@ exports.queryInstallsByDayForObjectIds = async function (objectIds, startDate, e
 /**
  * Daily purchases for object_ids.
  */
-exports.queryPurchasesByDayForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryPurchasesByDayForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
+  const dayExpr = clientDayExpr(window.tz);
   const q = `
-    SELECT toDate(timestamp) AS day, count() AS purchases, sum(revenue) AS revenue
+    SELECT ${dayExpr} AS day, count() AS purchases, sum(revenue) AS revenue
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND event_name = 'attributed_purchase' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids}) ${os}
+    WHERE object_type = 'attribution' AND event_name = 'attributed_purchase' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids}) ${os}
     GROUP BY day
     ORDER BY day ASC
   `;
@@ -465,7 +479,7 @@ exports.queryPurchasesByDayForObjectIds = async function (objectIds, startDate, 
 /**
  * User purchase counts. Simple: user_id, cnt. Service filters cnt >= 2 for repeat_buyers.
  */
-exports.queryPurchaseCountsByUser = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryPurchaseCountsByUser = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   const idClause = ids ? `AND object_id IN (${ids})` : '';
   const os = osFilterClause(osFilter);
@@ -474,7 +488,7 @@ exports.queryPurchaseCountsByUser = async function (objectIds, startDate, endDat
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_purchase'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND ifNull(user_id, '') != ''
       ${idClause}
       ${os}
@@ -487,7 +501,7 @@ exports.queryPurchaseCountsByUser = async function (objectIds, startDate, endDat
 /**
  * Purchase events grouped by purchase_ordinal. Simple. Service aggregates first/repeat.
  */
-exports.queryPurchasesByOrdinal = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryPurchasesByOrdinal = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   const idClause = ids ? `AND object_id IN (${ids})` : '';
   const os = osFilterClause(osFilter);
@@ -496,7 +510,7 @@ exports.queryPurchasesByOrdinal = async function (objectIds, startDate, endDate,
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND event_name = 'attributed_purchase'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       ${idClause}
       ${os}
     GROUP BY purchase_ordinal
@@ -508,7 +522,7 @@ exports.queryPurchasesByOrdinal = async function (objectIds, startDate, endDate,
 /**
  * Individual click events for timeline.
  */
-exports.queryClickEventsForLinkIds = async function (linkIds, startTs, endTs, limit = 50, offset = 0) {
+exports.queryClickEventsForLinkIds = async function (linkIds, window, limit = 50, offset = 0) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const limitNum = Math.max(1, Math.min(Number(limit) || 50, 200));
@@ -527,8 +541,7 @@ exports.queryClickEventsForLinkIds = async function (linkIds, startTs, endTs, li
       country
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
     ORDER BY timestamp DESC
     LIMIT ${limitNum} OFFSET ${offsetNum}
   `;
@@ -539,15 +552,14 @@ exports.queryClickEventsForLinkIds = async function (linkIds, startTs, endTs, li
 /**
  * Count total clicks for pagination.
  */
-exports.queryClickEventsCountForLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClickEventsCountForLinkIds = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return 0;
   const q = `
     SELECT count() AS total
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
@@ -557,7 +569,7 @@ exports.queryClickEventsCountForLinkIds = async function (linkIds, startTs, endT
 /**
  * Attribution events for timeline. Service stitches with clicks.
  */
-exports.queryAttributionEventsForTimeline = async function (objectIds, startDate, endDate) {
+exports.queryAttributionEventsForTimeline = async function (objectIds, window) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const q = `
@@ -578,7 +590,7 @@ exports.queryAttributionEventsForTimeline = async function (objectIds, startDate
       device_id,
       user_id
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids})
+    WHERE object_type = 'attribution' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids})
     ORDER BY timestamp DESC
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
@@ -588,13 +600,13 @@ exports.queryAttributionEventsForTimeline = async function (objectIds, startDate
 /**
  * Count attribution events for timeline.
  */
-exports.queryAttributionEventsCountForTimeline = async function (objectIds, startDate, endDate) {
+exports.queryAttributionEventsCountForTimeline = async function (objectIds, window) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return 0;
   const q = `
     SELECT count() AS total
     FROM analytics_events_raw
-    WHERE object_type = 'attribution' AND ${dateRangeClause(startDate, endDate)} AND object_id IN (${ids})
+    WHERE object_type = 'attribution' AND ${utcTimestampPrewhere(window)} AND object_id IN (${ids})
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
@@ -604,7 +616,7 @@ exports.queryAttributionEventsCountForTimeline = async function (objectIds, star
 /**
  * Click events for timeline. Service stitches with attribution events.
  */
-exports.queryClickEventsForTimeline = async function (linkIds, startTs, endTs) {
+exports.queryClickEventsForTimeline = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const q = `
@@ -621,8 +633,7 @@ exports.queryClickEventsForTimeline = async function (linkIds, startTs, endTs) {
       country
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
     ORDER BY timestamp DESC
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
@@ -632,15 +643,14 @@ exports.queryClickEventsForTimeline = async function (linkIds, startTs, endTs) {
 /**
  * Count click events for timeline.
  */
-exports.queryClickEventsCountForTimeline = async function (linkIds, startTs, endTs) {
+exports.queryClickEventsCountForTimeline = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return 0;
   const q = `
     SELECT count() AS total
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
@@ -650,26 +660,10 @@ exports.queryClickEventsCountForTimeline = async function (linkIds, startTs, end
 /**
  * Attribution events grouped by channel_group (v2 spoke).
  */
-exports.queryAttributionByChannelGroupV2 = async function (startDate, endDate) {
-  const q = `
-    SELECT
-      event_name,
-      channel_group,
-      sum(total_events) AS total_events,
-      sum(total_revenue) AS total_revenue
-    FROM attribution_daily_stats_v2
-    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
-    GROUP BY event_name, channel_group
-    ORDER BY total_events DESC
-  `;
-  const result = await slaveClickhouse.querying(q, { dataObjects: true });
-  return result.data || [];
-};
-
 /**
- * Attribution events by channel_group from raw (when OS filter applied).
+ * Attribution events by channel_group from raw (client-calendar window).
  */
-exports.queryAttributionByChannelGroupFromRaw = async function (startDate, endDate, osFilter) {
+exports.queryAttributionByChannelGroupFromRaw = async function (window, osFilter) {
   const os = osFilterClause(osFilter);
   const q = `
     SELECT
@@ -679,7 +673,7 @@ exports.queryAttributionByChannelGroupFromRaw = async function (startDate, endDa
       sum(revenue) AS total_revenue
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
-      AND ${dateRangeClause(startDate, endDate)} ${os}
+      AND ${utcTimestampPrewhere(window)} ${os}
     GROUP BY event_name, properties['channel_group']
     ORDER BY total_events DESC
   `;
@@ -690,31 +684,16 @@ exports.queryAttributionByChannelGroupFromRaw = async function (startDate, endDa
 /**
  * Link clicks grouped by channel_group (v2 roll-up).
  */
-exports.queryClicksByChannelGroup = async function (startDate, endDate) {
-  const q = `
-    SELECT
-      channel_group,
-      sum(total_clicks) AS clicks
-    FROM link_clicks_daily_stats
-    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
-    GROUP BY channel_group
-    ORDER BY clicks DESC
-  `;
-  const result = await slaveClickhouse.querying(q, { dataObjects: true });
-  return result.data || [];
-};
-
 /**
- * Link clicks by channel_group from link_clicks (fallback when daily roll-up MV is empty / missing).
+ * Link clicks by channel_group from link_clicks (client-calendar UTC window).
  */
-exports.queryClicksByChannelGroupFromRaw = async function (startTs, endTs) {
+exports.queryClicksByChannelGroupFromRaw = async function (window) {
   const q = `
     SELECT
       channel_group,
       count() AS clicks
     FROM link_clicks
-    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    WHERE ${linkClickTimestampPrewhere(window)}
     GROUP BY channel_group
     ORDER BY clicks DESC
   `;
@@ -725,7 +704,7 @@ exports.queryClicksByChannelGroupFromRaw = async function (startTs, endTs) {
 /**
  * Channel-group stats filtered by link object_ids (profile/link detail).
  */
-exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, startDate, endDate, osFilter) {
+exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, window, osFilter) {
   const ids = objectIdsClause(objectIds);
   if (!ids) return [];
   const os = osFilterClause(osFilter);
@@ -738,7 +717,7 @@ exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, 
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
       AND object_id IN (${ids})
-      AND ${dateRangeClause(startDate, endDate)} ${os}
+      AND ${utcTimestampPrewhere(window)} ${os}
     GROUP BY event_name, properties['channel_group']
     ORDER BY total_events DESC
   `;
@@ -746,7 +725,7 @@ exports.queryAttributionByChannelGroupForObjectIds = async function (objectIds, 
   return result.data || [];
 };
 
-exports.queryClicksByChannelGroupForLinkIds = async function (linkIds, startTs, endTs) {
+exports.queryClicksByChannelGroupForLinkIds = async function (linkIds, window) {
   const ids = objectIdsClause(linkIds);
   if (!ids) return [];
   const q = `
@@ -755,8 +734,7 @@ exports.queryClicksByChannelGroupForLinkIds = async function (linkIds, startTs, 
       count() AS clicks
     FROM link_clicks
     WHERE link_id IN (${ids})
-      AND timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+      AND ${linkClickTimestampPrewhere(window)}
     GROUP BY channel_group
     ORDER BY clicks DESC
   `;
@@ -767,13 +745,14 @@ exports.queryClicksByChannelGroupForLinkIds = async function (linkIds, startTs, 
 /**
  * Total attribution events in range (v2 roll-up — no raw scan).
  */
-exports.queryClassificationEventTotalsV2 = async function (startDate, endDate) {
+exports.queryClassificationEventTotalsFromRaw = async function (window) {
   const q = `
     SELECT
-      sum(total_events) AS total_events,
-      sumIf(total_events, classification_version > 0) AS classified_events
-    FROM attribution_daily_stats_v2
-    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+      count() AS total_events,
+      countIf(toUInt16OrZero(ifNull(properties['classification_version'], '0')) > 0) AS classified_events
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${utcTimestampPrewhere(window)}
   `;
   const result = await slaveClickhouse.querying(q, { dataObjects: true });
   const row = result.data && result.data[0];
@@ -784,16 +763,17 @@ exports.queryClassificationEventTotalsV2 = async function (startDate, endDate) {
 };
 
 /**
- * Channel group distribution (v2 roll-up).
+ * Channel group distribution from raw (client-calendar window).
  */
-exports.queryClassificationDistributionV2 = async function (startDate, endDate) {
+exports.queryClassificationDistributionFromRaw = async function (window) {
   const q = `
     SELECT
-      channel_group,
-      sum(total_events) AS total_events,
-      max(classification_version) AS classification_version
-    FROM attribution_daily_stats_v2
-    WHERE report_date >= '${esc(startDate)}' AND report_date <= '${esc(endDate)}'
+      properties['channel_group'] AS channel_group,
+      count() AS total_events,
+      max(toUInt16OrZero(ifNull(properties['classification_version'], '0'))) AS classification_version
+    FROM analytics_events_raw
+    WHERE object_type = 'attribution'
+      AND ${utcTimestampPrewhere(window)}
     GROUP BY channel_group
     ORDER BY total_events DESC
     LIMIT 50
@@ -840,13 +820,7 @@ function normalizeEventBreakdownRows(rows) {
   }));
 }
 
-exports.queryChannelGroupFunnelFromRaw = async function (
-  startDate,
-  endDate,
-  channelGroup,
-  osFilter,
-  objectIds
-) {
+exports.queryChannelGroupFunnelFromRaw = async function (window, channelGroup, osFilter, objectIds) {
   const os = osFilterClause(osFilter);
   const cgFilter = channelGroupWhereClause(channelGroup);
   let objectFilter = '';
@@ -858,7 +832,7 @@ exports.queryChannelGroupFunnelFromRaw = async function (
     SELECT event_name, count() AS cnt, sum(revenue) AS revenue
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND ${cgFilter}
       ${objectFilter}
       ${os}
@@ -868,13 +842,7 @@ exports.queryChannelGroupFunnelFromRaw = async function (
   return result.data || [];
 };
 
-exports.queryChannelGroupEventBreakdownFromRaw = async function (
-  startDate,
-  endDate,
-  channelGroup,
-  osFilter,
-  objectIds
-) {
+exports.queryChannelGroupEventBreakdownFromRaw = async function (window, channelGroup, osFilter, objectIds) {
   const os = osFilterClause(osFilter);
   const cgFilter = channelGroupWhereClause(channelGroup);
   let objectFilter = '';
@@ -896,7 +864,7 @@ exports.queryChannelGroupEventBreakdownFromRaw = async function (
       sum(revenue) AS revenue
     FROM analytics_events_raw
     WHERE object_type = 'attribution'
-      AND ${dateRangeClause(startDate, endDate)}
+      AND ${utcTimestampPrewhere(window)}
       AND ${cgFilter}
       ${objectFilter}
       ${os}
@@ -916,7 +884,7 @@ exports.queryChannelGroupEventBreakdownFromRaw = async function (
   return normalizeEventBreakdownRows(result.data);
 };
 
-exports.queryChannelGroupClickBreakdownFromRaw = async function (startTs, endTs, channelGroup, linkIds) {
+exports.queryChannelGroupClickBreakdownFromRaw = async function (window, channelGroup, linkIds) {
   const g = String(channelGroup || '').trim();
   let cgFilter;
   if (!g || g === 'Unassigned (legacy)') {
@@ -937,8 +905,7 @@ exports.queryChannelGroupClickBreakdownFromRaw = async function (startTs, endTs,
       campaign,
       count() AS clicks
     FROM link_clicks
-    WHERE timestamp >= parseDateTimeBestEffort('${esc(startTs)}')
-      AND timestamp <= parseDateTimeBestEffort('${esc(endTs)}')
+    WHERE ${linkClickTimestampPrewhere(window)}
       AND ${cgFilter}
       ${linkFilter}
     GROUP BY media_source, medium, classification_reason, campaign

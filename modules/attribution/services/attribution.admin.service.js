@@ -6,6 +6,7 @@ const TrackingLinkModel = require('../models/tracking_link.model');
 const { invalidateDeferredLinkCache } = require('./attribution.deferred.redis.service');
 const InfluencerModel = require('../models/influencer_profile.model');
 const AttributionChModel = require('../models/attribution_ch.model');
+const { resolveAttributionDateWindow } = require('../utils/attribution_date_window.util');
 
 const SHORT_CODE_RE = /^[a-z0-9][a-z0-9-_]{1,48}$/i;
 const PROVIDER_RE = /^[a-z0-9][a-z0-9_.-]{0,48}$/i;
@@ -289,30 +290,21 @@ function stitchChannelGroupMetrics(eventRows, clickRows) {
   );
 }
 
-async function queryChannelGroupEventRows(startDate, endDate, deviceOs) {
-  const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
-  if (useOsFilter) {
-    return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, deviceOs);
-  }
-  try {
-    const v2Rows = await AttributionChModel.queryAttributionByChannelGroupV2(startDate, endDate);
-    if (v2Rows && v2Rows.length) return v2Rows;
-  } catch (e) {
-    console.warn('[attribution] channel_group v2 event rollup failed, using raw', e?.message || e);
-  }
-  return AttributionChModel.queryAttributionByChannelGroupFromRaw(startDate, endDate, null);
+async function queryChannelGroupEventRows(window, deviceOs) {
+  const os = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
+  return AttributionChModel.queryAttributionByChannelGroupFromRaw(window, os);
 }
 
-async function queryChannelGroupClickRows(startDate, endDate) {
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
-  try {
-    const rollupRows = await AttributionChModel.queryClicksByChannelGroup(startDate, endDate);
-    if (rollupRows && rollupRows.length) return rollupRows;
-  } catch (e) {
-    console.warn('[attribution] channel_group click rollup failed, using link_clicks raw', e?.message || e);
-  }
-  return AttributionChModel.queryClicksByChannelGroupFromRaw(startTs, endTs);
+async function queryChannelGroupClickRows(window) {
+  return AttributionChModel.queryClicksByChannelGroupFromRaw(window);
+}
+
+function attributionRangeMeta(window) {
+  return {
+    timezone: window.tz,
+    start_date: window.startCal,
+    end_date: window.endCal
+  };
 }
 
 function breakdownRowKey(r) {
@@ -415,20 +407,12 @@ function stitchFunnelFromEventCountRows(rows) {
   return totals;
 }
 
-async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, objectIds, linkIds) {
+async function buildChannelGroupDetail(window, channelGroup, deviceOs, objectIds, linkIds) {
   const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
   const [eventRows, clickRows, funnelRows] = await Promise.all([
-    AttributionChModel.queryChannelGroupEventBreakdownFromRaw(
-      startDate,
-      endDate,
-      channelGroup,
-      osParam,
-      objectIds
-    ),
-    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(startTs, endTs, channelGroup, linkIds),
-    AttributionChModel.queryChannelGroupFunnelFromRaw(startDate, endDate, channelGroup, osParam, objectIds)
+    AttributionChModel.queryChannelGroupEventBreakdownFromRaw(window, channelGroup, osParam, objectIds),
+    AttributionChModel.queryChannelGroupClickBreakdownFromRaw(window, channelGroup, linkIds),
+    AttributionChModel.queryChannelGroupFunnelFromRaw(window, channelGroup, osParam, objectIds)
   ]);
   const breakdown = stitchChannelGroupBreakdown(eventRows, clickRows);
   const funnelTotals = stitchFunnelFromEventCountRows(funnelRows);
@@ -436,14 +420,15 @@ async function buildChannelGroupDetail(startDate, endDate, channelGroup, deviceO
   return {
     channel_group: normalizeChannelGroupKey(channelGroup),
     totals: funnelTotals,
-    breakdown
+    breakdown,
+    ...attributionRangeMeta(window)
   };
 }
 
-async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
+async function buildChannelGroupOverview(window, deviceOs) {
   const [eventRows, clickRows] = await Promise.all([
-    queryChannelGroupEventRows(startDate, endDate, deviceOs),
-    queryChannelGroupClickRows(startDate, endDate)
+    queryChannelGroupEventRows(window, deviceOs),
+    queryChannelGroupClickRows(window)
   ]);
   const byChannelGroup = stitchChannelGroupMetrics(eventRows, clickRows);
   let classifiedEvents = 0;
@@ -461,7 +446,8 @@ async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
       classified_events: classifiedEvents,
       unclassified_events: Math.max(0, totalEvents - classifiedEvents)
     },
-    classification_version: 1
+    classification_version: 1,
+    ...attributionRangeMeta(window)
   };
 }
 
@@ -470,9 +456,7 @@ async function buildChannelGroupOverview(startDate, endDate, deviceOs) {
  * Installs chart is install-only; attribution_events includes all types (e.g. attributed_purchase + revenue);
  * purchases_by_day is ready when the app sends authenticated attributed_purchase events.
  */
-async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
+async function buildAnalyticsForLinks(linkIds, window, osFilter) {
   const os = osFilter === 'ios' || osFilter === 'android' ? osFilter : null;
   if (!linkIds || !linkIds.length) {
     return {
@@ -493,7 +477,8 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
         purchase_events_total: 0,
         purchase_events_tagged_first: 0,
         purchase_events_tagged_repeat: 0
-      }
+      },
+      ...attributionRangeMeta(window)
     };
   }
   const [
@@ -511,19 +496,19 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     byUser,
     byOrdinal
   ] = await Promise.all([
-    AttributionChModel.queryClickCountForLinkIds(linkIds, startTs, endTs),
-    AttributionChModel.queryAttributionEventsForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryInstallsByDayForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryAppOpensByDayForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.querySignupsByAuthOccasionForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryFunnelMetricsByOsForObjectIds(linkIds, startDate, endDate),
-    AttributionChModel.queryInstallsByOsForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryAttributionByChannelFromRawForObjectIds(linkIds, startDate, endDate, os),
-    AttributionChModel.queryClicksByChannelForLinkIds(linkIds, startTs, endTs),
-    AttributionChModel.queryPurchaseCountsByUser(linkIds, startDate, endDate, os),
-    AttributionChModel.queryPurchasesByOrdinal(linkIds, startDate, endDate, os)
+    AttributionChModel.queryClickCountForLinkIds(linkIds, window),
+    AttributionChModel.queryAttributionEventsForObjectIds(linkIds, window, os),
+    AttributionChModel.queryInstallsByDayForObjectIds(linkIds, window, os),
+    AttributionChModel.queryAppOpensByDayForObjectIds(linkIds, window, os),
+    AttributionChModel.queryPurchasesByDayForObjectIds(linkIds, window, os),
+    AttributionChModel.queryAttributionEventsByPlanForObjectIds(linkIds, window, os),
+    AttributionChModel.querySignupsByAuthOccasionForObjectIds(linkIds, window, os),
+    AttributionChModel.queryFunnelMetricsByOsForObjectIds(linkIds, window),
+    AttributionChModel.queryInstallsByOsForObjectIds(linkIds, window, os),
+    AttributionChModel.queryAttributionByChannelFromRawForObjectIds(linkIds, window, os),
+    AttributionChModel.queryClicksByChannelForLinkIds(linkIds, window),
+    AttributionChModel.queryPurchaseCountsByUser(linkIds, window, os),
+    AttributionChModel.queryPurchasesByOrdinal(linkIds, window, os)
   ]);
   return {
     clicks_total: clicks.total,
@@ -538,7 +523,8 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
     installs_by_os: stitchInstallsByOs(installsByOsRaw),
     attribution_by_channel: attributionByChannel,
     clicks_by_channel: clicksByChannel,
-    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal)
+    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal),
+    ...attributionRangeMeta(window)
   };
 }
 
@@ -547,27 +533,18 @@ async function buildAnalyticsForLinks(linkIds, startDate, endDate, osFilter) {
  * Stitches clicks and attribution events in service layer (no joins/subqueries in model).
  */
 exports.getAttributionEventsTimeline = async function (objectIds, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   if (!objectIds || !Array.isArray(objectIds) || !objectIds.length) {
-    return { events: [], total: 0, limit: 50, offset: 0 };
+    return { events: [], total: 0, limit: 50, offset: 0, ...attributionRangeMeta(window) };
   }
   const limit = Math.max(1, Math.min(Number(query.limit) || 50, 200));
   const offset = Math.max(0, Number(query.offset) || 0);
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
-  
-  // Simple queries (no joins/subqueries)
+
   const [attributionEvents, clicks, attributionCount, clicksCount] = await Promise.all([
-    AttributionChModel.queryAttributionEventsForTimeline(objectIds, startDate, endDate),
-    AttributionChModel.queryClickEventsForTimeline(objectIds, startTs, endTs),
-    AttributionChModel.queryAttributionEventsCountForTimeline(objectIds, startDate, endDate),
-    AttributionChModel.queryClickEventsCountForTimeline(objectIds, startTs, endTs)
+    AttributionChModel.queryAttributionEventsForTimeline(objectIds, window),
+    AttributionChModel.queryClickEventsForTimeline(objectIds, window),
+    AttributionChModel.queryAttributionEventsCountForTimeline(objectIds, window),
+    AttributionChModel.queryClickEventsCountForTimeline(objectIds, window)
   ]);
   
   // Normalize clicks to same shape as attribution events
@@ -599,7 +576,8 @@ exports.getAttributionEventsTimeline = async function (objectIds, query) {
     events: paginated,
     total,
     limit,
-    offset
+    offset,
+    ...attributionRangeMeta(window)
   };
 };
 
@@ -743,38 +721,34 @@ function stitchAttributionEventCounts(rows, targetMap, keyForRow) {
   }
 }
 
-async function queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs) {
+async function queryAttributionFunnelCountsForLinks(linkIds, window, deviceOs) {
   if (!linkIds.length) return [];
   const os = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
-  return AttributionChModel.queryAttributionEventCountsByObjectIds(linkIds, startDate, endDate, os);
+  return AttributionChModel.queryAttributionEventCountsByObjectIds(linkIds, window, os);
 }
 
-async function buildLinkListMetrics(linkIds, startDate, endDate, deviceOs) {
+async function buildLinkListMetrics(linkIds, window, deviceOs) {
   const byLink = Object.fromEntries(linkIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
   if (!linkIds.length) return byLink;
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
   const [eventRows, clickRows] = await Promise.all([
-    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
-    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+    queryAttributionFunnelCountsForLinks(linkIds, window, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, window)
   ]);
   stitchAttributionEventCounts(eventRows, byLink, (row) => row.object_id);
   stitchLinkClickCounts(clickRows, byLink, (row) => row.link_id);
   return byLink;
 }
 
-async function buildProfileListMetrics(profileIds, startDate, endDate, deviceOs) {
+async function buildProfileListMetrics(profileIds, window, deviceOs) {
   if (!profileIds.length) return {};
   const byProfile = Object.fromEntries(profileIds.map((id) => [id, emptyAttributionFunnelMetrics()]));
   const links = await TrackingLinkModel.listByInfluencerProfileIds(profileIds);
   if (!links.length) return byProfile;
   const linkToProfile = new Map(links.map((l) => [l.id, l.influencer_profile_id]));
   const linkIds = links.map((l) => l.id);
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
   const [eventRows, clickRows] = await Promise.all([
-    queryAttributionFunnelCountsForLinks(linkIds, startDate, endDate, deviceOs),
-    AttributionChModel.queryClickCountsByLinkIds(linkIds, startTs, endTs)
+    queryAttributionFunnelCountsForLinks(linkIds, window, deviceOs),
+    AttributionChModel.queryClickCountsByLinkIds(linkIds, window)
   ]);
   stitchAttributionEventCounts(eventRows, byProfile, (row) => linkToProfile.get(row.object_id));
   stitchLinkClickCounts(clickRows, byProfile, (row) => linkToProfile.get(row.link_id));
@@ -791,11 +765,11 @@ exports.listInfluencers = async function (pagination) {
   const startDate = pagination.start_date || pagination.startDate;
   const endDate = pagination.end_date || pagination.endDate;
   if (startDate && endDate) {
+    const window = resolveAttributionDateWindow(pagination);
     const deviceOs = normalizeDeviceOs(pagination);
     const metricsByProfile = await buildProfileListMetrics(
       data.map((r) => r.id),
-      startDate,
-      endDate,
+      window,
       deviceOs
     );
     data = data.map((r) => ({
@@ -863,44 +837,26 @@ exports.updateInfluencer = async function (id, patch) {
 };
 
 exports.getOverviewChannelGroups = async function (query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const deviceOs = normalizeDeviceOs(query);
-  return buildChannelGroupOverview(startDate, endDate, deviceOs);
+  return buildChannelGroupOverview(window, deviceOs);
 };
 
 exports.getOverviewChannelGroupDetail = async function (query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
+  const window = resolveAttributionDateWindow(query);
   const channelGroup = query.channel_group || query.channelGroup;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
   if (!channelGroup) {
     const err = new Error('channel_group is required');
     err.statusCode = 400;
     throw err;
   }
   const deviceOs = normalizeDeviceOs(query);
-  return buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, null, null);
+  return buildChannelGroupDetail(window, channelGroup, deviceOs, null, null);
 };
 
 exports.getProfileChannelGroupDetail = async function (profileId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
+  const window = resolveAttributionDateWindow(query);
   const channelGroup = query.channel_group || query.channelGroup;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
   if (!channelGroup) {
     const err = new Error('channel_group is required');
     err.statusCode = 400;
@@ -917,19 +873,13 @@ exports.getProfileChannelGroupDetail = async function (profileId, query) {
   const deviceOs = normalizeDeviceOs(query);
   return {
     profile: serializeInfluencer(profile),
-    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, linkIds, linkIds))
+    ...(await buildChannelGroupDetail(window, channelGroup, deviceOs, linkIds, linkIds))
   };
 };
 
 exports.getLinkChannelGroupDetail = async function (linkId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
+  const window = resolveAttributionDateWindow(query);
   const channelGroup = query.channel_group || query.channelGroup;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
   if (!channelGroup) {
     const err = new Error('channel_group is required');
     err.statusCode = 400;
@@ -944,18 +894,12 @@ exports.getLinkChannelGroupDetail = async function (linkId, query) {
   const deviceOs = normalizeDeviceOs(query);
   return {
     link,
-    ...(await buildChannelGroupDetail(startDate, endDate, channelGroup, deviceOs, [link.id], [link.id]))
+    ...(await buildChannelGroupDetail(window, channelGroup, deviceOs, [link.id], [link.id]))
   };
 };
 
 exports.getProfileChannelGroups = async function (profileId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const profile = await InfluencerModel.getById(profileId);
   if (!profile) {
     const err = new Error('Not found');
@@ -966,27 +910,20 @@ exports.getProfileChannelGroups = async function (profileId, query) {
   const linkIds = links.map((l) => l.id);
   const deviceOs = normalizeDeviceOs(query);
   const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
   const [eventRows, clickRows] = await Promise.all([
-    AttributionChModel.queryAttributionByChannelGroupForObjectIds(linkIds, startDate, endDate, osParam),
-    AttributionChModel.queryClicksByChannelGroupForLinkIds(linkIds, startTs, endTs)
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds(linkIds, window, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds(linkIds, window)
   ]);
   return {
     profile: serializeInfluencer(profile),
     by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
-    device_os: deviceOs
+    device_os: deviceOs,
+    ...attributionRangeMeta(window)
   };
 };
 
 exports.getLinkChannelGroups = async function (linkId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const link = await TrackingLinkModel.getById(linkId);
   if (!link) {
     const err = new Error('Not found');
@@ -995,30 +932,23 @@ exports.getLinkChannelGroups = async function (linkId, query) {
   }
   const deviceOs = normalizeDeviceOs(query);
   const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
   const [eventRows, clickRows] = await Promise.all([
-    AttributionChModel.queryAttributionByChannelGroupForObjectIds([link.id], startDate, endDate, osParam),
-    AttributionChModel.queryClicksByChannelGroupForLinkIds([link.id], startTs, endTs)
+    AttributionChModel.queryAttributionByChannelGroupForObjectIds([link.id], window, osParam),
+    AttributionChModel.queryClicksByChannelGroupForLinkIds([link.id], window)
   ]);
   return {
     link,
     by_channel_group: stitchChannelGroupMetrics(eventRows, clickRows),
-    device_os: deviceOs
+    device_os: deviceOs,
+    ...attributionRangeMeta(window)
   };
 };
 
 exports.getClassificationDiag = async function (query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const [totals, distribution] = await Promise.all([
-    AttributionChModel.queryClassificationEventTotalsV2(startDate, endDate),
-    AttributionChModel.queryClassificationDistributionV2(startDate, endDate)
+    AttributionChModel.queryClassificationEventTotalsFromRaw(window),
+    AttributionChModel.queryClassificationDistributionFromRaw(window)
   ]);
   const totalEvents = Number(totals.total_events) || 0;
   const classifiedEvents = Number(totals.classified_events) || 0;
@@ -1026,23 +956,15 @@ exports.getClassificationDiag = async function (query) {
     total_events: totalEvents,
     classified_events: classifiedEvents,
     unclassified_events: Math.max(0, totalEvents - classifiedEvents),
-    distribution: distribution || []
+    distribution: distribution || [],
+    ...attributionRangeMeta(window)
   };
 };
 
 exports.getOverview = async function (query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const deviceOs = normalizeDeviceOs(query);
-  const useOsFilter = deviceOs === 'ios' || deviceOs === 'android';
-  const osParam = useOsFilter ? deviceOs : null;
-  const startTs = `${startDate} 00:00:00`;
-  const endTs = `${endDate} 23:59:59`;
+  const osParam = deviceOs === 'ios' || deviceOs === 'android' ? deviceOs : null;
   const [
     byChannel,
     clicksByCode,
@@ -1055,18 +977,16 @@ exports.getOverview = async function (query) {
     byUser,
     byOrdinal
   ] = await Promise.all([
-    useOsFilter
-      ? AttributionChModel.queryAttributionByChannelFromRaw(startDate, endDate, deviceOs)
-      : AttributionChModel.queryAttributionByChannel(startDate, endDate),
-    AttributionChModel.queryClicksByShortCode(startTs, endTs),
-    AttributionChModel.queryClicksByChannel(startTs, endTs),
-    AttributionChModel.queryInstallsByDay(startDate, endDate, osParam),
-    AttributionChModel.queryAppOpensByDay(startDate, endDate, osParam),
-    AttributionChModel.queryInstallsByOs(startDate, endDate, osParam),
-    AttributionChModel.querySignupsByAuthOccasion(startDate, endDate, osParam),
-    AttributionChModel.queryFunnelMetricsByOs(startDate, endDate),
-    AttributionChModel.queryPurchaseCountsByUser(null, startDate, endDate, osParam),
-    AttributionChModel.queryPurchasesByOrdinal(null, startDate, endDate, osParam)
+    AttributionChModel.queryAttributionByChannelFromRaw(window, osParam),
+    AttributionChModel.queryClicksByShortCode(window),
+    AttributionChModel.queryClicksByChannel(window),
+    AttributionChModel.queryInstallsByDay(window, osParam),
+    AttributionChModel.queryAppOpensByDay(window, osParam),
+    AttributionChModel.queryInstallsByOs(window, osParam),
+    AttributionChModel.querySignupsByAuthOccasion(window, osParam),
+    AttributionChModel.queryFunnelMetricsByOs(window),
+    AttributionChModel.queryPurchaseCountsByUser(null, window, osParam),
+    AttributionChModel.queryPurchasesByOrdinal(null, window, osParam)
   ]);
   return {
     attribution_by_channel: byChannel,
@@ -1078,18 +998,13 @@ exports.getOverview = async function (query) {
     signups_by_auth_occasion: stitchSignupsByAuthOccasion(signupsRaw),
     funnel_by_os: stitchFunnelByOs(funnelRaw),
     device_os: deviceOs,
-    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal)
+    purchase_repeat_summary: stitchPurchaseRepeatSummary(byUser, byOrdinal),
+    ...attributionRangeMeta(window)
   };
 };
 
 exports.getLinkStats = async function (linkId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const link = await TrackingLinkModel.getById(linkId);
   if (!link) {
     const err = new Error('Not found');
@@ -1097,7 +1012,7 @@ exports.getLinkStats = async function (linkId, query) {
     throw err;
   }
   const deviceOs = normalizeDeviceOs(query);
-  const analytics = await buildAnalyticsForLinks([link.id], startDate, endDate, deviceOs);
+  const analytics = await buildAnalyticsForLinks([link.id], window, deviceOs);
   return { link, analytics };
 };
 
@@ -1105,13 +1020,7 @@ exports.getLinkStats = async function (linkId, query) {
  * Profile detail + all links for this profile + combined ClickHouse analytics.
  */
 exports.getProfileStats = async function (profileId, query) {
-  const startDate = query.start_date || query.startDate;
-  const endDate = query.end_date || query.endDate;
-  if (!startDate || !endDate) {
-    const err = new Error('start_date and end_date are required (YYYY-MM-DD)');
-    err.statusCode = 400;
-    throw err;
-  }
+  const window = resolveAttributionDateWindow(query);
   const profile = await InfluencerModel.getById(profileId);
   if (!profile) {
     const err = new Error('Not found');
@@ -1122,8 +1031,8 @@ exports.getProfileStats = async function (profileId, query) {
   const linkIds = links.map((l) => l.id);
   const deviceOs = normalizeDeviceOs(query);
   const [analytics, metricsByLink] = await Promise.all([
-    buildAnalyticsForLinks(linkIds, startDate, endDate, deviceOs),
-    buildLinkListMetrics(linkIds, startDate, endDate, deviceOs)
+    buildAnalyticsForLinks(linkIds, window, deviceOs),
+    buildLinkListMetrics(linkIds, window, deviceOs)
   ]);
   const linksWithMetrics = links.map((l) => ({
     ...l,

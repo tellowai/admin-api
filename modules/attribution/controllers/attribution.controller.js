@@ -48,6 +48,7 @@ exports.listInfluencers = async function (req, res) {
       admin_list_only: adminOnly,
       start_date: req.query.start_date,
       end_date: req.query.end_date,
+      tz: req.query.tz,
       device_os: req.query.device_os
     });
     return res.status(HTTP_STATUS_CODES.OK).json(out);
